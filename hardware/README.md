@@ -16,7 +16,7 @@ To keep things clean the bill of materials will differentiate between hardware l
 ### Hardware
 |Component|Quantity|Comment|
 |---|:---:|---|
-|[ESP32](https://www.berrybase.de/dev.-boards/esp8266-esp32-d1-mini/boards/esp32-nodemcu-development-board)|1|Make sure that the dimensions and pin order matches with the PCB (details below).
+|[ESP32](https://www.az-delivery.de/products/esp32-developmentboard)|1|Make sure that the dimensions and pin order matches with the PCB (details below).
 |[SSD1306 OLED Display 128x64 0.96"](https://www.amazon.de/AZDelivery-Display-Arduino-Raspberry-gratis/dp/B074N9VLZX)|1|Make sure that the dimensions of the display you choose fit the OLED frame!
 |[1590DD Enclosure](https://www.taydaelectronics.com/hardware/enclosures/1590dd-style/matte-black-1590dd-style-aluminum-diecast-enclosure.html)|1|
 |[SPST Momentary Footswitch](https://www.taydaelectronics.com/spst-momentary-soft-touch-push-button-stomp-foots-pedal-switch.html)|6|
