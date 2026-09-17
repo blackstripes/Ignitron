@@ -8,7 +8,7 @@ Development branch: `feature/headless-serial-cli`
 
 That branch contains an initial headless/serial-control path intended to let us exercise the Spark protocol without physical buttons, LEDs, or an OLED. It has **not yet been compile-tested on hardware** and should be treated as a starting point for Codex to review/fix rather than a finished implementation.
 
-The upstream Ignitron code is built around classic ESP32 targets and uses NimBLE for Spark communication. The final controller hardware will likely be ESP32-S3-based, so there will be a deliberate port step rather than assuming the stock target is drop-in compatible.
+The upstream Ignitron code is built around classic ESP32 targets and uses NimBLE for Spark communication. The final controller hardware will be ESP32-S3-based, so there will be a deliberate port step rather than assuming the stock target is drop-in compatible.
 
 ## Product goal
 
@@ -30,19 +30,64 @@ The finished controller should not require the Spark mobile app for normal Spark
 
 ### Main controller/display board
 
-The intended prototype/final controller board is an ESP32-S3 2.8-inch color touch-display board purchased from Amazon. The board shown before ordering was marked approximately `ZX2D80CE02S V1.0` and appeared to be a 2.8-inch IPS TFT development board.
+The intended prototype/final controller board has now been positively identified from the PCB markings as:
 
-Do **not** hard-code the final pin map or display configuration until the physical board arrives and is positively identified. Verify:
+- **PanelLan ZX2D80CE02S V1.0**
+- PanelLan board family / model: **SC05_X / ZX2D80CE02S**
+- Module marking: **WT32-S3-WROVER**
+- MCU family: **ESP32-S3**
+- Main display: **2.8-inch 240x320 IPS TFT**
+- Main LCD controller: **ST7789**
+- LCD bus: **8-bit 8080 parallel**, not SPI
+- Touch: **FT5x06 capacitive touch**
+- Existing PanelLan Arduino support is available and is based on **LovyanGFX**
 
-- Exact ESP32-S3 module/flash/PSRAM configuration
-- TFT controller and resolution/orientation
-- Touch controller and bus
-- Which GPIOs are actually exposed
-- Existing onboard peripheral pin usage
-- USB/serial behavior
-- Available 3.3 V current
+Important implementation note: **do not treat the built-in display as a generic SPI ST7789 module.** Start from the known PanelLan `SC05_X` / `ZX2D80CE02S` board configuration and vendor/library support rather than inventing a pin map from scratch.
 
-The current expectation is a roughly 240x320 IPS TFT, likely ST7789-family, but that is not yet considered proven.
+The rear expansion connector is visibly labeled:
+
+```text
++5V
+GND
+IO10
+IO11
+IO12
+IO13
+IO14
+IO21
+```
+
+That gives six user-accessible GPIOs for the pedal hardware. The current tentative allocation is:
+
+```text
+IO10  Mini TFT SPI MOSI
+IO11  Mini TFT SPI SCLK
+IO12  I2C SDA
+IO13  I2C SCL
+IO14  Shared mini-TFT DC
+IO21  Spare / reserve
+```
+
+On I2C, the current plan is:
+
+```text
+IO12/IO13
+   |-- MCP23017  -> footswitch inputs and/or six mini-TFT CS lines
+   `-- ADS1115   -> future expression pedal inputs
+```
+
+The six ST7735S mini TFTs should share SPI clock/data. The MCP23017 can drive six individual CS lines directly unless a decoder later proves simpler in software/hardware.
+
+The board's built-in display/touch use their own onboard connections, so the external IO10-IO14/IO21 pins are intended to remain available for external hardware. Still verify all details against the exact vendor board support files during the S3 port.
+
+Before finalizing firmware pin definitions, Codex should:
+
+- Pull the exact PanelLan SC05_X / ZX2D80CE02S board config from the maintained support package.
+- Verify flash/PSRAM size and board build flags from the actual library/example.
+- Verify touch-controller pins and LCD bus config from the vendor/library source.
+- Confirm USB serial behavior on the physical board.
+- Confirm the external IO connector pin assignments electrically before wiring all peripherals.
+- Keep board-specific pin definitions isolated in a dedicated hardware config.
 
 ### Per-switch displays
 
@@ -62,7 +107,7 @@ Plan to share SPI clock/data across all six displays and give each display indep
 1. MCP23017 drives six CS signals directly.
 2. A 3-to-8 active-low decoder drives CS lines, with selection controlled either by native GPIO or the MCP23017.
 
-Prefer the simplest reliable implementation after the final ESP32-S3 GPIO budget is known. The mini displays should be treated as write-only if possible; no MISO is expected to be required.
+Given the confirmed six-pin external GPIO budget on the PanelLan board, direct CS control from the MCP23017 is currently the preferred starting point. The mini displays should be treated as write-only if possible; no MISO is expected to be required.
 
 ### Footswitches
 
@@ -121,14 +166,14 @@ Proposed behavior:
 
 ### Preset mode
 
-```
+```text
 P1       P2       P3
 P4       BANK-    BANK+
 ```
 
 ### FX mode
 
-```
+```text
 GATE     COMP/WAH DRIVE
 MOD      DELAY    REVERB
 ```
@@ -137,7 +182,7 @@ MOD      DELAY    REVERB
 
 Example only; final behavior should follow verified Spark 2 looper functions:
 
-```
+```text
 REC/DUB  PLAY/STOP  UNDO/REDO
 CLEAR    STATUS/TAP CONFIG
 ```
@@ -214,7 +259,7 @@ The immediate development branch adds a first pass at headless serial control. C
 
 Desired serial commands include at least:
 
-```
+```text
 help
 status
 amp
@@ -281,7 +326,7 @@ If the NEO Core advertises a different name but uses the same Spark app protocol
 
 ## ESP32-S3 port constraints
 
-The final controller is expected to use ESP32-S3.
+The final controller is expected to use ESP32-S3 on the identified PanelLan ZX2D80CE02S / SC05_X board.
 
 Important differences from classic ESP32:
 
@@ -289,6 +334,7 @@ Important differences from classic ESP32:
 - Direct Spark APP-mode BLE is the path we care about.
 - Ignitron features relying on Bluetooth Classic serial are not a requirement for this controller.
 - Review ESP-specific MAC manipulation, BLE keyboard code, core pinning/task assumptions, filesystem configuration, and library versions during the port.
+- The onboard ST7789 is connected by **8-bit 8080 parallel**, so reuse the PanelLan/LovyanGFX support path rather than adapting generic SPI-ST7789 code.
 
 Do not entangle the first S3 bring-up with all displays and switches at once.
 
@@ -303,16 +349,18 @@ Do not entangle the first S3 bring-up with all displays and switches at once.
 - Ensure BLE processing is never blocked by CLI input.
 - Keep upstream behavior unchanged for normal/non-headless builds where practical.
 
-### Milestone 2 — board arrival / hardware identification
+### Milestone 2 — PanelLan board bring-up
 
+- Use the exact `ZX2D80CE02S / SC05_X` board support rather than a generic ESP32-S3 display profile.
 - Run the vendor/demo firmware first.
-- Confirm main TFT, touch, USB serial, flash/PSRAM.
-- Record the exact board identifier and schematic/pinout source.
+- Confirm main TFT, FT5x06 touch, USB serial, flash/PSRAM.
+- Record the exact support-package version and board config used.
+- Confirm the exposed connector pins IO10, IO11, IO12, IO13, IO14, IO21.
 - Create a board-specific config instead of scattering GPIO numbers through the code.
 
 ### Milestone 3 — ESP32-S3 protocol bring-up
 
-- Get the project compiling for the exact S3 board.
+- Get the project compiling for the exact PanelLan board.
 - Start with serial + BLE only.
 - Scan for Spark 2.
 - Connect and run the functional target sequence above.
@@ -325,7 +373,7 @@ Do not entangle the first S3 bring-up with all displays and switches at once.
 
 ### Milestone 5 — main display UI
 
-- Add a renderer for the 2.8-inch TFT.
+- Use the PanelLan/LovyanGFX support path for the onboard 2.8-inch ST7789 parallel TFT and FT5x06 touch.
 - Start with connection/preset/FX/tuner/looper status.
 - Keep the protocol layer independent from the graphics library.
 
@@ -334,6 +382,7 @@ Do not entangle the first S3 bring-up with all displays and switches at once.
 - Bring up one ST7735S mini display first.
 - Then prove shared SPI with multiple displays.
 - Add MCP23017 switch inputs and display selection.
+- Current tentative native pins are IO10=MOSI, IO11=SCLK, IO12/13=I2C, IO14=shared DC, IO21=spare.
 - Only after the electrical approach is stable should all six displays be connected.
 
 ### Milestone 7 — final interaction model
@@ -361,7 +410,8 @@ Do not entangle the first S3 bring-up with all displays and switches at once.
 - Preserve upstream Spark protocol code unless there is a demonstrated reason to change it.
 - Do not claim NEO Core support until tested.
 - Do not claim expression-wah support until the live parameter mapping is verified.
-- Do not finalize board pins, enclosure dimensions, or power assumptions from Amazon photos alone.
+- Use the exact PanelLan board support for the main display/touch rather than generic assumptions.
+- Keep final board pins isolated in board-specific config and verify them against the physical unit/vendor source.
 - Prefer incremental hardware bring-up: one subsystem at a time.
 - Keep serial diagnostics available throughout development.
 - Maintain clear compile-time or board-specific separation so upstream classic ESP32 builds are not accidentally broken.
@@ -373,5 +423,6 @@ Start on `feature/headless-serial-cli`.
 1. Build and inspect the current branch.
 2. Fix the headless serial implementation until it compiles cleanly for the classic ESP32 `esp32dev-headless` environment.
 3. Review the design for blocking calls, invalid assumptions, and accidental dependencies on the OLED/buttons/LEDs.
-4. Do not begin the exact ESP32-S3 board port until the physical board/pinout is available.
-5. Leave concise notes in the repository describing anything that still requires hardware verification.
+4. For the S3 port, target the now-identified **PanelLan ZX2D80CE02S / SC05_X** board and its existing LovyanGFX/FT5x06 support.
+5. Do not wire all six mini displays/switches at once; bring up BLE, then main display/touch, then one mini TFT, then the expander, then the full set.
+6. Leave concise notes in the repository describing anything that still requires hardware verification.
