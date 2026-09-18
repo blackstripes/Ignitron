@@ -22,6 +22,9 @@ struct ControllerSnapshot {
     bool identityKnown = false;
     std::string ampName;
     std::string ampSerial;
+    uint8_t confirmedHardwarePreset = 0;
+    uint8_t pendingHardwarePreset = 0;
+    bool presetActionFailed = false;
     uint32_t revision = 0;
 };
 
@@ -32,6 +35,9 @@ public:
     // Called only from the Arduino/controller loop, after BLE/protocol work.
     // No BLE callback or renderer may mutate this state.
     void refreshFromSpark(SparkDataControl &dataControl);
+    void beginHardwarePresetRequest(uint8_t preset);
+    void confirmHardwarePresetRequest();
+    void failHardwarePresetRequest();
 
 private:
     ControllerSnapshot snapshot_;

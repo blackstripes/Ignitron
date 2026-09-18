@@ -25,6 +25,7 @@
 #endif
 #ifdef PANELAN_LVGL_UI_MODE
 #include "controller/ControllerState.h"
+#include "controller/ControllerActions.h"
 #endif
 #endif
 
@@ -55,6 +56,7 @@ PanelLanDisplay panelLanDisplay;
 #endif
 #ifdef PANELAN_LVGL_UI_MODE
 ControllerState controllerState;
+ControllerActions controllerActions(controllerState);
 #endif
 #endif
 
@@ -102,6 +104,9 @@ void setup() {
 
     Serial.println("Initializing");
 #ifdef PANELAN_SC05X_MODE
+ #ifdef PANELAN_LVGL_UI_MODE
+    panelLanDisplay.setActions(&controllerActions);
+ #endif
     panelLanDisplay.begin();
 #ifndef PANELAN_LVGL_UI_MODE
     panelLanDisplay.setPresetCallback(selectTouchPreset);
@@ -202,6 +207,11 @@ void loop() {
     if (operationMode != SPARK_MODE_KEYBOARD) {
         spark_dc->checkForUpdates();
     }
+
+#ifdef PANELAN_LVGL_UI_MODE
+    controllerState.refreshFromSpark(*spark_dc);
+    controllerActions.process(*spark_dc);
+#endif
 
 #ifdef HEADLESS_SERIAL_MODE
     serialCLI->update();

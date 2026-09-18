@@ -1,8 +1,7 @@
 #include "PanelLanLVGLUI.h"
+#include "controller/ControllerActions.h"
 
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
-
-#include <cstring>
 
 namespace {
 PanelLanLVGLUI *uiInstance = nullptr;
@@ -67,8 +66,8 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_align(subtitle, LV_ALIGN_TOP_LEFT, 1, 31);
 
     lv_obj_t *card = lv_obj_create(screen);
-    lv_obj_set_size(card, 292, 108);
-    lv_obj_align(card, LV_ALIGN_CENTER, 0, -4);
+    lv_obj_set_size(card, 292, 86);
+    lv_obj_align(card, LV_ALIGN_CENTER, 0, -32);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x18232B), 0);
     lv_obj_set_style_border_width(card, 2, 0);
     lv_obj_set_style_radius(card, 10, 0);
@@ -79,12 +78,34 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_width(identityLabel_, 260);
     lv_label_set_long_mode(identityLabel_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_color(identityLabel_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
-    lv_obj_align(identityLabel_, LV_ALIGN_TOP_LEFT, 12, 45);
+    lv_obj_align(identityLabel_, LV_ALIGN_TOP_LEFT, 12, 41);
+
+    for (uint8_t preset = 1; preset <= 4; ++preset) {
+        lv_obj_t *button = lv_button_create(screen);
+        presetButtons_[preset - 1] = button;
+        lv_obj_set_size(button, 64, 52);
+        lv_obj_align(button, LV_ALIGN_CENTER, -114 + (preset - 1) * 76, 49);
+        lv_obj_set_style_bg_color(button, lv_color_hex(0x28353D), 0);
+        lv_obj_set_style_border_width(button, 1, 0);
+        lv_obj_add_event_cb(button, onPresetClicked, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<uintptr_t>(preset)));
+        lv_obj_t *label = lv_label_create(button);
+        lv_label_set_text_fmt(label, "%u", preset);
+        lv_obj_center(label);
+    }
 
     lv_obj_t *footer = lv_label_create(screen);
-    lv_label_set_text(footer, "Read-only coexistence checkpoint");
+    lv_label_set_text(footer, "Hardware presets: pending/confirmed checkpoint");
     lv_obj_set_style_text_color(footer, lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
     lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, -7);
+}
+
+void PanelLanLVGLUI::onPresetClicked(lv_event_t *event) {
+    if (!uiInstance->actions_) {
+        return;
+    }
+    const uint8_t preset = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+    uiInstance->actions_->requestHardwarePreset(preset);
 }
 
 void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
@@ -107,6 +128,24 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
         lv_label_set_text(identityLabel_, "Reading Spark identity and current state...");
     } else {
         lv_label_set_text(identityLabel_, "Spark-owned controls remain disabled\nuntil a fresh connection is ready.");
+    }
+
+    for (uint8_t preset = 1; preset <= 4; ++preset) {
+        lv_obj_t *button = presetButtons_[preset - 1];
+        const bool pending = snapshot.pendingHardwarePreset == preset;
+        const bool confirmed = snapshot.confirmedHardwarePreset == preset;
+        const bool enabled = snapshot.connectionPhase == ControllerConnectionPhase::Ready &&
+                             snapshot.pendingHardwarePreset == 0 && !confirmed;
+        const lv_color_t color = pending ? lv_palette_main(LV_PALETTE_ORANGE)
+                               : confirmed ? lv_palette_main(LV_PALETTE_GREEN)
+                               : enabled ? lv_palette_main(LV_PALETTE_BLUE)
+                                         : lv_color_hex(0x28353D);
+        lv_obj_set_style_bg_color(button, color, 0);
+        if (enabled) {
+            lv_obj_remove_state(button, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_state(button, LV_STATE_DISABLED);
+        }
     }
 }
 

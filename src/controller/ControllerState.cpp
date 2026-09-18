@@ -13,6 +13,10 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
                                    : ControllerConnectionPhase::Scanning;
         next.sparkStateStale = true;
         next.identityKnown = false;
+        if (next.pendingHardwarePreset != 0) {
+            next.pendingHardwarePreset = 0;
+            next.presetActionFailed = true;
+        }
         wasLinkEstablished_ = false;
         publishIfChanged(next);
         return;
@@ -22,13 +26,15 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     SparkStatus &status = SparkStatus::getInstance();
     next.ampName = status.ampName();
     next.ampSerial = status.ampSerialNumber();
+    const int reportedPreset = status.currentPresetNumber();
+    next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= 4 ? reportedPreset : 0;
     next.identityKnown = dataControl.ampNameReceived() && !next.ampName.empty();
-    next.connectionPhase = next.identityKnown
-                               ? ControllerConnectionPhase::Syncing
-                               : ControllerConnectionPhase::Identifying;
-    // The existing protocol stack has not yet completed an epoch-aware preset
-    // resync, so no Spark-owned field is ready for performance controls.
-    next.sparkStateStale = true;
+    next.connectionPhase = !next.identityKnown
+                               ? ControllerConnectionPhase::Identifying
+                               : next.confirmedHardwarePreset == 0
+                                     ? ControllerConnectionPhase::Syncing
+                                     : ControllerConnectionPhase::Ready;
+    next.sparkStateStale = next.connectionPhase != ControllerConnectionPhase::Ready;
     publishIfChanged(next);
 }
 
@@ -37,9 +43,33 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
         snapshot_.sparkStateStale == next.sparkStateStale &&
         snapshot_.identityKnown == next.identityKnown &&
         snapshot_.ampName == next.ampName &&
-        snapshot_.ampSerial == next.ampSerial) {
+        snapshot_.ampSerial == next.ampSerial &&
+        snapshot_.confirmedHardwarePreset == next.confirmedHardwarePreset &&
+        snapshot_.pendingHardwarePreset == next.pendingHardwarePreset &&
+        snapshot_.presetActionFailed == next.presetActionFailed) {
         return;
     }
     snapshot_ = next;
     ++snapshot_.revision;
+}
+
+void ControllerState::beginHardwarePresetRequest(uint8_t preset) {
+    ControllerSnapshot next = snapshot_;
+    next.pendingHardwarePreset = preset;
+    next.presetActionFailed = false;
+    publishIfChanged(next);
+}
+
+void ControllerState::confirmHardwarePresetRequest() {
+    ControllerSnapshot next = snapshot_;
+    next.pendingHardwarePreset = 0;
+    next.presetActionFailed = false;
+    publishIfChanged(next);
+}
+
+void ControllerState::failHardwarePresetRequest() {
+    ControllerSnapshot next = snapshot_;
+    next.pendingHardwarePreset = 0;
+    next.presetActionFailed = true;
+    publishIfChanged(next);
 }

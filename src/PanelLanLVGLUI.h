@@ -8,6 +8,8 @@
 
 #include "controller/ControllerState.h"
 
+class ControllerActions;
+
 // Presentation-only LVGL surface for the first BLE coexistence checkpoint.
 // It accepts immutable snapshots from the application loop and sends no Spark
 // commands. ControllerActions will replace that boundary before controls are
@@ -16,6 +18,7 @@ class PanelLanLVGLUI {
 public:
     void begin();
     void update(const ControllerSnapshot &snapshot);
+    void setActions(ControllerActions *actions) { actions_ = actions; }
 
 private:
     static constexpr uint16_t kDisplayWidth = 320;
@@ -29,11 +32,14 @@ private:
     lv_display_t *display_ = nullptr;
     lv_obj_t *connectionLabel_ = nullptr;
     lv_obj_t *identityLabel_ = nullptr;
+    lv_obj_t *presetButtons_[4]{};
+    ControllerActions *actions_ = nullptr;
     uint32_t renderedRevision_ = UINT32_MAX;
     uint32_t lastLvglTickAt_ = 0;
 
     static void flushDisplay(lv_display_t *display, const lv_area_t *area, uint8_t *pixelMap);
     static void readTouch(lv_indev_t *, lv_indev_data_t *data);
+    static void onPresetClicked(lv_event_t *event);
     void createUi();
     void renderStatus(const ControllerSnapshot &snapshot);
 };
