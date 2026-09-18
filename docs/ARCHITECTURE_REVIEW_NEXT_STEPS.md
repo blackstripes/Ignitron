@@ -280,7 +280,7 @@ production UI port.
 connection/identity card shares the ordinary Arduino loop with direct Spark
 BLE, and the background preset-cache task is disabled so it cannot race the
 future command owner. The PanelLan boots, serial CLI is available, and BLE
-scanning was observed after flashing.
+scanning and a live Spark connection were observed after flashing.
 
 Next, add one preset action only after the canonical action boundary exists.
 Instrument action ID, connection epoch, wire message number, ACK,

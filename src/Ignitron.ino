@@ -23,6 +23,9 @@
 #else
 #include "PanelLanDisplay.h"
 #endif
+#ifdef PANELAN_LVGL_UI_MODE
+#include "controller/ControllerState.h"
+#endif
 #endif
 
 using namespace std;
@@ -49,6 +52,9 @@ SparkPresetControl &presetControl = SparkPresetControl::getInstance();
 PanelLanLVGLUI panelLanDisplay;
 #else
 PanelLanDisplay panelLanDisplay;
+#endif
+#ifdef PANELAN_LVGL_UI_MODE
+ControllerState controllerState;
 #endif
 #endif
 
@@ -162,9 +168,14 @@ void loop() {
         // its only user interface.
         const bool sparkConnected = spark_dc->checkBLEConnection();
 #ifdef PANELAN_SC05X_MODE
+#ifdef PANELAN_LVGL_UI_MODE
+        controllerState.refreshFromSpark(*spark_dc);
+        panelLanDisplay.update(controllerState.snapshot());
+#else
         SparkStatus &status = SparkStatus::getInstance();
         panelLanDisplay.setSparkIdentity(status.ampName().c_str(), status.ampSerialNumber().c_str());
         panelLanDisplay.update(sparkConnected);
+#endif
 #endif
         if (!sparkConnected) {
             serialCLI->update();
@@ -195,7 +206,12 @@ void loop() {
 #ifdef HEADLESS_SERIAL_MODE
     serialCLI->update();
 #ifdef PANELAN_SC05X_MODE
+#ifdef PANELAN_LVGL_UI_MODE
+    controllerState.refreshFromSpark(*spark_dc);
+    panelLanDisplay.update(controllerState.snapshot());
+#else
     panelLanDisplay.update(true);
+#endif
 #endif
     delay(1);
 #else

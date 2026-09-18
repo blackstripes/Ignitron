@@ -47,7 +47,7 @@ void PanelLanLVGLUI::begin() {
     lv_indev_set_read_cb(touch, readTouch);
     lv_indev_set_display(touch, display_);
     createUi();
-    renderStatus(false);
+    renderStatus(ControllerSnapshot{});
 }
 
 void PanelLanLVGLUI::createUi() {
@@ -87,39 +87,36 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, -7);
 }
 
-void PanelLanLVGLUI::setSparkIdentity(const char *model, const char *serial) {
-    if (strncmp(model_, model, sizeof(model_) - 1) == 0 &&
-        strncmp(serial_, serial, sizeof(serial_) - 1) == 0) {
-        return;
-    }
-    strncpy(model_, model, sizeof(model_) - 1);
-    model_[sizeof(model_) - 1] = '\0';
-    strncpy(serial_, serial, sizeof(serial_) - 1);
-    serial_[sizeof(serial_) - 1] = '\0';
-    identityDirty_ = true;
-}
-
-void PanelLanLVGLUI::renderStatus(bool sparkConnected) {
-    const lv_color_t accent = sparkConnected ? lv_palette_main(LV_PALETTE_GREEN)
-                                              : lv_palette_main(LV_PALETTE_ORANGE);
-    lv_label_set_text(connectionLabel_, sparkConnected ? "CONNECTED" : "SEARCHING FOR SPARK");
+void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
+    const bool linkEstablished = snapshot.connectionPhase == ControllerConnectionPhase::Identifying ||
+                                 snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||
+                                 snapshot.connectionPhase == ControllerConnectionPhase::Ready;
+    const lv_color_t accent = linkEstablished ? lv_palette_main(LV_PALETTE_GREEN)
+                                               : lv_palette_main(LV_PALETTE_ORANGE);
+    const char *connectionText = snapshot.connectionPhase == ControllerConnectionPhase::Reconnecting
+                                     ? "RECONNECTING TO SPARK"
+                                     : linkEstablished ? "CONNECTED - SYNCING" : "SEARCHING FOR SPARK";
+    lv_label_set_text(connectionLabel_, connectionText);
     lv_obj_set_style_text_color(connectionLabel_, accent, 0);
     lv_obj_set_style_border_color(lv_obj_get_parent(connectionLabel_), accent, 0);
-    if (sparkConnected) {
-        lv_label_set_text_fmt(identityLabel_, "%s%s%s", model_, serial_[0] ? "\nSerial  " : "", serial_);
+    if (snapshot.identityKnown) {
+        lv_label_set_text_fmt(identityLabel_, "%s%s%s", snapshot.ampName.c_str(),
+                              snapshot.ampSerial.empty() ? "" : "\nSerial  ",
+                              snapshot.ampSerial.c_str());
+    } else if (linkEstablished) {
+        lv_label_set_text(identityLabel_, "Reading Spark identity and current state...");
     } else {
         lv_label_set_text(identityLabel_, "Spark-owned controls remain disabled\nuntil a fresh connection is ready.");
     }
 }
 
-void PanelLanLVGLUI::update(bool sparkConnected) {
+void PanelLanLVGLUI::update(const ControllerSnapshot &snapshot) {
     const uint32_t now = millis();
     lv_tick_inc(now - lastLvglTickAt_);
     lastLvglTickAt_ = now;
-    if (sparkConnected != lastConnectionState_ || identityDirty_) {
-        lastConnectionState_ = sparkConnected;
-        identityDirty_ = false;
-        renderStatus(sparkConnected);
+    if (renderedRevision_ != snapshot.revision) {
+        renderedRevision_ = snapshot.revision;
+        renderStatus(snapshot);
     }
     lv_timer_handler();
 }

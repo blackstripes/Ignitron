@@ -390,8 +390,9 @@ Run LVGL with the existing Spark controller stack.
 card from the normal Arduino loop. It also disables the legacy background
 hardware-preset cache task for this target, because that task currently issues
 independent Spark requests outside a canonical command owner. Boot and BLE
-scanning were verified on the physical PanelLan; a Spark connection/reconnect
-and sustained-touch run remain required before this milestone passes.
+scanning and a live Spark connection were verified on the physical PanelLan.
+Reconnect and sustained-touch runs remain required before this milestone
+passes.
 
 This target intentionally has no preset/FX touch action. It must not be used
 as a shortcut around `ControllerState` and `ControllerActions`.
