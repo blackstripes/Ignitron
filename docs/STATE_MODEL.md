@@ -191,13 +191,17 @@ A user tap on preset 3 creates a pending request for preset 3. It does not immed
 
 ### Pending presentation
 
-While preset request is pending:
+For the initial performance touchscreen, preset selection is **optimistic**:
 
-- old confirmed preset remains visibly current.
-- requested preset gets amber pending treatment.
-- do not show requested preset as solid confirmed green.
-- when Spark confirms, pending becomes active and pending disappears.
-- on timeout/failure, pending clears and old state remains until resync.
+- the requested preset turns green immediately and the old selected tile turns blue.
+- confirmed Spark state remains separate internally; the visual selection is intent,
+  not proof that the amp has changed.
+- when Spark confirms, pending disappears with no visual jump.
+- on timeout/failure, the selection reverts to the last confirmed preset and an
+  error message is shown.
+
+Other action types retain explicit pending treatment unless their interaction
+specification says otherwise.
 
 ### Preset side effects
 

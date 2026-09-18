@@ -120,8 +120,8 @@ When preset N is selected:
 1. require Ready connection.
 2. reject/ignore if conflicting preset request pending.
 3. create pending preset N.
-4. render N amber/pending.
-5. keep old confirmed preset visibly active.
+4. render N as the optimistic green selection and return the prior tile to blue.
+5. retain old confirmed preset internally until Spark confirms N.
 6. send one native hardware-preset command.
 7. when Spark confirms current preset, make N confirmed.
 8. clear pending.

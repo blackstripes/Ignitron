@@ -94,10 +94,10 @@ void PanelLanLVGLUI::createUi() {
         lv_obj_center(label);
     }
 
-    lv_obj_t *footer = lv_label_create(screen);
-    lv_label_set_text(footer, "Hardware presets: pending/confirmed checkpoint");
-    lv_obj_set_style_text_color(footer, lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
-    lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, -7);
+    actionStatusLabel_ = lv_label_create(screen);
+    lv_label_set_text(actionStatusLabel_, "Hardware presets ready");
+    lv_obj_set_style_text_color(actionStatusLabel_, lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
+    lv_obj_align(actionStatusLabel_, LV_ALIGN_BOTTOM_MID, 0, -7);
 }
 
 void PanelLanLVGLUI::onPresetClicked(lv_event_t *event) {
@@ -132,20 +132,30 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
 
     for (uint8_t preset = 1; preset <= 4; ++preset) {
         lv_obj_t *button = presetButtons_[preset - 1];
-        const bool pending = snapshot.pendingHardwarePreset == preset;
-        const bool confirmed = snapshot.confirmedHardwarePreset == preset;
-        const bool enabled = snapshot.connectionPhase == ControllerConnectionPhase::Ready &&
-                             snapshot.pendingHardwarePreset == 0 && !confirmed;
-        const lv_color_t color = pending ? lv_palette_main(LV_PALETTE_ORANGE)
-                               : confirmed ? lv_palette_main(LV_PALETTE_GREEN)
-                               : enabled ? lv_palette_main(LV_PALETTE_BLUE)
+        // Performance UI is intentionally optimistic: selection moves at tap
+        // time, while ControllerState still retains the confirmed value and
+        // restores it if Spark does not verify the change.
+        const uint8_t displayedPreset = snapshot.pendingHardwarePreset != 0
+                                           ? snapshot.pendingHardwarePreset
+                                           : snapshot.confirmedHardwarePreset;
+        const bool selected = displayedPreset == preset;
+        const bool ready = snapshot.connectionPhase == ControllerConnectionPhase::Ready;
+        const lv_color_t color = selected ? lv_palette_main(LV_PALETTE_GREEN)
+                               : ready ? lv_palette_main(LV_PALETTE_BLUE)
                                          : lv_color_hex(0x28353D);
         lv_obj_set_style_bg_color(button, color, 0);
-        if (enabled) {
-            lv_obj_remove_state(button, LV_STATE_DISABLED);
-        } else {
-            lv_obj_add_state(button, LV_STATE_DISABLED);
-        }
+        // Input acceptance is owned by ControllerActions. Do not use LVGL's
+        // disabled state here: its dimming makes the still-valid alternatives
+        // look broken while a request is pending.
+        lv_obj_remove_state(button, LV_STATE_DISABLED);
+    }
+
+    if (snapshot.pendingHardwarePreset != 0) {
+        lv_label_set_text(actionStatusLabel_, "Switching preset...");
+    } else if (snapshot.presetActionFailed) {
+        lv_label_set_text(actionStatusLabel_, "Preset switch was not confirmed");
+    } else {
+        lv_label_set_text(actionStatusLabel_, "Hardware presets ready");
     }
 }
 
