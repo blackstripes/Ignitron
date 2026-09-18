@@ -448,3 +448,17 @@ Key direction:
 - Prioritize truthful Spark-synchronized state, large touch targets, standing-height readability, and a dark stage-friendly visual hierarchy.
 - Implement device-capability awareness so Spark-2-only controls are hidden or disabled on other devices.
 - Build the UI incrementally on the already-working PanelLan display/touch target before adding external displays and footswitches.
+
+
+## Detailed behavior specifications
+
+The product roadmap is now backed by explicit implementation contracts:
+
+- [STATE_MODEL.md](STATE_MODEL.md) defines canonical state, authority, pending/confirmed/stale semantics, capabilities, and reconnect behavior.
+- [INTERACTION_SPEC.md](INTERACTION_SPEC.md) defines exact behavior for presets, FX, tuner, tempo, looper, MODE, TAP/TUNER, touchscreen, physical switches, mini TFTs, and CLI.
+- [AMP_BEHAVIOR.md](AMP_BEHAVIOR.md) distinguishes amp-native logic from controller logic and contains a hardware verification matrix.
+- [UI_DESIGN.md](UI_DESIGN.md) defines the visual presentation.
+
+A central design principle is to rely on native Spark behavior whenever possible. For example, Positive Grid documents that Spark 2 mutes itself when tuner mode is entered; the controller should send the native tuner command and reflect the result rather than turning off all effects or synthesizing a mute sequence.
+
+Unknown interactions should be tested on hardware and documented in AMP_BEHAVIOR.md before Codex encodes them as behavior.
