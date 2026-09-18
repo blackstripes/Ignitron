@@ -15,6 +15,10 @@ SparkBLEKeyboard::~SparkBLEKeyboard() {
 
 void SparkBLEKeyboard::end() {
 	BLEServer *pServer = BLEDevice::getServer();
+	if (pServer == nullptr) {
+		Serial.println("Keyboard server is not initialized; skipping stop.");
+		return;
+	}
 	for (int i = 0; i < pServer->getConnectedCount(); i++) {
 		pServer->disconnect(pServer->getPeerInfo(i).getConnHandle());
 	}
@@ -24,6 +28,10 @@ void SparkBLEKeyboard::end() {
 
 void SparkBLEKeyboard::start() {
 	BLEServer *pServer = BLEDevice::getServer();
+	if (pServer == nullptr) {
+		Serial.println("Keyboard server is not initialized; skipping start.");
+		return;
+	}
 	Serial.println("Starting advertising keyboard");
 	pServer->startAdvertising();
 

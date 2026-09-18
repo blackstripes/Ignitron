@@ -33,6 +33,12 @@ There are three classes of state.
 
 When Spark owns a value, the controller may show a temporary pending intention, but must not permanently overwrite the authoritative value until Spark confirms or a resync proves the new state.
 
+Incoming Spark state events are observations, never commands to echo. For
+example, external tuner ON/OFF and tuner-output events update the local view of
+Spark-owned tuner state; handling those events must not send a native tuner
+ON/OFF command back to the amp. A tuner-output sample is positive evidence that
+the tuner remains active.
+
 ## Recommended top-level model
 
 Conceptually maintain:

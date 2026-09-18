@@ -836,24 +836,28 @@ void SparkDataControl::handleAppModeResponse() {
         }
 
         if (lastMessageType == MSG_TYPE_TUNER_OUTPUT) {
-            // Amp seems to be in tuner mode
+            // Tuner samples are amp-owned state observations. In particular,
+            // an external tuner session must not be answered with a tuner-off
+            // command from this callback.
             if (subMode_ != SUB_MODE_TUNER) {
-                // Switch off tuner
-                switchTuner(false);
+                Serial.println("External tuner output received; marking tuner active.");
+                subMode_ = SUB_MODE_TUNER;
             }
-            // operationMode_ = SUB_MODE_TUNER;
         }
 
-        // TODO: Check if this works
         if (lastMessageType == MSG_TYPE_TUNER_ON) {
-            Serial.println("Tuner on received.");
-            switchSubMode(SUB_MODE_TUNER);
+            // Do not call switchSubMode here: this is an observation from the
+            // amp, not a local request, and switchSubMode sends tuner commands.
+            Serial.println("External tuner ON received; marking tuner active.");
+            subMode_ = SUB_MODE_TUNER;
+            SparkPresetControl::getInstance().updatePendingWithActive();
         }
 
-        // TODO: Check if this works
         if (lastMessageType == MSG_TYPE_TUNER_OFF) {
-            Serial.println("Tuner off received.");
-            switchSubMode(SUB_MODE_PRESET);
+            // As above, do not echo an amp transition back to the amp.
+            Serial.println("External tuner OFF received; returning to preset mode.");
+            subMode_ = SUB_MODE_PRESET;
+            SparkPresetControl::getInstance().updatePendingWithActive();
         }
 
         if (lastMessageType == MSG_TYPE_INPUT_VOLUME) {

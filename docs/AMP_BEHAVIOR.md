@@ -68,6 +68,22 @@ SparkStreamReader already parses:
 
 Therefore the custom UI can model requested vs confirmed tuner state instead of treating tuner screen visibility as proof.
 
+## Spark 2 external tuner observations
+
+Hardware testing found that Spark 2 emits native tuner ON/OFF and tuner-output
+messages when tuner is entered externally. These messages are observations of
+amp-owned state, not requests from Ignitron. The receive path must therefore
+only update its local submode (and synchronize the pending preset view on an
+ON/OFF transition); it must never call the local `switchSubMode` or
+`switchTuner` command path in response. In particular, a tuner-output sample
+means tuner is active and must never cause Ignitron to send tuner OFF.
+
+The same test exposed a legacy crash: an externally received tuner ON invoked
+`switchSubMode`, which stopped the optional BLE keyboard even when no keyboard
+BLE server had been initialized. `SparkBLEKeyboard::start/end` now safely no-op
+when `BLEDevice::getServer()` is null. Explicit local tuner commands retain
+their existing behavior.
+
 ## Spark 2 firmware note around tuner exit
 
 Positive Grid firmware 2.5.2.149 / rev479 notes a fix for missing preset status when exiting tuner.
