@@ -33,6 +33,7 @@ private:
     // in internal RAM for this target. DMA_ATTR is not valid on C++ members.
     uint16_t drawBuffer_[kDisplayWidth * kBufferLines]{};
     lv_display_t *display_ = nullptr;
+    lv_obj_t *headerTitle_ = nullptr;
     lv_obj_t *connectionLabel_ = nullptr;
     lv_obj_t *identityLabel_ = nullptr;
     lv_obj_t *presetNameLabel_ = nullptr;
@@ -47,11 +48,13 @@ private:
     lv_obj_t *detailTitle_ = nullptr;
     lv_obj_t *detailMessage_ = nullptr;
     lv_obj_t *detailTiles_[6]{};
-    lv_obj_t *detailTileAccents_[6]{};
+    lv_obj_t *detailTileIcons_[6]{};
     lv_obj_t *detailTileLabels_[6]{};
     lv_obj_t *detailTileStateLabels_[6]{};
     lv_obj_t *navButtons_[5]{};
     lv_obj_t *navLabels_[5]{};
+    lv_obj_t *navIcons_[5]{};
+    lv_obj_t *nav_ = nullptr;
     Screen activeScreen_ = Screen::Preset;
     ControllerSnapshot latestSnapshot_{};
     ControllerActions *actions_ = nullptr;

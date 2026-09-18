@@ -7,6 +7,108 @@
 
 namespace {
 PanelLanLVGLUI *uiInstance = nullptr;
+
+// Small vector glyphs keep the concept's visual vocabulary crisp at 320x240,
+// without a bitmap framebuffer or a collection of decorative LVGL objects.
+void drawGlyph(lv_event_t *event) {
+    lv_obj_t *obj = lv_event_get_target_obj(event);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_area_t bounds;
+    lv_obj_get_coords(obj, &bounds);
+    const uint8_t glyph = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+    const lv_color_t color = lv_obj_get_style_text_color(obj, LV_PART_MAIN);
+    auto line = [&](int x1, int y1, int x2, int y2, int width = 2) {
+        lv_draw_line_dsc_t dsc;
+        lv_draw_line_dsc_init(&dsc);
+        dsc.p1 = {bounds.x1 + x1, bounds.y1 + y1};
+        dsc.p2 = {bounds.x1 + x2, bounds.y1 + y2};
+        dsc.width = width;
+        dsc.color = color;
+        dsc.round_start = dsc.round_end = 1;
+        lv_draw_line(layer, &dsc);
+    };
+    auto arc = [&](int x, int y, int radius, int start, int end, int width = 2) {
+        lv_draw_arc_dsc_t dsc;
+        lv_draw_arc_dsc_init(&dsc);
+        dsc.center = {bounds.x1 + x, bounds.y1 + y};
+        dsc.radius = radius;
+        dsc.start_angle = start;
+        dsc.end_angle = end;
+        dsc.width = width;
+        dsc.color = color;
+        dsc.rounded = 1;
+        lv_draw_arc(layer, &dsc);
+    };
+    switch (glyph) {
+    case 0: { // Gate: waveform.
+        static const int8_t points[][2] = {{2,18},{7,18},{10,9},{14,29},{18,3},
+                                          {22,32},{26,7},{30,25},{33,18},{37,18}};
+        for (uint8_t i = 1; i < 10; ++i)
+            line(points[i-1][0], points[i-1][1], points[i][0], points[i][1]);
+        break;
+    }
+    case 1: // Compressor: inward compression arrows, matching the crossed concept mark.
+        line(10,5,16,15,3); line(10,29,28,5,3);
+        line(22,21,28,29,3); line(10,17,16,15); line(16,15,16,9);
+        line(22,27,22,21); line(22,21,28,21);
+        break;
+    case 2: // Drive: vacuum tube.
+        arc(19,12,9,180,360,3);
+        line(11,12,11,29,3); line(27,12,27,29,3); line(11,29,27,29,3);
+        line(15,32,23,32,2); line(16,32,16,35); line(22,32,22,35);
+        line(15,24,15,17); line(15,17,19,20); line(19,20,23,17); line(23,17,23,24);
+        break;
+    case 3: { // Modulation: a smooth, sampled sine wave.
+        static const int8_t points[][2] = {{2,20},{4,12},{6,7},{8,6},{10,8},{12,14},
+            {14,23},{16,29},{18,30},{20,27},{22,20},{24,14},{26,13},{28,16},{30,24},
+            {32,29},{34,28},{36,23},{38,16}};
+        for (uint8_t i = 1; i < 19; ++i)
+            line(points[i-1][0], points[i-1][1], points[i][0], points[i][1]);
+        break;
+    }
+    case 4: // Delay: a note and receding echoes.
+        arc(21,28,5,0,360,3); line(25,27,25,4,3);
+        line(25,4,31,13,3); line(31,13,31,17);
+        line(4,25,5,25); line(9,23,11,23); line(14,21,17,21);
+        break;
+    case 5: // Reverb: concentric reflections.
+        arc(19,18,16,0,360); arc(19,18,11,0,360); arc(19,18,6,0,360);
+        break;
+    case 6: // Home.
+        line(2,9,10,2,1); line(10,2,18,9,1);
+        line(4,8,4,18,1); line(4,18,8,18,1); line(8,18,8,12,1);
+        line(8,12,12,12,1); line(12,12,12,18,1); line(12,18,16,18,1); line(16,18,16,8,1);
+        break;
+    case 7: // FX sliders.
+        line(4,2,4,18,1); line(10,2,10,18,1); line(16,2,16,18,1);
+        line(2,7,6,7,3); line(8,13,12,13,3); line(14,6,18,6,3);
+        break;
+    case 8: // Looper.
+        arc(5,10,5,45,315,1); arc(15,10,5,225,495,1);
+        line(8,7,12,13,1); line(8,13,12,7,1);
+        break;
+    case 9: // Tuning fork.
+        line(5,2,5,10,1); line(15,2,15,10,1);
+        arc(10,10,6,0,180,1); line(10,15,10,19,1);
+        break;
+    case 10: // Device / settings.
+        arc(10,10,6,0,360,1); arc(10,10,3,0,360,1);
+        line(10,1,10,4,1); line(10,16,10,19,1); line(1,10,4,10,1); line(16,10,19,10,1);
+        line(4,4,6,6,1); line(14,14,16,16,1); line(4,16,6,14,1); line(14,6,16,4,1);
+        break;
+    }
+}
+
+lv_obj_t *createGlyph(lv_obj_t *parent, uint8_t glyph, int width, int height) {
+    lv_obj_t *obj = lv_obj_create(parent);
+    lv_obj_remove_style_all(obj);
+    lv_obj_set_size(obj, width, height);
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(obj, drawGlyph, LV_EVENT_DRAW_MAIN,
+                        reinterpret_cast<void *>(static_cast<uintptr_t>(glyph)));
+    return obj;
+}
 }
 
 void PanelLanLVGLUI::flushDisplay(lv_display_t *display, const lv_area_t *area, uint8_t *pixelMap) {
@@ -93,6 +195,7 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_pad_all(header, 0, 0);
 
     lv_obj_t *title = lv_label_create(header);
+    headerTitle_ = title;
     lv_label_set_text(title, "IGNITRON");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
@@ -209,6 +312,7 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_border_width(detailPage_, 0, 0);
     lv_obj_set_style_radius(detailPage_, 0, 0);
     lv_obj_set_style_pad_all(detailPage_, 0, 0);
+    lv_obj_remove_flag(detailPage_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(detailPage_, LV_OBJ_FLAG_HIDDEN);
 
     detailTitle_ = lv_label_create(detailPage_);
@@ -222,43 +326,44 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_text_color(detailMessage_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
     lv_obj_align(detailMessage_, LV_ALIGN_TOP_LEFT, 14, 42);
 
-    const int16_t detailX[] = {-105, 0, 105, -105, 0, 105};
+    const int16_t detailX[] = {-104, 0, 104, -104, 0, 104};
     for (uint8_t fx = 0; fx < 6; ++fx) {
         lv_obj_t *tile = lv_obj_create(detailPage_);
         detailTiles_[fx] = tile;
-        lv_obj_set_size(tile, 94, 54);
-        lv_obj_align(tile, LV_ALIGN_TOP_MID, detailX[fx], fx < 3 ? 64 : 124);
-        lv_obj_set_style_border_width(tile, 1, 0);
-        lv_obj_set_style_radius(tile, 8, 0);
+        lv_obj_set_size(tile, 98, 77);
+        lv_obj_align(tile, LV_ALIGN_TOP_MID, detailX[fx], fx < 3 ? 3 : 85);
+        lv_obj_set_style_border_width(tile, 2, 0);
+        lv_obj_set_style_radius(tile, 7, 0);
         lv_obj_set_style_pad_all(tile, 0, 0);
+        lv_obj_remove_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
 
-        detailTileAccents_[fx] = lv_obj_create(tile);
-        lv_obj_set_size(detailTileAccents_[fx], 76, 3);
-        lv_obj_align(detailTileAccents_[fx], LV_ALIGN_TOP_MID, 0, 7);
-        lv_obj_set_style_border_width(detailTileAccents_[fx], 0, 0);
-        lv_obj_set_style_radius(detailTileAccents_[fx], 2, 0);
-        lv_obj_set_style_pad_all(detailTileAccents_[fx], 0, 0);
+        detailTileIcons_[fx] = createGlyph(tile, fx, 40, 36);
+        lv_obj_align(detailTileIcons_[fx], LV_ALIGN_TOP_MID, 0, 21);
 
         detailTileLabels_[fx] = lv_label_create(tile);
         lv_obj_set_width(detailTileLabels_[fx], 94);
         lv_obj_set_style_text_align(detailTileLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(detailTileLabels_[fx], lv_color_white(), 0);
         lv_obj_set_style_text_font(detailTileLabels_[fx], &lv_font_montserrat_14, 0);
-        lv_obj_align(detailTileLabels_[fx], LV_ALIGN_TOP_MID, 0, 15);
+        lv_obj_align(detailTileLabels_[fx], LV_ALIGN_TOP_MID, 0, 5);
 
         detailTileStateLabels_[fx] = lv_label_create(tile);
         lv_obj_set_width(detailTileStateLabels_[fx], 94);
         lv_obj_set_style_text_align(detailTileStateLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(detailTileStateLabels_[fx], LV_ALIGN_BOTTOM_MID, 0, -6);
+        lv_obj_set_style_text_font(detailTileStateLabels_[fx], &lv_font_montserrat_12, 0);
+        lv_obj_align(detailTileStateLabels_[fx], LV_ALIGN_BOTTOM_MID, 0, -3);
     }
 
     lv_obj_t *nav = lv_obj_create(screen);
+    nav_ = nav;
     lv_obj_set_size(nav, 320, 30);
     lv_obj_align(nav, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(nav, lv_color_hex(0x111B21), 0);
     lv_obj_set_style_border_width(nav, 0, 0);
     lv_obj_set_style_radius(nav, 0, 0);
     lv_obj_set_style_pad_all(nav, 0, 0);
+    lv_obj_remove_flag(nav, LV_OBJ_FLAG_SCROLLABLE);
     const char *navLabels[] = {"PRESET", "FX", "LOOPER", "TUNER", "DEVICE"};
     for (uint8_t i = 0; i < 5; ++i) {
         lv_obj_t *button = lv_button_create(nav);
@@ -267,6 +372,7 @@ void PanelLanLVGLUI::createUi() {
         lv_obj_align(button, LV_ALIGN_LEFT_MID, i * 64, 0);
         lv_obj_set_style_pad_all(button, 0, 0);
         lv_obj_set_style_radius(button, 4, 0);
+        lv_obj_set_style_shadow_width(button, 0, 0);
         lv_obj_add_event_cb(button, onNavClicked, LV_EVENT_CLICKED,
                             reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
         lv_obj_t *label = lv_label_create(button);
@@ -275,6 +381,9 @@ void PanelLanLVGLUI::createUi() {
         lv_obj_set_width(label, 64);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_center(label);
+        navIcons_[i] = createGlyph(button, i + 6, 20, 20);
+        lv_obj_align(navIcons_[i], LV_ALIGN_TOP_MID, 0, 2);
+        lv_obj_add_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
     }
     renderNavigation();
 }
@@ -312,14 +421,34 @@ void PanelLanLVGLUI::setActiveScreen(Screen screen) {
 }
 
 void PanelLanLVGLUI::renderNavigation() {
+    const bool conceptFx = activeScreen_ == Screen::Fx;
+    lv_obj_set_height(nav_, conceptFx ? 40 : 30);
+    lv_label_set_text(headerTitle_, conceptFx && latestSnapshot_.identityKnown
+                                        ? latestSnapshot_.ampName.c_str() : "IGNITRON");
+    lv_obj_set_width(headerTitle_, conceptFx ? 156 : 100);
+    lv_label_set_long_mode(headerTitle_, LV_LABEL_LONG_DOT);
     for (uint8_t i = 0; i < 5; ++i) {
         const bool selected = i == static_cast<uint8_t>(activeScreen_);
-        lv_obj_set_style_bg_color(navButtons_[i], selected ? lv_color_hex(0x1E2020) : lv_color_hex(0x111B21), 0);
+        lv_obj_set_height(navButtons_[i], conceptFx ? 40 : 30);
+        lv_obj_set_style_bg_color(navButtons_[i], conceptFx
+            ? (selected ? lv_color_hex(0x25251C) : lv_color_hex(0x090F13))
+            : (selected ? lv_color_hex(0x1E2020) : lv_color_hex(0x111B21)), 0);
+        lv_obj_set_style_bg_grad_color(navButtons_[i], lv_color_hex(0x080D10), 0);
+        lv_obj_set_style_bg_grad_dir(navButtons_[i], conceptFx ? LV_GRAD_DIR_VER : LV_GRAD_DIR_NONE, 0);
         lv_obj_set_style_border_color(navButtons_[i], selected ? lv_palette_main(LV_PALETTE_YELLOW)
                                                                : lv_color_hex(0x111B21), 0);
         lv_obj_set_style_border_width(navButtons_[i], selected ? 1 : 0, 0);
         lv_obj_set_style_text_color(navLabels_[i], selected ? lv_palette_main(LV_PALETTE_YELLOW)
                                                             : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
+        lv_obj_set_style_text_font(navLabels_[i], conceptFx ? &lv_font_montserrat_12 : &lv_font_montserrat_14, 0);
+        if (conceptFx) {
+            lv_obj_remove_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_text_color(navIcons_[i], selected ? lv_color_hex(0xFFD65A) : lv_color_hex(0xA7B7C3), 0);
+            lv_obj_align(navLabels_[i], LV_ALIGN_BOTTOM_MID, 0, -3);
+        } else {
+            lv_obj_add_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_center(navLabels_[i]);
+        }
     }
 }
 
@@ -333,49 +462,43 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         }
     }
     if (isFxPage) {
-        lv_label_set_text(detailTitle_, "FX RIG");
-        uint8_t activeCount = 0;
-        uint8_t knownCount = 0;
-        for (const ControllerFxSlot &slot : snapshot.fxSlots) {
-            if (slot.known) {
-                ++knownCount;
-                activeCount += slot.enabled ? 1 : 0;
-            }
-        }
-        if (knownCount == 6) {
-            lv_label_set_text_fmt(detailMessage_, "%u ACTIVE  |  HW %u", activeCount,
-                                  snapshot.confirmedHardwarePreset);
-        } else {
-            lv_label_set_text(detailMessage_, "SYNCING LIVE SPARK STATE");
-        }
+        // The concept gives the entire body to six effects. Status already
+        // belongs to the persistent header; an extra title shrinks the cards.
+        lv_obj_add_flag(detailTitle_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(detailMessage_, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
         static const lv_color_t kFxAccents[] = {
-            lv_color_hex(0x22C55E), lv_color_hex(0x14B8A6), lv_color_hex(0xEF4444),
-            lv_color_hex(0x8B5CF6), lv_color_hex(0x38BDF8), lv_color_hex(0xA78BFA),
+            lv_color_hex(0x00E65D), lv_color_hex(0x48D8BC), lv_color_hex(0xFF3044),
+            lv_color_hex(0xA497E9), lv_color_hex(0x00ABFF), lv_color_hex(0xA99BEA),
         };
         static const lv_color_t kFxOnBackgrounds[] = {
-            lv_color_hex(0x123C2C), lv_color_hex(0x103A39), lv_color_hex(0x421F25),
-            lv_color_hex(0x2A2144), lv_color_hex(0x12384B), lv_color_hex(0x302449),
+            lv_color_hex(0x07532E), lv_color_hex(0x164C43), lv_color_hex(0x611823),
+            lv_color_hex(0x38304E), lv_color_hex(0x064775), lv_color_hex(0x39304E),
         };
+        static const char *kFxNames[] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};
         for (uint8_t fx = 0; fx < 6; ++fx) {
             const ControllerFxSlot &slot = snapshot.fxSlots[fx];
-            const bool enabled = slot.known && slot.enabled;
-            const lv_color_t accent = slot.known ? kFxAccents[fx] : lv_color_hex(0xD97706);
-            const char *name = slot.known ? slot.label.c_str() : "--";
+            const bool current = slot.known && !snapshot.sparkStateStale;
+            const bool enabled = current && slot.enabled;
+            const lv_color_t accent = enabled ? kFxAccents[fx] : lv_color_hex(0x96A5B7);
+            const char *name = slot.known ? slot.label.c_str() : kFxNames[fx];
             lv_label_set_text(detailTileLabels_[fx], name);
-            lv_label_set_text(detailTileStateLabels_[fx], slot.known ? (enabled ? "ON" : "OFF") : "SYNC");
-            lv_obj_set_style_bg_color(detailTiles_[fx], enabled ? kFxOnBackgrounds[fx] : lv_color_hex(0x111A20), 0);
-            lv_obj_set_style_bg_grad_color(detailTiles_[fx], enabled ? lv_color_hex(0x0E171C) : lv_color_hex(0x0B1115), 0);
+            lv_label_set_text(detailTileStateLabels_[fx], current ? (enabled ? "ON" : "OFF") : "SYNC");
+            lv_obj_set_style_bg_color(detailTiles_[fx], enabled ? kFxOnBackgrounds[fx] : lv_color_hex(0x242D35), 0);
+            lv_obj_set_style_bg_grad_color(detailTiles_[fx], enabled ? lv_color_mix(kFxOnBackgrounds[fx], lv_color_black(), 110)
+                                                                 : lv_color_hex(0x101820), 0);
             lv_obj_set_style_bg_grad_dir(detailTiles_[fx], LV_GRAD_DIR_VER, 0);
-            lv_obj_set_style_border_color(detailTiles_[fx], enabled ? accent : lv_color_hex(0x34454F), 0);
-            lv_obj_set_style_bg_color(detailTileAccents_[fx], accent, 0);
-            lv_obj_set_style_text_color(detailTileLabels_[fx], slot.known ? lv_color_white()
-                                                                           : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
-            lv_obj_set_style_text_color(detailTileStateLabels_[fx], enabled ? accent
-                                                                            : slot.known ? lv_palette_lighten(LV_PALETTE_GREY, 2)
-                                                                                         : lv_color_hex(0xFBBF24), 0);
+            lv_obj_set_style_border_color(detailTiles_[fx], enabled ? accent : lv_color_hex(0x4B5965), 0);
+            lv_obj_set_style_text_color(detailTileIcons_[fx], accent, 0);
+            lv_obj_invalidate(detailTileIcons_[fx]);
+            lv_obj_set_style_text_color(detailTileLabels_[fx], lv_color_hex(0xF1F4F7), 0);
+            lv_obj_set_style_text_color(detailTileStateLabels_[fx], current ? lv_color_hex(0xDCE7EF)
+                                                                           : lv_color_hex(0xD9B877), 0);
         }
         return;
     }
+    lv_obj_remove_flag(detailTitle_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(detailMessage_, LV_OBJ_FLAG_HIDDEN);
     switch (activeScreen_) {
     case Screen::Looper:
         lv_label_set_text(detailTitle_, "LOOPER");
@@ -443,8 +566,8 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
                                                : lv_palette_main(LV_PALETTE_ORANGE);
     const char *connectionText = snapshot.connectionPhase == ControllerConnectionPhase::Reconnecting
                                      ? "RECONNECTING"
-                                     : snapshot.connectionPhase == ControllerConnectionPhase::Ready ? "● CONNECTED"
-                                     : linkEstablished ? "● SYNCING" : "SEARCHING";
+                                     : snapshot.connectionPhase == ControllerConnectionPhase::Ready ? LV_SYMBOL_BLUETOOTH " CONNECTED"
+                                     : linkEstablished ? LV_SYMBOL_BLUETOOTH " SYNCING" : "SEARCHING";
     lv_label_set_text(connectionLabel_, connectionText);
     lv_obj_set_style_text_color(connectionLabel_, accent, 0);
     lv_obj_set_style_border_color(lv_obj_get_parent(connectionLabel_), accent, 0);

@@ -7,6 +7,7 @@
 #define LV_COLOR_DEPTH 16
 #define LV_DEF_REFR_PERIOD 16
 #define LV_FONT_MONTSERRAT_20 1
+#define LV_FONT_MONTSERRAT_12 1
 #define LV_USE_SNAPSHOT 1
 
 #endif
