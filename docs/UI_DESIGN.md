@@ -423,3 +423,23 @@ The checked-in image under `docs/images/ignitron-ui-concept.jpg` is the current 
 6. System / Settings
 
 Use its hierarchy, spacing, dark-stage aesthetic, and state-color philosophy as inspiration. Adapt aggressively to the real 320x240 constraints instead of blindly copying the mockup.
+
+
+## Behavioral implementation contract
+
+The visual design in this file is intentionally subordinate to the detailed behavior specifications:
+
+- [STATE_MODEL.md](STATE_MODEL.md) — canonical source of truth, pending/confirmed/stale semantics, device capabilities, reconnect invalidation.
+- [INTERACTION_SPEC.md](INTERACTION_SPEC.md) — exact touchscreen/footswitch/CLI behavior, mode transitions, FX coexistence, tuner modality, looper destructive actions, failure handling.
+- [AMP_BEHAVIOR.md](AMP_BEHAVIOR.md) — behaviors the Spark already owns, official product behavior, protocol facts, and hardware test matrix.
+
+Codex must read those documents before implementing new controls. Do not infer interaction behavior from the concept image alone.
+
+In particular:
+
+- Spark-owned state must be confirmed by Spark; the UI may display a separate pending intention.
+- unknown/stale/pending are not equivalent to OFF.
+- different FX slots can coexist; Comp/Wah is one slot containing one current model.
+- Spark 2 natively mutes output in tuner mode, so the controller must not disable every effect or alter preset state to create tuner mute.
+- physical controls, touchscreen controls, and serial CLI must route through the same controller action/state path.
+- external changes from the amp/app must update the same canonical state and all renderers.
