@@ -48,6 +48,14 @@ struct ControllerSnapshot {
     // operation if a preset/chain changes underneath it.
     std::string fxChainIdentity;
     std::array<ControllerFxSlot, 6> fxSlots;
+    // Spark-owned tuner observations. `tunerSampleFresh` expires on the
+    // controller loop; renderers must not treat cached note/offset values as
+    // a live pitch reading after that interval.
+    bool tunerActive = false;
+    bool tunerSampleKnown = false;
+    bool tunerSampleFresh = false;
+    std::string tunerNote;
+    float tunerOffset = 0.0f;
     uint8_t confirmedHardwarePreset = 0;
     uint8_t pendingHardwarePreset = 0;
     bool presetActionFailed = false;

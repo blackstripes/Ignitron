@@ -458,6 +458,9 @@ void SparkStreamReader::readTuner() {
     float offset = readFloat();
     statusObject.note() = note;
     statusObject.noteOffset() = offset;
+    // Record the observation only after both values have been successfully
+    // parsed. This is a receive generation, never a local tuner command.
+    statusObject.recordTunerSample(millis());
 
     sb.startStr();
     sb.addInt("Note", note);

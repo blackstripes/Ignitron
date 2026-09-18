@@ -118,6 +118,13 @@ public:
     const float noteOffset() const { return noteOffset_; }
     float &noteOffset() { return noteOffset_; }
 
+    // Tuner-output observations have their own generation so UI consumers can
+    // distinguish a newly received pitch sample from an old cached value.
+    // Only SparkStreamReader::readTuner() records these observations.
+    uint32_t tunerSampleRevision() const { return tunerSampleRevision_; }
+    uint32_t tunerLastSampleAtMs() const { return tunerLastSampleAtMs_; }
+    void recordTunerSample(uint32_t receivedAtMs);
+
     const vector<byte> hwChecksums() const { return hwChecksums_; }
     vector<byte> &hwChecksums() { return hwChecksums_; }
 
@@ -149,6 +156,8 @@ private:
 
     byte note_;
     float noteOffset_;
+    uint32_t tunerSampleRevision_ = 0;
+    uint32_t tunerLastSampleAtMs_ = 0;
     string notes[12] = {"C ", "C#", "D ", "D#", "E ", "F ", "F#", "G ", "G#", "A ", "A#", "B "};
 
     // In case a preset was received from Spark, it is saved here. Can then be read by main program

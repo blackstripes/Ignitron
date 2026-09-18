@@ -504,13 +504,15 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_add_event_cb(tunerPage_, drawInstrumentEmptyState, LV_EVENT_DRAW_MAIN,
                         reinterpret_cast<void *>(1));
     createText(tunerPage_, "TUNER", 12, 9, 115, &lv_font_montserrat_12, 0xABBAC5);
-    createText(tunerPage_, "UNAVAILABLE", 191, 9, 107,
-               &lv_font_montserrat_12, 0xD9B877);
-    createText(tunerPage_, "NO PITCH DATA", 62, 68, 182, &lv_font_montserrat_12, 0xA4B3BE, true);
-    createText(tunerPage_, "-50", 13, 110, 45, &lv_font_montserrat_12, 0x7F919F);
-    createText(tunerPage_, "+50", 250, 110, 45, &lv_font_montserrat_12, 0x7F919F);
-    createText(tunerPage_, "Pitch and mute are unavailable", 10, 137, 286,
-               &lv_font_montserrat_12, 0xB6C2CB, true);
+    tunerStateLabel_ = createText(tunerPage_, "UNAVAILABLE", 180, 9, 116,
+                                   &lv_font_montserrat_12, 0xD9B877);
+    lv_obj_set_style_text_align(tunerStateLabel_, LV_TEXT_ALIGN_RIGHT, 0);
+    tunerNoteLabel_ = createText(tunerPage_, "--", 45, 37, 218,
+                                  &lv_font_montserrat_48, 0xE1E8ED, true);
+    tunerOffsetLabel_ = createText(tunerPage_, "", 45, 115, 218,
+                                    &lv_font_montserrat_12, 0xA4B3BE, true);
+    tunerMessageLabel_ = createText(tunerPage_, "Pitch and mute are unavailable", 10, 137, 286,
+                                     &lv_font_montserrat_12, 0xB6C2CB, true);
     lv_obj_add_flag(tunerPage_, LV_OBJ_FLAG_HIDDEN);
 
     devicePage_ = lv_obj_create(detailPage_);
@@ -637,6 +639,9 @@ void PanelLanLVGLUI::onFxClicked(lv_event_t *event) {
 }
 
 void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
+    if (uiInstance->latestSnapshot_.tunerActive) {
+        return;
+    }
     const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
     if (page <= static_cast<uint8_t>(Screen::Device)) {
         uiInstance->setActiveScreen(static_cast<Screen>(page));
@@ -644,6 +649,9 @@ void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
 }
 
 void PanelLanLVGLUI::setActiveScreen(Screen screen) {
+    if (tunerOverrideActive_ && screen != Screen::Tuner) {
+        return;
+    }
     activeScreen_ = screen;
     if (screen == Screen::Preset) {
         lv_obj_add_flag(detailPage_, LV_OBJ_FLAG_HIDDEN);
@@ -656,6 +664,14 @@ void PanelLanLVGLUI::setActiveScreen(Screen screen) {
 }
 
 void PanelLanLVGLUI::renderNavigation() {
+    if (latestSnapshot_.tunerActive) {
+        // Spark is already in tuner mode: its tuner screen temporarily owns
+        // the full interaction surface. Normal navigation must not imply that
+        // a second performance view is still active.
+        lv_obj_add_flag(nav_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_remove_flag(nav_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_height(nav_, 40);
     lv_label_set_text(headerTitle_, latestSnapshot_.identityKnown
                                         ? latestSnapshot_.ampName.c_str() : "IGNITRON");
@@ -764,9 +780,40 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         }
         return;
     }
-    // The snapshot currently has no verified tuner/looper capabilities or
-    // samples. Keep both pages unavailable until those controller contracts
-    // exist; a model name alone must never enable an action.
+    if (activeScreen_ == Screen::Tuner) {
+        if (!snapshot.tunerActive) {
+            lv_label_set_text(tunerStateLabel_, "UNAVAILABLE");
+            lv_obj_set_style_text_color(tunerStateLabel_, lv_color_hex(0xD9B877), 0);
+            lv_label_set_text(tunerNoteLabel_, "--");
+            lv_obj_set_style_text_color(tunerNoteLabel_, lv_color_hex(0xA4B3BE), 0);
+            lv_label_set_text(tunerOffsetLabel_, "");
+            lv_label_set_text(tunerMessageLabel_, "Use the amp tuner when supported");
+        } else if (snapshot.tunerSampleFresh && !snapshot.tunerNote.empty() && snapshot.tunerNote != " ") {
+            lv_label_set_text(tunerStateLabel_, "ACTIVE");
+            lv_obj_set_style_text_color(tunerStateLabel_, lv_color_hex(0x00E65D), 0);
+            lv_label_set_text(tunerNoteLabel_, snapshot.tunerNote.c_str());
+            lv_obj_set_style_text_color(tunerNoteLabel_, lv_color_hex(0xF1F4F7), 0);
+            // LVGL's compact formatter does not include float formatting on
+            // this target. Render the parsed raw offset with integer pieces
+            // so a live sample can never leave a literal "%f" on screen.
+            const int offsetMilli = static_cast<int>(snapshot.tunerOffset * 1000.0f +
+                                                     (snapshot.tunerOffset >= 0.0f ? 0.5f : -0.5f));
+            const int magnitude = offsetMilli >= 0 ? offsetMilli : -offsetMilli;
+            lv_label_set_text_fmt(tunerOffsetLabel_, "OFFSET %c%d.%03d",
+                                  offsetMilli >= 0 ? '+' : '-', magnitude / 1000, magnitude % 1000);
+            lv_label_set_text(tunerMessageLabel_, "LIVE PITCH SAMPLE");
+        } else {
+            lv_label_set_text(tunerStateLabel_, "ACTIVE");
+            lv_obj_set_style_text_color(tunerStateLabel_, lv_color_hex(0x00E65D), 0);
+            lv_label_set_text(tunerNoteLabel_, "--");
+            lv_obj_set_style_text_color(tunerNoteLabel_, lv_color_hex(0xA4B3BE), 0);
+            lv_label_set_text(tunerOffsetLabel_, "LISTENING");
+            lv_label_set_text(tunerMessageLabel_, "NO FRESH PITCH DATA");
+        }
+        return;
+    }
+    // Looper remains unavailable until its device capability and controller
+    // action contracts are separately verified.
     if (activeScreen_ == Screen::Device) {
         const bool linked = snapshot.connectionPhase == ControllerConnectionPhase::Identifying ||
                             snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||
@@ -793,6 +840,19 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
                                        : snapshot.sparkStateStale ? "Synchronizing" : "Current";
         lv_label_set_text(deviceToneState_, toneState);
         lv_obj_set_style_text_color(deviceToneState_, lv_color_hex(snapshot.sparkStateStale ? 0xD9B877 : 0x00E65D), 0);
+    }
+}
+
+void PanelLanLVGLUI::reconcileExternalTuner(const ControllerSnapshot &snapshot) {
+    if (snapshot.tunerActive && !tunerOverrideActive_) {
+        // Preserve only a performance screen. A manual unavailable Tuner tab
+        // is not a useful place to return after the amp exits real tuner mode.
+        screenBeforeTuner_ = activeScreen_ == Screen::Tuner ? Screen::Preset : activeScreen_;
+        tunerOverrideActive_ = true;
+        setActiveScreen(Screen::Tuner);
+    } else if (!snapshot.tunerActive && tunerOverrideActive_) {
+        tunerOverrideActive_ = false;
+        setActiveScreen(screenBeforeTuner_);
     }
 }
 
@@ -835,6 +895,7 @@ bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
 
 void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     latestSnapshot_ = snapshot;
+    reconcileExternalTuner(snapshot);
     const bool linkEstablished = snapshot.connectionPhase == ControllerConnectionPhase::Identifying ||
                                  snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||
                                  snapshot.connectionPhase == ControllerConnectionPhase::Ready;

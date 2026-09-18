@@ -48,6 +48,10 @@ private:
     lv_obj_t *detailPage_ = nullptr;
     lv_obj_t *looperPage_ = nullptr;
     lv_obj_t *tunerPage_ = nullptr;
+    lv_obj_t *tunerStateLabel_ = nullptr;
+    lv_obj_t *tunerNoteLabel_ = nullptr;
+    lv_obj_t *tunerOffsetLabel_ = nullptr;
+    lv_obj_t *tunerMessageLabel_ = nullptr;
     lv_obj_t *devicePage_ = nullptr;
     lv_obj_t *deviceCard_ = nullptr;
     lv_obj_t *devicePortrait_ = nullptr;
@@ -65,6 +69,8 @@ private:
     lv_obj_t *navIcons_[5]{};
     lv_obj_t *nav_ = nullptr;
     Screen activeScreen_ = Screen::Preset;
+    Screen screenBeforeTuner_ = Screen::Preset;
+    bool tunerOverrideActive_ = false;
     ControllerSnapshot latestSnapshot_{};
     ControllerActions *actions_ = nullptr;
     uint32_t renderedRevision_ = UINT32_MAX;
@@ -90,6 +96,7 @@ private:
     void setActiveScreen(Screen screen);
     void renderDetailPage(const ControllerSnapshot &snapshot);
     void renderNavigation();
+    void reconcileExternalTuner(const ControllerSnapshot &snapshot);
 };
 
 #endif

@@ -486,6 +486,13 @@ Must:
 - preserve/restore prior controller view
 - render note/cents smoothly without hiding state truth
 
+**External Spark 2 tuner observation checkpoint:** when canonical state sees
+Spark's tuner active, LVGL auto-enters its read-only tuner view, hides normal
+navigation, and restores the prior performance view when Spark exits. It shows
+a large note and raw `OFFSET` only for a fresh parsed tuner sample; otherwise
+it truthfully reports `LISTENING` / `NO FRESH PITCH DATA`. This path sends no
+Spark command.
+
 ### Milestone LV6 — Device selection
 
 Implement:

@@ -177,6 +177,20 @@ Important distinction:
 
 Track previousPerformanceView so tuner can temporarily supersede Preset/FX/Looper and return afterward.
 
+### Tuner samples and freshness
+
+The protocol reader records a monotonic tuner-sample revision and reception
+timestamp only after it has parsed both the note and offset. Controller state
+publishes the sample as fresh only while Spark reports tuner active and the
+sample is within a short bounded freshness interval. On expiry, renderers must
+show `LISTENING` / `NO FRESH PITCH DATA`, not the previous note. The offset
+unit is displayed as `OFFSET` until hardware calibration establishes a cents
+mapping.
+
+An externally observed tuner ON/OFF changes Spark-owned tuner state only. It
+may auto-supersede the current performance view while active, then restore the
+previous view on exit; it must not send a tuner command back to Spark.
+
 ## Preset state
 
 Track:

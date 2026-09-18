@@ -4,11 +4,17 @@
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
 
+#include <Arduino.h>
+
 namespace {
 
 constexpr uint8_t kFxSlotCount = 6;
 constexpr uint8_t kPedalIndices[kFxSlotCount] = {0, 1, 2, 4, 5, 6};
 constexpr const char *kFxLabels[kFxSlotCount] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};
+// Tuner samples are a stream, not a durable measurement. A bounded window
+// makes an interrupted stream visibly become LISTENING rather than leaving a
+// stale note on the performance display.
+constexpr uint32_t kTunerSampleFreshMs = 1500;
 
 std::string makeFxChainIdentity(const Preset &preset) {
     // UUID is the strongest identity supplied by a full preset. Older/cache
@@ -38,6 +44,11 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
                                    : ControllerConnectionPhase::Scanning;
         next.sparkStateStale = true;
         next.identityKnown = false;
+        // Tuner mode is Spark-owned. A dropped link cannot leave the UI in a
+        // falsely active/muted-looking tuner surface; retain at most the last
+        // sample as context, but it is never fresh without the link.
+        next.tunerActive = false;
+        next.tunerSampleFresh = false;
         if (next.pendingHardwarePreset != 0) {
             next.pendingHardwarePreset = 0;
             next.presetActionFailed = true;
@@ -70,6 +81,13 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     const int reportedPreset = status.currentPresetNumber();
     next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= 4 ? reportedPreset : 0;
     next.fxChainIdentity = makeFxChainIdentity(activePreset);
+    next.tunerActive = dataControl.subMode() == SUB_MODE_TUNER;
+    next.tunerSampleKnown = status.tunerSampleRevision() != 0;
+    next.tunerNote = status.noteString();
+    next.tunerOffset = status.noteOffset();
+    const uint32_t lastTunerSampleAtMs = status.tunerLastSampleAtMs();
+    next.tunerSampleFresh = next.tunerActive && next.tunerSampleKnown &&
+                            static_cast<uint32_t>(millis() - lastTunerSampleAtMs) <= kTunerSampleFreshMs;
     next.identityKnown = dataControl.ampNameReceived() && !next.ampName.empty();
     next.connectionPhase = !next.identityKnown
                                ? ControllerConnectionPhase::Identifying
@@ -89,6 +107,11 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
         snapshot_.presetName == next.presetName &&
         snapshot_.presetDescription == next.presetDescription &&
         snapshot_.fxChainIdentity == next.fxChainIdentity &&
+        snapshot_.tunerActive == next.tunerActive &&
+        snapshot_.tunerSampleKnown == next.tunerSampleKnown &&
+        snapshot_.tunerSampleFresh == next.tunerSampleFresh &&
+        snapshot_.tunerNote == next.tunerNote &&
+        snapshot_.tunerOffset == next.tunerOffset &&
         snapshot_.confirmedHardwarePreset == next.confirmedHardwarePreset &&
         snapshot_.pendingHardwarePreset == next.pendingHardwarePreset &&
         snapshot_.presetActionFailed == next.presetActionFailed &&

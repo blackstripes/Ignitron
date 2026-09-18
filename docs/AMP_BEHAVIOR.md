@@ -78,6 +78,13 @@ ON/OFF transition); it must never call the local `switchSubMode` or
 `switchTuner` command path in response. In particular, a tuner-output sample
 means tuner is active and must never cause Ignitron to send tuner OFF.
 
+The controller records each successfully parsed note/offset sample with a
+monotonic receive revision and timestamp. The read-only PanelLan tuner surface
+shows it only while the external tuner remains active and the sample is fresh;
+otherwise it reports that it is listening rather than retaining a misleading
+old note. `OFFSET` is intentionally used as the label until its units are
+calibrated against hardware.
+
 The same test exposed a legacy crash: an externally received tuner ON invoked
 `switchSubMode`, which stopped the optional BLE keyboard even when no keyboard
 BLE server had been initialized. `SparkBLEKeyboard::start/end` now safely no-op
