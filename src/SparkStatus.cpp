@@ -11,6 +11,11 @@ SparkStatus &SparkStatus::getInstance() {
     return INSTANCE;
 }
 
+void SparkStatus::recordTunerSample(uint32_t receivedAtMs) {
+    ++tunerSampleRevision_;
+    tunerLastSampleAtMs_ = receivedAtMs;
+}
+
 void SparkStatus::resetPresetNumberUpdateFlag() {
     isPresetNumberUpdated_ = false;
 }
