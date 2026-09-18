@@ -24,7 +24,9 @@ All three must converge on one controller action path, not duplicate protocol co
 
 A user action expresses intent. Spark confirmation establishes truth.
 
-UI may show pending immediately, but confirmed state changes only when a matching Spark response/ACK proves success.
+UI may show pending immediately, but confirmed state changes only when a
+matching Spark-owned state observation proves success. A transport ACK alone
+never proves an FX state change.
 
 ### One press, one action
 
@@ -186,10 +188,14 @@ Initial UI does not switch compressor to wah and does not try to run both simult
 2. if same slot pending, ignore duplicate.
 3. desired state = inverse of confirmed state.
 4. mark pending.
-5. send native effect on/off for actual effect model name.
+5. capture the actual effect model name and current chain identity, then send
+   native explicit effect on/off for that model.
 6. render amber pending.
-7. matching Spark response/ACK commits state.
-8. timeout reverts to confirmed visual and triggers resync.
+7. only a post-send incoming observation of that same model in the desired
+   state commits state; final ACK and controller pending/render revisions are
+   transport/UI metadata only.
+8. a changed preset/chain/model, disconnect, or timeout cancels pending,
+   retains the last confirmed visual, and triggers resync when connected.
 
 ### External FX changes
 

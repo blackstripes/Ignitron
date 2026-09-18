@@ -136,15 +136,21 @@ Ignitron effect on/off command:
 - effect model name
 - desired on/off
 
-Incoming FX state updates active preset.
+Incoming FX state updates active preset. The effect-model name and reported
+on/off value are the confirmation signal for controller FX actions.
 
-Existing code also has pending/active behavior and promotes pending state after final ACK.
+Legacy code has pending/active behavior that can promote pending data after a
+final ACK. The controller action boundary must not inherit that ACK-as-success
+semantics for FX controls.
 
 Implication:
 
 - preserve pending/confirmed lifecycle.
 - do not permanently flip tile simply because user touched it.
-- Spark response/ACK establishes confirmation.
+- do not use a final transport ACK as confirmation; it only proves the command
+  reached the protocol acknowledgement path.
+- confirm only after a post-send FX_ONOFF observation for the same requested
+  effect model reports the requested state in fresh Spark-owned preset data.
 
 ## Preset changes should remain atomic
 

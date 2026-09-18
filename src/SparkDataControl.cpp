@@ -23,6 +23,7 @@ deque<CmdData> SparkDataControl::currentCommand;
 deque<AckData> SparkDataControl::pendingLooperAcks;
 uint32_t SparkDataControl::finalAckRevision_ = 0;
 AckData SparkDataControl::lastFinalAck_;
+vector<pair<string, uint32_t>> SparkDataControl::fxModelObservationRevisions_;
 
 byte SparkDataControl::nextMessageNum = 0x01;
 
@@ -771,6 +772,17 @@ void SparkDataControl::handleAppModeResponse() {
             DEBUG_PRINTLN("Last message was a effect change.");
             Pedal receivedEffect = statusObject.currentEffect();
             SparkPresetControl::getInstance().toggleFX(receivedEffect);
+            bool foundModel = false;
+            for (auto &entry : fxModelObservationRevisions_) {
+                if (entry.first == receivedEffect.name) {
+                    ++entry.second;
+                    foundModel = true;
+                    break;
+                }
+            }
+            if (!foundModel) {
+                fxModelObservationRevisions_.push_back({receivedEffect.name, 1});
+            }
             printMessage = true;
         }
 
@@ -993,6 +1005,15 @@ uint32_t SparkDataControl::finalAckRevision() {
 
 AckData SparkDataControl::lastFinalAck() {
     return lastFinalAck_;
+}
+
+uint32_t SparkDataControl::fxModelObservationRevision(const string &fxName) {
+    for (const auto &entry : fxModelObservationRevisions_) {
+        if (entry.first == fxName) {
+            return entry.second;
+        }
+    }
+    return 0;
 }
 
 bool SparkDataControl::isAppConnected() {

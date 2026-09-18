@@ -233,6 +233,7 @@ Per slot track:
 - known
 - stale
 - optional pending desired enabled state
+- optional action-failed state (shown briefly without rewriting confirmed state)
 
 ### Coexistence rules
 
@@ -255,10 +256,15 @@ On user toggle:
 
 1. keep confirmed state authoritative.
 2. set pending desired state.
-3. send Spark effect on/off command.
+3. capture the exact Spark effect model name plus current preset/chain identity,
+   then send that model's explicit on/off command (never a generic toggle).
 4. render pending distinctly.
-5. confirm on matching Spark response/ACK.
-6. on failure/timeout, clear pending and resync preset/effect state.
+5. confirm only when a post-send incoming FX observation for that same model
+   shows the requested state. A final transport ACK, controller render
+   revision, or pending-state mutation is not state confirmation.
+6. cancel/fail if the link, hardware preset, or signal-chain/model identity
+   changes while pending; on failure/timeout, clear pending and resync the
+   current preset/effect state.
 
 Current Ignitron code already has pending/active concepts in SparkPresetControl; preserve the concept but expose it cleanly to the controller state model.
 

@@ -49,6 +49,10 @@ public:
     // It is dispatch metadata, not confirmation of amp-owned state.
     static uint32_t finalAckRevision();
     static AckData lastFinalAck();
+    // Monotonic, model-specific observation generation. This advances only
+    // when an incoming FX_ONOFF message for the requested Spark model has
+    // been applied to SparkPresetControl; it is not a command/ACK revision.
+    static uint32_t fxModelObservationRevision(const string &fxName);
     static bool isAppConnected(); // true if ESP in AMP mode and client is connected
     void startBLEServer();
     // static void onScanEnded(NimBLEScanResults results);
@@ -236,6 +240,7 @@ private:
     static deque<AckData> pendingLooperAcks;
     static uint32_t finalAckRevision_;
     static AckData lastFinalAck_;
+    static vector<pair<string, uint32_t>> fxModelObservationRevisions_;
 
     static bool sendMessageToBT(ByteVector &msg);
     static bool takeQueuedMessage(ByteVector &message);

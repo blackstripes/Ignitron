@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 class ControllerState;
 class SparkDataControl;
@@ -13,10 +14,15 @@ public:
     explicit ControllerActions(ControllerState &state) : state_(state) {}
 
     bool requestHardwarePreset(uint8_t preset);
+    // Queues one model-specific bypass/on-off request. Confirmation is based
+    // exclusively on a fresh Spark-owned slot observation, never an ACK.
+    bool requestFxToggle(uint8_t slot);
     void process(SparkDataControl &dataControl);
 
 private:
     static constexpr uint32_t kPresetTimeoutMs = 5000;
+    static constexpr uint32_t kFxTimeoutMs = 5000;
+    static constexpr uint8_t kNoFxSlot = 0xFF;
     ControllerState &state_;
     uint8_t queuedPreset_ = 0;
     uint8_t sentPreset_ = 0;
@@ -26,4 +32,20 @@ private:
     bool awaitingConfirmationQuery_ = false;
     bool currentPresetQueryIssued_ = false;
     uint32_t currentPresetQueryAtMs_ = 0;
+
+    uint8_t queuedFxSlot_ = kNoFxSlot;
+    uint8_t sentFxSlot_ = kNoFxSlot;
+    bool queuedFxDesiredEnabled_ = false;
+    bool sentFxDesiredEnabled_ = false;
+    bool fxEnabledBeforeRequest_ = false;
+    uint8_t fxHardwarePresetBeforeRequest_ = 0;
+    std::string queuedFxModelName_;
+    std::string sentFxModelName_;
+    std::string fxChainIdentityBeforeRequest_;
+    uint32_t fxSentAtMs_ = 0;
+    uint32_t fxModelObservationRevisionBeforeRequest_ = 0;
+
+    bool hasPendingFxOperation() const;
+    void cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh);
+    void clearFxRequest();
 };

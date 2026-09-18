@@ -4,6 +4,29 @@
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
 
+namespace {
+
+constexpr uint8_t kFxSlotCount = 6;
+constexpr uint8_t kPedalIndices[kFxSlotCount] = {0, 1, 2, 4, 5, 6};
+constexpr const char *kFxLabels[kFxSlotCount] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};
+
+std::string makeFxChainIdentity(const Preset &preset, uint8_t hardwarePreset) {
+    // UUID is the strongest identity supplied by a full preset. Older/cache
+    // paths can omit it, so include the observed slot models and hardware
+    // preset as a stable fallback rather than trusting the display name alone.
+    std::string identity = preset.uuid.empty() ? "preset:" + preset.name : "uuid:" + preset.uuid;
+    identity += "|hw:" + std::to_string(hardwarePreset);
+    for (uint8_t pedalIndex : kPedalIndices) {
+        identity += "|";
+        if (preset.pedals.size() > pedalIndex) {
+            identity += preset.pedals[pedalIndex].name;
+        }
+    }
+    return identity;
+}
+
+} // namespace
+
 void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     ControllerSnapshot next = snapshot_;
     const bool linkEstablished = SparkDataControl::isAmpConnected();
@@ -18,6 +41,13 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
             next.pendingHardwarePreset = 0;
             next.presetActionFailed = true;
         }
+        for (ControllerFxSlot &slot : next.fxSlots) {
+            if (slot.pending) {
+                slot.pending = false;
+                slot.pendingDesiredEnabled = false;
+                slot.actionFailed = true;
+            }
+        }
         wasLinkEstablished_ = false;
         publishIfChanged(next);
         return;
@@ -30,15 +60,15 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     const Preset &activePreset = SparkPresetControl::getInstance().activePreset();
     next.presetName = activePreset.name;
     next.presetDescription = activePreset.description;
-    static constexpr const char *kFxLabels[] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};
-    static constexpr uint8_t kPedalIndices[] = {0, 1, 2, 4, 5, 6};
     for (size_t i = 0; i < next.fxSlots.size(); ++i) {
         next.fxSlots[i].label = kFxLabels[i];
         next.fxSlots[i].known = activePreset.pedals.size() > kPedalIndices[i];
+        next.fxSlots[i].modelName = next.fxSlots[i].known ? activePreset.pedals[kPedalIndices[i]].name : "";
         next.fxSlots[i].enabled = next.fxSlots[i].known && activePreset.pedals[kPedalIndices[i]].isOn;
     }
     const int reportedPreset = status.currentPresetNumber();
     next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= 4 ? reportedPreset : 0;
+    next.fxChainIdentity = makeFxChainIdentity(activePreset, next.confirmedHardwarePreset);
     next.identityKnown = dataControl.ampNameReceived() && !next.ampName.empty();
     next.connectionPhase = !next.identityKnown
                                ? ControllerConnectionPhase::Identifying
@@ -57,6 +87,7 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
         snapshot_.ampSerial == next.ampSerial &&
         snapshot_.presetName == next.presetName &&
         snapshot_.presetDescription == next.presetDescription &&
+        snapshot_.fxChainIdentity == next.fxChainIdentity &&
         snapshot_.confirmedHardwarePreset == next.confirmedHardwarePreset &&
         snapshot_.pendingHardwarePreset == next.pendingHardwarePreset &&
         snapshot_.presetActionFailed == next.presetActionFailed &&
@@ -85,5 +116,38 @@ void ControllerState::failHardwarePresetRequest() {
     ControllerSnapshot next = snapshot_;
     next.pendingHardwarePreset = 0;
     next.presetActionFailed = true;
+    publishIfChanged(next);
+}
+
+void ControllerState::beginFxToggleRequest(uint8_t slot, bool desiredEnabled) {
+    if (slot >= snapshot_.fxSlots.size()) {
+        return;
+    }
+    ControllerSnapshot next = snapshot_;
+    next.fxSlots[slot].pending = true;
+    next.fxSlots[slot].pendingDesiredEnabled = desiredEnabled;
+    next.fxSlots[slot].actionFailed = false;
+    publishIfChanged(next);
+}
+
+void ControllerState::confirmFxToggleRequest(uint8_t slot) {
+    if (slot >= snapshot_.fxSlots.size()) {
+        return;
+    }
+    ControllerSnapshot next = snapshot_;
+    next.fxSlots[slot].pending = false;
+    next.fxSlots[slot].pendingDesiredEnabled = false;
+    next.fxSlots[slot].actionFailed = false;
+    publishIfChanged(next);
+}
+
+void ControllerState::failFxToggleRequest(uint8_t slot) {
+    if (slot >= snapshot_.fxSlots.size()) {
+        return;
+    }
+    ControllerSnapshot next = snapshot_;
+    next.fxSlots[slot].pending = false;
+    next.fxSlots[slot].pendingDesiredEnabled = false;
+    next.fxSlots[slot].actionFailed = true;
     publishIfChanged(next);
 }
