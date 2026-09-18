@@ -99,6 +99,24 @@ void SparkSerialCLI::execute(String command) {
 #else
         Serial.println("Screenshots are available only in the PanelLan LVGL target.");
 #endif
+    } else if (verb == "touch") {
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
+        int split = args.indexOf(' ');
+        if (split < 0) {
+            Serial.println("Usage: touch <x> <y>");
+        } else {
+            int x = args.substring(0, split).toInt();
+            int y = args.substring(split + 1).toInt();
+            if (x < 0 || x >= 320 || y < 0 || y >= 240) {
+                Serial.println("Touch coordinates must be within 320x240.");
+            } else {
+                panelLanDisplay.injectTouch(static_cast<uint16_t>(x), static_cast<uint16_t>(y));
+                Serial.printf("Injected touch: %d, %d\n", x, y);
+            }
+        }
+#else
+        Serial.println("Touch injection is available only in the PanelLan LVGL target.");
+#endif
     } else {
         Serial.println("Unknown command. Type 'help'.");
     }
@@ -110,6 +128,7 @@ void SparkSerialCLI::printHelp() {
     Serial.println("  amp                     Request amp identity");
     Serial.println("  refresh                 Request current preset");
     Serial.println("  screenshot              Stream a PPM screenshot over USB serial");
+    Serial.println("  touch <x> <y>           Inject one LVGL touch press/release (development)");
     Serial.println("  preset <1-4>");
     Serial.println("  bank up|down");
     Serial.println("  fx <gate|comp|drive|mod|delay|reverb> <toggle|on|off>");

@@ -20,6 +20,19 @@ void PanelLanLVGLUI::flushDisplay(lv_display_t *display, const lv_area_t *area, 
 }
 
 void PanelLanLVGLUI::readTouch(lv_indev_t *, lv_indev_data_t *data) {
+    if (uiInstance->injectedTouchPending_) {
+        data->point.x = uiInstance->injectedTouchX_;
+        data->point.y = uiInstance->injectedTouchY_;
+        if (!uiInstance->injectedTouchPressed_) {
+            uiInstance->injectedTouchPressed_ = true;
+            data->state = LV_INDEV_STATE_PRESSED;
+        } else {
+            uiInstance->injectedTouchPending_ = false;
+            uiInstance->injectedTouchPressed_ = false;
+            data->state = LV_INDEV_STATE_RELEASED;
+        }
+        return;
+    }
     uint16_t x = 0;
     uint16_t y = 0;
     if (uiInstance->tft_.getTouch(&x, &y)) {
@@ -29,6 +42,16 @@ void PanelLanLVGLUI::readTouch(lv_indev_t *, lv_indev_data_t *data) {
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
+}
+
+void PanelLanLVGLUI::injectTouch(uint16_t x, uint16_t y) {
+    if (x >= kDisplayWidth || y >= kDisplayHeight) {
+        return;
+    }
+    injectedTouchX_ = x;
+    injectedTouchY_ = y;
+    injectedTouchPressed_ = false;
+    injectedTouchPending_ = true;
 }
 
 void PanelLanLVGLUI::begin() {

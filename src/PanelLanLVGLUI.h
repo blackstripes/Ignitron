@@ -20,6 +20,7 @@ public:
     void update(const ControllerSnapshot &snapshot);
     void setActions(ControllerActions *actions) { actions_ = actions; }
     bool writeScreenshot(Stream &output);
+    void injectTouch(uint16_t x, uint16_t y);
 
 private:
     static constexpr uint16_t kDisplayWidth = 320;
@@ -44,6 +45,10 @@ private:
     ControllerActions *actions_ = nullptr;
     uint32_t renderedRevision_ = UINT32_MAX;
     uint32_t lastLvglTickAt_ = 0;
+    bool injectedTouchPending_ = false;
+    bool injectedTouchPressed_ = false;
+    uint16_t injectedTouchX_ = 0;
+    uint16_t injectedTouchY_ = 0;
 
     static void flushDisplay(lv_display_t *display, const lv_area_t *area, uint8_t *pixelMap);
     static void readTouch(lv_indev_t *, lv_indev_data_t *data);
