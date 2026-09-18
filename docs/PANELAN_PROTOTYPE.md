@@ -100,3 +100,19 @@ The current hardware prototype should now be evolved using:
 - [UI_DESIGN.md](UI_DESIGN.md)
 
 The prototype's current direct preset switching is a proven transport/UI checkpoint, not the final state architecture. New controls should route through the shared controller-state/action model rather than adding more direct callbacks from individual UI widgets into SparkDataControl.
+
+## Next UI framework checkpoint
+
+The next main-screen implementation uses **LVGL 9.x** above the existing working PanelLan/LovyanGFX display/touch path.
+
+Do not replace this known-good hardware support during the LVGL migration.
+
+Follow [LVGL_ARCHITECTURE.md](LVGL_ARCHITECTURE.md):
+
+1. isolated LVGL display/touch bring-up,
+2. LVGL + Spark BLE coexistence,
+3. canonical ControllerState/ControllerActions,
+4. first polished Home/Preset screen,
+5. review before broad screen expansion.
+
+The current raw PanelLan UI remains the fallback/reference checkpoint until the LVGL path proves equivalent BLE/display/touch reliability.
