@@ -88,3 +88,15 @@ footswitches and six small per-switch displays. Do not assign expansion GPIO,
 wire footswitches, or add the mini displays until the single-screen controller
 and device-selection workflow are stable. The board's exposed IO and proposed
 expansion approach remain documented in [PROJECT_PLAN.md](PROJECT_PLAN.md).
+
+
+## Behavioral spec references
+
+The current hardware prototype should now be evolved using:
+
+- [STATE_MODEL.md](STATE_MODEL.md)
+- [INTERACTION_SPEC.md](INTERACTION_SPEC.md)
+- [AMP_BEHAVIOR.md](AMP_BEHAVIOR.md)
+- [UI_DESIGN.md](UI_DESIGN.md)
+
+The prototype's current direct preset switching is a proven transport/UI checkpoint, not the final state architecture. New controls should route through the shared controller-state/action model rather than adding more direct callbacks from individual UI widgets into SparkDataControl.
