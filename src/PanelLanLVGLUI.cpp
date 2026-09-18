@@ -161,6 +161,122 @@ lv_obj_t *createGlyph(lv_obj_t *parent, uint8_t glyph, int width, int height) {
                         reinterpret_cast<void *>(static_cast<uintptr_t>(glyph)));
     return obj;
 }
+
+lv_obj_t *createPanel(lv_obj_t *parent, int x, int y, int width, int height) {
+    lv_obj_t *obj = lv_obj_create(parent);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_size(obj, width, height);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(0x182229), 0);
+    lv_obj_set_style_bg_grad_color(obj, lv_color_hex(0x080F13), 0);
+    lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_border_color(obj, lv_color_hex(0x34434D), 0);
+    lv_obj_set_style_border_width(obj, 1, 0);
+    lv_obj_set_style_radius(obj, 6, 0);
+    lv_obj_set_style_pad_all(obj, 0, 0);
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    return obj;
+}
+
+lv_obj_t *createText(lv_obj_t *parent, const char *text, int x, int y, int width,
+                     const lv_font_t *font, uint32_t color, bool centered = false) {
+    lv_obj_t *label = lv_label_create(parent);
+    lv_obj_set_pos(label, x, y);
+    lv_obj_set_width(label, width);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_obj_set_style_text_align(label, centered ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT, 0);
+    return label;
+}
+
+// Decorative empty states, not controls or simulated amp readings. These are
+// drawn in the existing partial buffer, with no image/canvas allocation.
+void drawInstrumentEmptyState(lv_event_t *event) {
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_area_t bounds;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    const bool tuner = lv_event_get_user_data(event) != nullptr;
+    auto line = [&](int x1, int y1, int x2, int y2, uint32_t color, int width = 1) {
+        lv_draw_line_dsc_t dsc;
+        lv_draw_line_dsc_init(&dsc);
+        dsc.p1 = {bounds.x1 + x1, bounds.y1 + y1};
+        dsc.p2 = {bounds.x1 + x2, bounds.y1 + y2};
+        dsc.color = lv_color_hex(color);
+        dsc.width = width;
+        dsc.round_start = dsc.round_end = 1;
+        lv_draw_line(layer, &dsc);
+    };
+    auto arc = [&](int x, int y, int radius, int start, int end, uint32_t color, int width) {
+        lv_draw_arc_dsc_t dsc;
+        lv_draw_arc_dsc_init(&dsc);
+        dsc.center = {bounds.x1 + x, bounds.y1 + y};
+        dsc.radius = radius;
+        dsc.start_angle = start;
+        dsc.end_angle = end;
+        dsc.color = lv_color_hex(color);
+        dsc.width = width;
+        dsc.rounded = 1;
+        lv_draw_arc(layer, &dsc);
+    };
+    if (tuner) {
+        // No centered green pointer: that would falsely imply an in-tune note.
+        line(121, 51, 141, 51, 0x8C9CA9, 5);
+        line(165, 51, 185, 51, 0x8C9CA9, 5);
+        line(27, 108, 279, 108, 0x26333D);
+        for (int i = 0; i <= 12; ++i) {
+            const int x = 27 + i * 21;
+            const int height = i == 6 ? 22 : i % 3 == 0 ? 16 : 10;
+            line(x, 107 - height, x, 107, i == 6 ? 0x637581 : 0x485862);
+        }
+    } else {
+        // A large, subdued infinity mark echoes the concept's circular
+        // transport area without presenting unsupported transport buttons.
+        arc(122, 59, 26, 45, 315, 0x627782, 3);
+        arc(184, 59, 26, 225, 495, 0x627782, 3);
+        line(140, 41, 166, 77, 0x627782, 3);
+        line(140, 77, 166, 41, 0x627782, 3);
+        for (int x = 14; x < 292; x += 7)
+            line(x, 141, x, 151, 0x25333C, 3);
+    }
+}
+
+void drawDevicePortrait(lv_event_t *event) {
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_area_t bounds;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    const bool headphones = lv_obj_get_user_data(lv_event_get_target_obj(event)) != nullptr;
+    auto rect = [&](int x, int y, int width, int height, uint32_t color, int radius) {
+        lv_draw_rect_dsc_t dsc;
+        lv_draw_rect_dsc_init(&dsc);
+        dsc.bg_color = lv_color_hex(color);
+        dsc.border_color = lv_color_hex(0x697782);
+        dsc.border_width = 1;
+        dsc.radius = radius;
+        lv_area_t area = {bounds.x1 + x, bounds.y1 + y,
+                          bounds.x1 + x + width - 1, bounds.y1 + y + height - 1};
+        lv_draw_rect(layer, &dsc, &area);
+    };
+    if (headphones) {
+        lv_draw_arc_dsc_t arc;
+        lv_draw_arc_dsc_init(&arc);
+        arc.center = {bounds.x1 + 29, bounds.y1 + 30};
+        arc.radius = 20;
+        arc.start_angle = 180;
+        arc.end_angle = 360;
+        arc.width = 5;
+        arc.color = lv_color_hex(0xA8B6BE);
+        lv_draw_arc(layer, &arc);
+        rect(7, 28, 11, 22, 0x253540, 4);
+        rect(41, 28, 11, 22, 0x253540, 4);
+    } else {
+        rect(18, 9, 22, 6, 0x131D23, 2);
+        rect(4, 14, 51, 39, 0x1F292F, 4);
+        rect(8, 18, 43, 8, 0x3B332A, 2);
+        rect(8, 29, 43, 20, 0x303A3E, 1);
+    }
+}
 }
 
 void PanelLanLVGLUI::flushDisplay(lv_display_t *display, const lv_area_t *area, uint8_t *pixelMap) {
@@ -373,16 +489,67 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_remove_flag(detailPage_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(detailPage_, LV_OBJ_FLAG_HIDDEN);
 
-    detailTitle_ = lv_label_create(detailPage_);
-    lv_obj_set_style_text_color(detailTitle_, lv_color_white(), 0);
-    lv_obj_set_style_text_font(detailTitle_, &lv_font_montserrat_20, 0);
-    lv_obj_align(detailTitle_, LV_ALIGN_TOP_LEFT, 12, 10);
+    looperPage_ = createPanel(detailPage_, 6, 3, 308, 160);
+    lv_obj_add_event_cb(looperPage_, drawInstrumentEmptyState, LV_EVENT_DRAW_MAIN, nullptr);
+    createText(looperPage_, "SPARK LOOPER", 12, 9, 145, &lv_font_montserrat_12, 0xABBAC5);
+    createText(looperPage_, "UNAVAILABLE", 191, 9, 107,
+               &lv_font_montserrat_12, 0xD9B877);
+    createText(looperPage_, "Looper unavailable", 12, 94, 282,
+               &lv_font_montserrat_20, 0xE1E8ED, true);
+    createText(looperPage_, "Requires verified device support", 12, 121, 282,
+               &lv_font_montserrat_12, 0xA4B3BE, true);
+    lv_obj_add_flag(looperPage_, LV_OBJ_FLAG_HIDDEN);
 
-    detailMessage_ = lv_label_create(detailPage_);
-    lv_obj_set_width(detailMessage_, 292);
-    lv_label_set_long_mode(detailMessage_, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(detailMessage_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
-    lv_obj_align(detailMessage_, LV_ALIGN_TOP_LEFT, 14, 42);
+    tunerPage_ = createPanel(detailPage_, 6, 3, 308, 160);
+    lv_obj_add_event_cb(tunerPage_, drawInstrumentEmptyState, LV_EVENT_DRAW_MAIN,
+                        reinterpret_cast<void *>(1));
+    createText(tunerPage_, "TUNER", 12, 9, 115, &lv_font_montserrat_12, 0xABBAC5);
+    createText(tunerPage_, "UNAVAILABLE", 191, 9, 107,
+               &lv_font_montserrat_12, 0xD9B877);
+    createText(tunerPage_, "NO PITCH DATA", 62, 68, 182, &lv_font_montserrat_12, 0xA4B3BE, true);
+    createText(tunerPage_, "-50", 13, 110, 45, &lv_font_montserrat_12, 0x7F919F);
+    createText(tunerPage_, "+50", 250, 110, 45, &lv_font_montserrat_12, 0x7F919F);
+    createText(tunerPage_, "Pitch and mute are unavailable", 10, 137, 286,
+               &lv_font_montserrat_12, 0xB6C2CB, true);
+    lv_obj_add_flag(tunerPage_, LV_OBJ_FLAG_HIDDEN);
+
+    devicePage_ = lv_obj_create(detailPage_);
+    lv_obj_remove_style_all(devicePage_);
+    lv_obj_set_size(devicePage_, 320, 166);
+    lv_obj_remove_flag(devicePage_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(devicePage_, LV_OBJ_FLAG_SCROLLABLE);
+    deviceCard_ = createPanel(devicePage_, 6, 3, 308, 87);
+    devicePortrait_ = lv_obj_create(deviceCard_);
+    lv_obj_remove_style_all(devicePortrait_);
+    lv_obj_set_pos(devicePortrait_, 7, 16);
+    lv_obj_set_size(devicePortrait_, 60, 56);
+    lv_obj_remove_flag(devicePortrait_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(devicePortrait_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(devicePortrait_, drawDevicePortrait, LV_EVENT_DRAW_MAIN, nullptr);
+    deviceIdentityCaption_ = createText(deviceCard_, "CURRENT DEVICE", 76, 10, 218,
+                                       &lv_font_montserrat_12, 0x8FA6B5);
+    deviceName_ = createText(deviceCard_, "Searching for Spark", 76, 30, 218,
+                             &lv_font_montserrat_20, 0xF1F4F7);
+    deviceSerial_ = createText(deviceCard_, "SN: Not reported", 76, 59, 218,
+                               &lv_font_montserrat_12, 0xB4C0CA);
+    lv_obj_t *connectionPanel = createPanel(devicePage_, 6, 97, 308, 65);
+    lv_obj_set_style_bg_color(connectionPanel, lv_color_hex(0x111C22), 0);
+    createText(connectionPanel, LV_SYMBOL_BLUETOOTH "  Bluetooth", 12, 10, 132,
+               &lv_font_montserrat_14, 0xB7C6D0);
+    deviceLinkState_ = createText(connectionPanel, "Searching", 143, 10, 148,
+                                  &lv_font_montserrat_14, 0xD9B877);
+    lv_obj_set_style_text_align(deviceLinkState_, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_t *divider = lv_obj_create(connectionPanel);
+    lv_obj_remove_style_all(divider);
+    lv_obj_set_pos(divider, 12, 32);
+    lv_obj_set_size(divider, 282, 1);
+    lv_obj_set_style_bg_color(divider, lv_color_hex(0x2B3943), 0);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
+    createText(connectionPanel, "Tone state", 12, 42, 125, &lv_font_montserrat_14, 0xB7C6D0);
+    deviceToneState_ = createText(connectionPanel, "Unavailable", 143, 42, 148,
+                                  &lv_font_montserrat_14, 0xD9B877);
+    lv_obj_set_style_text_align(deviceToneState_, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_add_flag(devicePage_, LV_OBJ_FLAG_HIDDEN);
 
     const int16_t detailX[] = {-104, 0, 104, -104, 0, 104};
     for (uint8_t fx = 0; fx < 6; ++fx) {
@@ -479,39 +646,39 @@ void PanelLanLVGLUI::setActiveScreen(Screen screen) {
 }
 
 void PanelLanLVGLUI::renderNavigation() {
-    const bool conceptFx = activeScreen_ == Screen::Fx || activeScreen_ == Screen::Preset;
-    lv_obj_set_height(nav_, conceptFx ? 40 : 30);
-    lv_label_set_text(headerTitle_, conceptFx && latestSnapshot_.identityKnown
+    lv_obj_set_height(nav_, 40);
+    lv_label_set_text(headerTitle_, latestSnapshot_.identityKnown
                                         ? latestSnapshot_.ampName.c_str() : "IGNITRON");
-    lv_obj_set_width(headerTitle_, conceptFx ? 156 : 100);
+    lv_obj_set_width(headerTitle_, 156);
     lv_label_set_long_mode(headerTitle_, LV_LABEL_LONG_DOT);
     for (uint8_t i = 0; i < 5; ++i) {
         const bool selected = i == static_cast<uint8_t>(activeScreen_);
-        lv_obj_set_height(navButtons_[i], conceptFx ? 40 : 30);
-        lv_obj_set_style_bg_color(navButtons_[i], conceptFx
-            ? (selected ? lv_color_hex(0x25251C) : lv_color_hex(0x090F13))
-            : (selected ? lv_color_hex(0x1E2020) : lv_color_hex(0x111B21)), 0);
+        lv_obj_set_height(navButtons_[i], 40);
+        lv_obj_set_style_bg_color(navButtons_[i], selected ? lv_color_hex(0x25251C)
+                                                          : lv_color_hex(0x090F13), 0);
         lv_obj_set_style_bg_grad_color(navButtons_[i], lv_color_hex(0x080D10), 0);
-        lv_obj_set_style_bg_grad_dir(navButtons_[i], conceptFx ? LV_GRAD_DIR_VER : LV_GRAD_DIR_NONE, 0);
+        lv_obj_set_style_bg_grad_dir(navButtons_[i], LV_GRAD_DIR_VER, 0);
         lv_obj_set_style_border_color(navButtons_[i], selected ? lv_palette_main(LV_PALETTE_YELLOW)
                                                                : lv_color_hex(0x111B21), 0);
         lv_obj_set_style_border_width(navButtons_[i], selected ? 1 : 0, 0);
         lv_obj_set_style_text_color(navLabels_[i], selected ? lv_palette_main(LV_PALETTE_YELLOW)
                                                             : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
-        lv_obj_set_style_text_font(navLabels_[i], conceptFx ? &lv_font_montserrat_12 : &lv_font_montserrat_14, 0);
-        if (conceptFx) {
-            lv_obj_remove_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_text_color(navIcons_[i], selected ? lv_color_hex(0xFFD65A) : lv_color_hex(0xA7B7C3), 0);
-            lv_obj_align(navLabels_[i], LV_ALIGN_BOTTOM_MID, 0, -3);
-        } else {
-            lv_obj_add_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_center(navLabels_[i]);
-        }
+        lv_obj_set_style_text_font(navLabels_[i], &lv_font_montserrat_12, 0);
+        lv_obj_remove_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(navIcons_[i], selected ? lv_color_hex(0xFFD65A) : lv_color_hex(0xA7B7C3), 0);
+        lv_obj_align(navLabels_[i], LV_ALIGN_BOTTOM_MID, 0, -3);
     }
 }
 
 void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
     const bool isFxPage = activeScreen_ == Screen::Fx;
+    auto showOnly = [](lv_obj_t *page, bool visible) {
+        if (visible) lv_obj_remove_flag(page, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
+    };
+    showOnly(looperPage_, activeScreen_ == Screen::Looper);
+    showOnly(tunerPage_, activeScreen_ == Screen::Tuner);
+    showOnly(devicePage_, activeScreen_ == Screen::Device);
     for (uint8_t fx = 0; fx < 6; ++fx) {
         if (isFxPage) {
             lv_obj_remove_flag(detailTiles_[fx], LV_OBJ_FLAG_HIDDEN);
@@ -522,8 +689,6 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
     if (isFxPage) {
         // The concept gives the entire body to six effects. Status already
         // belongs to the persistent header; an extra title shrinks the cards.
-        lv_obj_add_flag(detailTitle_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(detailMessage_, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
         static const lv_color_t kFxAccents[] = {
             lv_color_hex(0x00E65D), lv_color_hex(0x48D8BC), lv_color_hex(0xFF3044),
@@ -555,26 +720,35 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         }
         return;
     }
-    lv_obj_remove_flag(detailTitle_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(detailMessage_, LV_OBJ_FLAG_HIDDEN);
-    switch (activeScreen_) {
-    case Screen::Looper:
-        lv_label_set_text(detailTitle_, "LOOPER");
-        lv_label_set_text(detailMessage_, "Looper controls remain hidden until this Spark device reports verified support.");
-        break;
-    case Screen::Tuner:
-        lv_label_set_text(detailTitle_, "TUNER");
-        lv_label_set_text(detailMessage_, "Tuner entry is capability-gated until its controller action is wired.");
-        break;
-    case Screen::Device:
-        lv_label_set_text(detailTitle_, "DEVICE");
-        lv_label_set_text_fmt(detailMessage_, "%s\n%s\nSpark remains the source of truth.",
-                              snapshot.identityKnown ? snapshot.ampName.c_str() : "Reading Spark device...",
-                              snapshot.connectionPhase == ControllerConnectionPhase::Ready ? "CONNECTED" : "CONNECTING");
-        break;
-    case Screen::Preset:
-    case Screen::Fx:
-        break;
+    // The snapshot currently has no verified tuner/looper capabilities or
+    // samples. Keep both pages unavailable until those controller contracts
+    // exist; a model name alone must never enable an action.
+    if (activeScreen_ == Screen::Device) {
+        const bool linked = snapshot.connectionPhase == ControllerConnectionPhase::Identifying ||
+                            snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||
+                            snapshot.connectionPhase == ControllerConnectionPhase::Ready;
+        const bool hasName = !snapshot.ampName.empty();
+        const bool known = snapshot.identityKnown;
+        lv_label_set_text(deviceIdentityCaption_, known ? "CURRENT DEVICE"
+                                                       : hasName ? "LAST SEEN DEVICE" : "SPARK CONNECTION");
+        lv_label_set_text(deviceName_, hasName ? snapshot.ampName.c_str()
+                                             : linked ? "Identifying Spark" : "Looking for Spark");
+        lv_obj_set_style_text_color(deviceName_, known ? lv_color_hex(0xF1F4F7)
+                                                       : lv_color_hex(0x98A9B6), 0);
+        lv_label_set_text_fmt(deviceSerial_, "SN: %s", known && !snapshot.ampSerial.empty()
+                                                        ? snapshot.ampSerial.c_str() : "Not reported");
+        lv_obj_set_user_data(devicePortrait_, snapshot.ampName.find("NEO") != std::string::npos
+                                                 ? reinterpret_cast<void *>(1) : nullptr);
+        lv_obj_invalidate(devicePortrait_);
+        const uint32_t linkColor = linked ? 0x00E65D : 0xD9B877;
+        lv_obj_set_style_border_color(deviceCard_, lv_color_hex(linked ? 0x376353 : 0x34434D), 0);
+        lv_label_set_text(deviceLinkState_, linked ? "Connected"
+             : snapshot.connectionPhase == ControllerConnectionPhase::Reconnecting ? "Reconnecting" : "Searching");
+        lv_obj_set_style_text_color(deviceLinkState_, lv_color_hex(linkColor), 0);
+        const char *toneState = !linked ? (snapshot.confirmedHardwarePreset ? "Last known / stale" : "Unavailable")
+                                       : snapshot.sparkStateStale ? "Synchronizing" : "Current";
+        lv_label_set_text(deviceToneState_, toneState);
+        lv_obj_set_style_text_color(deviceToneState_, lv_color_hex(snapshot.sparkStateStale ? 0xD9B877 : 0x00E65D), 0);
     }
 }
 
@@ -629,9 +803,7 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     lv_label_set_text(connectionLabel_, connectionText);
     lv_obj_set_style_text_color(connectionLabel_, accent, 0);
     lv_obj_set_style_border_color(lv_obj_get_parent(connectionLabel_), accent, 0);
-    if (activeScreen_ == Screen::Preset || activeScreen_ == Screen::Fx) {
-        lv_label_set_text(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
-    }
+    lv_label_set_text(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
     if (snapshot.pendingHardwarePreset != 0) {
         lv_label_set_text_fmt(identityLabel_, "SELECTING PRESET %u", snapshot.pendingHardwarePreset);
     } else if (snapshot.confirmedHardwarePreset != 0) {

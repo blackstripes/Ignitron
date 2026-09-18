@@ -46,8 +46,16 @@ private:
     lv_obj_t *presetPicker_ = nullptr;
     lv_obj_t *presetButtons_[4]{};
     lv_obj_t *detailPage_ = nullptr;
-    lv_obj_t *detailTitle_ = nullptr;
-    lv_obj_t *detailMessage_ = nullptr;
+    lv_obj_t *looperPage_ = nullptr;
+    lv_obj_t *tunerPage_ = nullptr;
+    lv_obj_t *devicePage_ = nullptr;
+    lv_obj_t *deviceCard_ = nullptr;
+    lv_obj_t *devicePortrait_ = nullptr;
+    lv_obj_t *deviceName_ = nullptr;
+    lv_obj_t *deviceSerial_ = nullptr;
+    lv_obj_t *deviceIdentityCaption_ = nullptr;
+    lv_obj_t *deviceLinkState_ = nullptr;
+    lv_obj_t *deviceToneState_ = nullptr;
     lv_obj_t *detailTiles_[6]{};
     lv_obj_t *detailTileIcons_[6]{};
     lv_obj_t *detailTileLabels_[6]{};
