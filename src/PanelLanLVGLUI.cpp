@@ -8,6 +8,56 @@
 namespace {
 PanelLanLVGLUI *uiInstance = nullptr;
 
+// A subdued amplifier cabinet gives the preset card the concept's physical
+// texture. Draw directly into LVGL's current partial buffer; no full-screen
+// image allocation, extra framebuffer, or fake amp/model metadata is needed.
+void drawPresetCabinet(lv_event_t *event) {
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_area_t bounds;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    auto rect = [&](int x, int y, int w, int h, uint32_t fill, uint32_t border, int radius) {
+        lv_draw_rect_dsc_t dsc;
+        lv_draw_rect_dsc_init(&dsc);
+        dsc.bg_color = lv_color_hex(fill);
+        dsc.border_color = lv_color_hex(border);
+        dsc.border_width = 1;
+        dsc.radius = radius;
+        lv_area_t area = {bounds.x1 + x, bounds.y1 + y,
+                          bounds.x1 + x + w - 1, bounds.y1 + y + h - 1};
+        lv_draw_rect(layer, &dsc, &area);
+    };
+    auto line = [&](int x1, int y1, int x2, int y2, uint32_t color) {
+        lv_draw_line_dsc_t dsc;
+        lv_draw_line_dsc_init(&dsc);
+        dsc.p1 = {bounds.x1 + x1, bounds.y1 + y1};
+        dsc.p2 = {bounds.x1 + x2, bounds.y1 + y2};
+        dsc.color = lv_color_hex(color);
+        dsc.width = 1;
+        lv_draw_line(layer, &dsc);
+    };
+    rect(3, 3, 300, 151, 0x111619, 0x354047, 7);
+    rect(8, 8, 290, 27, 0x11191C, 0x283237, 4);
+    line(16, 10, 272, 10, 0x655035);
+    rect(27, 15, 53, 12, 0x342024, 0x452A2B, 2);
+    for (int x = 168; x < 280; x += 23) {
+        rect(x, 17, 7, 7, 0x404447, 0x171C1F, 3);
+        line(x + 3, 17, x + 3, 19, 0x887D61);
+    }
+    rect(9, 38, 288, 110, 0x191D1D, 0x2E3537, 4);
+    // Woven grille, deliberately low contrast behind the foreground type.
+    for (int x = 13; x < 294; x += 5)
+        line(x, 42, x, 144, 0x292B27);
+    for (int y = 43; y < 145; y += 4)
+        line(13, y, 293, y, 0x202422);
+    lv_draw_rect_dsc_t shade;
+    lv_draw_rect_dsc_init(&shade);
+    shade.bg_color = lv_color_hex(0x03090D);
+    shade.bg_opa = LV_OPA_60;
+    shade.radius = 6;
+    lv_area_t overlay = {bounds.x1 + 4, bounds.y1 + 4, bounds.x1 + 302, bounds.y1 + 152};
+    lv_draw_rect(layer, &shade, &overlay);
+}
+
 // Small vector glyphs keep the concept's visual vocabulary crisp at 320x240,
 // without a bitmap framebuffer or a collection of decorative LVGL objects.
 void drawGlyph(lv_event_t *event) {
@@ -17,12 +67,14 @@ void drawGlyph(lv_event_t *event) {
     lv_obj_get_coords(obj, &bounds);
     const uint8_t glyph = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
     const lv_color_t color = lv_obj_get_style_text_color(obj, LV_PART_MAIN);
+    const bool compact = glyph >= 11;
+    auto scaled = [&](int value) { return compact ? (value + 1) / 2 : value; };
     auto line = [&](int x1, int y1, int x2, int y2, int width = 2) {
         lv_draw_line_dsc_t dsc;
         lv_draw_line_dsc_init(&dsc);
-        dsc.p1 = {bounds.x1 + x1, bounds.y1 + y1};
-        dsc.p2 = {bounds.x1 + x2, bounds.y1 + y2};
-        dsc.width = width;
+        dsc.p1 = {bounds.x1 + scaled(x1), bounds.y1 + scaled(y1)};
+        dsc.p2 = {bounds.x1 + scaled(x2), bounds.y1 + scaled(y2)};
+        dsc.width = compact ? 1 : width;
         dsc.color = color;
         dsc.round_start = dsc.round_end = 1;
         lv_draw_line(layer, &dsc);
@@ -30,16 +82,16 @@ void drawGlyph(lv_event_t *event) {
     auto arc = [&](int x, int y, int radius, int start, int end, int width = 2) {
         lv_draw_arc_dsc_t dsc;
         lv_draw_arc_dsc_init(&dsc);
-        dsc.center = {bounds.x1 + x, bounds.y1 + y};
-        dsc.radius = radius;
+        dsc.center = {bounds.x1 + scaled(x), bounds.y1 + scaled(y)};
+        dsc.radius = scaled(radius);
         dsc.start_angle = start;
         dsc.end_angle = end;
-        dsc.width = width;
+        dsc.width = compact ? 1 : width;
         dsc.color = color;
         dsc.rounded = 1;
         lv_draw_arc(layer, &dsc);
     };
-    switch (glyph) {
+    switch (compact ? glyph - 11 : glyph) {
     case 0: { // Gate: waveform.
         static const int8_t points[][2] = {{2,18},{7,18},{10,9},{14,29},{18,3},
                                           {22,32},{26,7},{30,25},{33,18},{37,18}};
@@ -207,66 +259,72 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_align(connectionLabel_, LV_ALIGN_RIGHT_MID, -10, 0);
 
     lv_obj_t *hero = lv_button_create(screen);
-    lv_obj_set_size(hero, 300, 96);
-    lv_obj_align(hero, LV_ALIGN_TOP_MID, 0, 37);
-    lv_obj_set_style_bg_color(hero, lv_color_hex(0x16232B), 0);
-    lv_obj_set_style_bg_grad_color(hero, lv_color_hex(0x0A1116), 0);
-    lv_obj_set_style_bg_grad_dir(hero, LV_GRAD_DIR_HOR, 0);
-    lv_obj_set_style_border_color(hero, lv_color_hex(0x3B515D), 0);
+    lv_obj_set_size(hero, 308, 158);
+    lv_obj_align(hero, LV_ALIGN_TOP_MID, 0, 34);
+    lv_obj_set_style_bg_color(hero, lv_color_hex(0x11181D), 0);
+    lv_obj_set_style_border_color(hero, lv_color_hex(0x34434C), 0);
     lv_obj_set_style_border_width(hero, 1, 0);
     lv_obj_set_style_radius(hero, 7, 0);
     lv_obj_set_style_pad_all(hero, 0, 0);
+    lv_obj_set_style_shadow_width(hero, 0, 0);
+    lv_obj_remove_flag(hero, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(hero, drawPresetCabinet, LV_EVENT_DRAW_MAIN, nullptr);
     lv_obj_add_event_cb(hero, onPresetCardClicked, LV_EVENT_CLICKED, nullptr);
 
     identityLabel_ = lv_label_create(hero);
     lv_obj_set_width(identityLabel_, 270);
-    lv_obj_set_style_text_color(identityLabel_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
-    lv_obj_align(identityLabel_, LV_ALIGN_TOP_LEFT, 13, 9);
+    lv_obj_set_style_text_font(identityLabel_, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_align(identityLabel_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(identityLabel_, lv_color_hex(0xD7DFE3), 0);
+    lv_obj_align(identityLabel_, LV_ALIGN_TOP_MID, 0, 21);
 
     presetNameLabel_ = lv_label_create(hero);
-    lv_obj_set_width(presetNameLabel_, 270);
+    lv_obj_set_width(presetNameLabel_, 282);
     lv_label_set_long_mode(presetNameLabel_, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(presetNameLabel_, lv_color_white(), 0);
-    lv_obj_set_style_text_font(presetNameLabel_, &lv_font_montserrat_20, 0);
-    lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_LEFT, 12, 30);
+    lv_obj_set_style_text_font(presetNameLabel_, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_align(presetNameLabel_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0, 42);
 
     presetDescriptionLabel_ = lv_label_create(hero);
-    lv_obj_set_width(presetDescriptionLabel_, 230);
+    lv_obj_set_width(presetDescriptionLabel_, 274);
     lv_label_set_long_mode(presetDescriptionLabel_, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_color(presetDescriptionLabel_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
-    lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_LEFT, 14, 61);
+    lv_obj_set_style_text_font(presetDescriptionLabel_, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_align(presetDescriptionLabel_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(presetDescriptionLabel_, lv_color_hex(0xABB8C2), 0);
+    lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_MID, 0, 77);
 
     presetMetaLabel_ = lv_label_create(hero);
-    lv_obj_set_style_text_color(presetMetaLabel_, lv_palette_lighten(LV_PALETTE_BLUE, 2), 0);
-    lv_obj_align(presetMetaLabel_, LV_ALIGN_BOTTOM_RIGHT, -13, -10);
+    lv_label_set_text(presetMetaLabel_, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_color(presetMetaLabel_, lv_color_hex(0x92A2AD), 0);
+    lv_obj_align(presetMetaLabel_, LV_ALIGN_TOP_RIGHT, -10, 20);
 
-    lv_obj_t *sectionLabel = lv_label_create(screen);
-    lv_label_set_text(sectionLabel, "ACTIVE EFFECTS");
-    lv_obj_set_style_text_color(sectionLabel, lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
-    lv_obj_align(sectionLabel, LV_ALIGN_TOP_LEFT, 12, 139);
-
-    const int16_t fxX[] = {-132, -79, -26, 27, 80, 133};
+    const int16_t fxX[] = {-127, -76, -25, 26, 77, 128};
     for (uint8_t fx = 0; fx < 6; ++fx) {
         lv_obj_t *tile = lv_obj_create(screen);
         fxTiles_[fx] = tile;
-        lv_obj_set_size(tile, 48, 42);
-        lv_obj_align(tile, LV_ALIGN_TOP_MID, fxX[fx], 157);
+        lv_obj_set_size(tile, 47, 47);
+        lv_obj_align(tile, LV_ALIGN_TOP_MID, fxX[fx], 143);
         lv_obj_set_style_bg_color(tile, lv_color_hex(0x151F25), 0);
         lv_obj_set_style_border_color(tile, lv_color_hex(0x34454F), 0);
         lv_obj_set_style_border_width(tile, 1, 0);
         lv_obj_set_style_radius(tile, 5, 0);
         lv_obj_set_style_pad_all(tile, 0, 0);
+        lv_obj_remove_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_t *label = lv_label_create(tile);
-        lv_label_set_text(label, "FX");
-        lv_obj_set_width(label, 48);
+        lv_obj_set_width(label, 45);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(label, lv_color_white(), 0);
-        lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 6);
+        lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -5);
+        fxIcons_[fx] = createGlyph(tile, fx + 11, 20, 19);
+        lv_obj_align(fxIcons_[fx], LV_ALIGN_TOP_MID, 0, 5);
         fxStateLabels_[fx] = lv_label_create(tile);
-        lv_label_set_text(fxStateLabels_[fx], "--");
-        lv_obj_set_width(fxStateLabels_[fx], 48);
+        lv_label_set_text(fxStateLabels_[fx], "?");
+        lv_obj_set_style_text_font(fxStateLabels_[fx], &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_align(fxStateLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(fxStateLabels_[fx], LV_ALIGN_BOTTOM_MID, 0, -5);
+        lv_obj_align(fxStateLabels_[fx], LV_ALIGN_TOP_RIGHT, -3, 2);
     }
 
     presetPicker_ = lv_obj_create(screen);
@@ -421,7 +479,7 @@ void PanelLanLVGLUI::setActiveScreen(Screen screen) {
 }
 
 void PanelLanLVGLUI::renderNavigation() {
-    const bool conceptFx = activeScreen_ == Screen::Fx;
+    const bool conceptFx = activeScreen_ == Screen::Fx || activeScreen_ == Screen::Preset;
     lv_obj_set_height(nav_, conceptFx ? 40 : 30);
     lv_label_set_text(headerTitle_, conceptFx && latestSnapshot_.identityKnown
                                         ? latestSnapshot_.ampName.c_str() : "IGNITRON");
@@ -571,12 +629,19 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     lv_label_set_text(connectionLabel_, connectionText);
     lv_obj_set_style_text_color(connectionLabel_, accent, 0);
     lv_obj_set_style_border_color(lv_obj_get_parent(connectionLabel_), accent, 0);
-    if (snapshot.identityKnown) {
-        lv_label_set_text(identityLabel_, snapshot.ampName.c_str());
+    if (activeScreen_ == Screen::Preset || activeScreen_ == Screen::Fx) {
+        lv_label_set_text(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
+    }
+    if (snapshot.pendingHardwarePreset != 0) {
+        lv_label_set_text_fmt(identityLabel_, "SELECTING PRESET %u", snapshot.pendingHardwarePreset);
+    } else if (snapshot.confirmedHardwarePreset != 0) {
+        lv_label_set_text_fmt(identityLabel_, snapshot.sparkStateStale ? "PRESET %u / SYNCING"
+                                                                      : "HARDWARE PRESET %u",
+                              snapshot.confirmedHardwarePreset);
     } else if (linkEstablished) {
-        lv_label_set_text(identityLabel_, "Reading Spark state...");
+        lv_label_set_text(identityLabel_, "READING YOUR PRESET");
     } else {
-        lv_label_set_text(identityLabel_, "Turn on your Spark device");
+        lv_label_set_text(identityLabel_, "SPARK PEDAL CONTROLLER");
     }
 
     if (!snapshot.presetName.empty()) {
@@ -584,17 +649,17 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     } else if (snapshot.confirmedHardwarePreset != 0) {
         lv_label_set_text_fmt(presetNameLabel_, "PRESET %u", snapshot.confirmedHardwarePreset);
     } else {
-        lv_label_set_text(presetNameLabel_, "SYNCING PRESET...");
+        lv_label_set_text(presetNameLabel_, linkEstablished ? "SYNCING PRESET" : "YOUR TONE");
     }
+    lv_obj_set_style_text_color(presetNameLabel_, snapshot.sparkStateStale ? lv_color_hex(0xA8B3BC)
+                                                                        : lv_color_hex(0xF4F6F8), 0);
     const bool hasUsefulDescription = !snapshot.presetDescription.empty() && snapshot.presetDescription != "Text";
-    lv_label_set_text(presetDescriptionLabel_, hasUsefulDescription
+    lv_label_set_text(presetDescriptionLabel_, snapshot.presetActionFailed ? "Change not confirmed. Tap to retry."
+                                            : !linkEstablished ? "Turn on your Spark device"
+                                            : snapshot.sparkStateStale ? "Waiting for current Spark state"
+                                            : hasUsefulDescription
                                                 ? snapshot.presetDescription.c_str()
-                                                : "Tap card to choose a hardware preset");
-    if (snapshot.confirmedHardwarePreset != 0) {
-        lv_label_set_text_fmt(presetMetaLabel_, "HW %u", snapshot.confirmedHardwarePreset);
-    } else {
-        lv_label_set_text(presetMetaLabel_, "SYNCING");
-    }
+                                                : "Tap to choose a preset");
 
     for (uint8_t preset = 1; preset <= 4; ++preset) {
         lv_obj_t *button = presetButtons_[preset - 1];
@@ -617,22 +682,28 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     }
 
     static const lv_color_t kFxColors[] = {
-        lv_color_hex(0x16A34A), lv_color_hex(0x64748B), lv_color_hex(0xDC2626),
-        lv_color_hex(0x64748B), lv_color_hex(0x0284C7), lv_color_hex(0x64748B),
+        lv_color_hex(0x00E65D), lv_color_hex(0x48D8BC), lv_color_hex(0xFF3044),
+        lv_color_hex(0xA497E9), lv_color_hex(0x00ABFF), lv_color_hex(0xA99BEA),
     };
+    static const char *kFxNames[] = {"Gate", "Comp", "Drive", "Mod", "Delay", "Reverb"};
     for (uint8_t fx = 0; fx < 6; ++fx) {
         const ControllerFxSlot &slot = snapshot.fxSlots[fx];
+        const bool current = slot.known && !snapshot.sparkStateStale;
+        const bool enabled = current && slot.enabled;
         lv_obj_t *tile = fxTiles_[fx];
         lv_obj_t *label = lv_obj_get_child(tile, 0);
-        const char *labelText = slot.known && slot.label == "REVERB" ? "REV"
-                              : slot.known ? slot.label.c_str() : "--";
-        lv_label_set_text(label, labelText);
-        lv_label_set_text(fxStateLabels_[fx], slot.known ? (slot.enabled ? "ON" : "OFF") : "--");
-        const lv_color_t color = slot.enabled ? kFxColors[fx] : lv_color_hex(0x151F25);
-        lv_obj_set_style_bg_color(tile, color, 0);
-        lv_obj_set_style_border_color(tile, slot.enabled ? kFxColors[fx] : lv_color_hex(0x34454F), 0);
-        lv_obj_set_style_text_color(fxStateLabels_[fx], slot.enabled ? lv_color_white()
-                                                                      : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
+        lv_label_set_text(label, kFxNames[fx]);
+        // Unknown/stale is visibly distinct from a confirmed bypassed effect.
+        lv_label_set_text(fxStateLabels_[fx], current ? "" : "?");
+        lv_obj_set_style_text_color(fxStateLabels_[fx], lv_color_hex(0xD9B877), 0);
+        lv_obj_set_style_bg_color(tile, enabled ? lv_color_mix(kFxColors[fx], lv_color_black(), 65)
+                                              : lv_color_hex(0x242D35), 0);
+        lv_obj_set_style_bg_grad_color(tile, enabled ? lv_color_mix(kFxColors[fx], lv_color_black(), 20)
+                                                   : lv_color_hex(0x101820), 0);
+        lv_obj_set_style_bg_grad_dir(tile, LV_GRAD_DIR_VER, 0);
+        lv_obj_set_style_border_color(tile, enabled ? kFxColors[fx] : lv_color_hex(0x4B5965), 0);
+        lv_obj_set_style_text_color(fxIcons_[fx], enabled ? kFxColors[fx] : lv_color_hex(0x96A5B7), 0);
+        lv_obj_invalidate(fxIcons_[fx]);
     }
 
     if (snapshot.pendingHardwarePreset != 0) {

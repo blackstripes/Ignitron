@@ -41,6 +41,7 @@ private:
     lv_obj_t *presetDescriptionLabel_ = nullptr;
     lv_obj_t *actionStatusLabel_ = nullptr;
     lv_obj_t *fxTiles_[6]{};
+    lv_obj_t *fxIcons_[6]{};
     lv_obj_t *fxStateLabels_[6]{};
     lv_obj_t *presetPicker_ = nullptr;
     lv_obj_t *presetButtons_[4]{};
