@@ -110,7 +110,7 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_align(presetMetaLabel_, LV_ALIGN_BOTTOM_RIGHT, -13, -10);
 
     lv_obj_t *sectionLabel = lv_label_create(screen);
-    lv_label_set_text(sectionLabel, "HARDWARE PRESETS");
+    lv_label_set_text(sectionLabel, "ACTIVE EFFECTS");
     lv_obj_set_style_text_color(sectionLabel, lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
     lv_obj_align(sectionLabel, LV_ALIGN_TOP_LEFT, 12, 139);
 
@@ -264,7 +264,17 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
         lv_label_set_text(identityLabel_, "Turn on your Spark device");
     }
 
-    lv_label_set_text(presetNameLabel_, snapshot.presetName.empty() ? "WAITING FOR PRESET" : snapshot.presetName.c_str());
+    if (!snapshot.presetName.empty()) {
+        lv_label_set_text(presetNameLabel_, snapshot.presetName.c_str());
+    } else if (snapshot.confirmedHardwarePreset != 0) {
+        lv_label_set_text_fmt(presetNameLabel_, "PRESET %u", snapshot.confirmedHardwarePreset);
+    } else {
+        lv_label_set_text(presetNameLabel_, "SYNCING PRESET...");
+    }
+    const bool hasUsefulDescription = !snapshot.presetDescription.empty() && snapshot.presetDescription != "Text";
+    lv_label_set_text(presetDescriptionLabel_, hasUsefulDescription
+                                                ? snapshot.presetDescription.c_str()
+                                                : "Tap card to choose a hardware preset");
     if (snapshot.confirmedHardwarePreset != 0) {
         lv_label_set_text_fmt(presetMetaLabel_, "HW %u", snapshot.confirmedHardwarePreset);
     } else {
@@ -289,6 +299,23 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
         // disabled state here: its dimming makes the still-valid alternatives
         // look broken while a request is pending.
         lv_obj_remove_state(button, LV_STATE_DISABLED);
+    }
+
+    static const lv_color_t kFxColors[] = {
+        lv_color_hex(0x16A34A), lv_color_hex(0x64748B), lv_color_hex(0xDC2626),
+        lv_color_hex(0x64748B), lv_color_hex(0x0284C7), lv_color_hex(0x64748B),
+    };
+    for (uint8_t fx = 0; fx < 6; ++fx) {
+        const ControllerFxSlot &slot = snapshot.fxSlots[fx];
+        lv_obj_t *tile = fxTiles_[fx];
+        lv_obj_t *label = lv_obj_get_child(tile, 0);
+        lv_label_set_text(label, slot.known ? slot.label.c_str() : "--");
+        lv_label_set_text(fxStateLabels_[fx], slot.known ? (slot.enabled ? "ON" : "OFF") : "--");
+        const lv_color_t color = slot.enabled ? kFxColors[fx] : lv_color_hex(0x151F25);
+        lv_obj_set_style_bg_color(tile, color, 0);
+        lv_obj_set_style_border_color(tile, slot.enabled ? kFxColors[fx] : lv_color_hex(0x34454F), 0);
+        lv_obj_set_style_text_color(fxStateLabels_[fx], slot.enabled ? lv_color_white()
+                                                                      : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
     }
 
     if (snapshot.pendingHardwarePreset != 0) {
