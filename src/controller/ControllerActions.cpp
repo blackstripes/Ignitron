@@ -40,10 +40,22 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         if (snapshot.connectionPhase != ControllerConnectionPhase::Ready) {
             state_.failHardwarePresetRequest();
             sentPreset_ = 0;
-        } else if (snapshot.confirmedHardwarePreset == sentPreset_) {
+        } else if (!awaitingConfirmationQuery_ &&
+                   SparkDataControl::finalAckRevision() != sentAfterAckRevision_) {
+            const AckData ack = SparkDataControl::lastFinalAck();
+            sentAfterAckRevision_ = SparkDataControl::finalAckRevision();
+            if (ack.subcmd == 0x38) {
+                // Spark NEO Core accepts a hardware-preset command without
+                // necessarily broadcasting a new preset number. ACK is only
+                // a transport milestone; request the authoritative value.
+                dataControl.getCurrentPresetNum();
+                awaitingConfirmationQuery_ = true;
+                sentAtMs_ = millis();
+            }
+        } else if (awaitingConfirmationQuery_ && snapshot.confirmedHardwarePreset == sentPreset_) {
             state_.confirmHardwarePresetRequest();
             sentPreset_ = 0;
-        } else if (snapshot.confirmedHardwarePreset != 0 &&
+        } else if (awaitingConfirmationQuery_ && snapshot.confirmedHardwarePreset != 0 &&
                    snapshot.confirmedHardwarePreset != presetBeforeRequest_) {
             // A reported preset change other than our intended target wins.
             // It is an external/conflicting action, never a local success.
@@ -65,6 +77,8 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     if (dataControl.changeHWPreset(preset)) {
         sentPreset_ = preset;
         sentAtMs_ = millis();
+        sentAfterAckRevision_ = SparkDataControl::finalAckRevision();
+        awaitingConfirmationQuery_ = false;
     } else {
         state_.failHardwarePresetRequest();
     }

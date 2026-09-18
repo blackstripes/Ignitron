@@ -45,6 +45,10 @@ public:
     void setDisplayControl(SparkDisplayControl *display);
     bool checkBLEConnection();
     static bool isAmpConnected();
+    // Monotonic final-ACK observation for the controller action boundary.
+    // It is dispatch metadata, not confirmation of amp-owned state.
+    static uint32_t finalAckRevision();
+    static AckData lastFinalAck();
     static bool isAppConnected(); // true if ESP in AMP mode and client is connected
     void startBLEServer();
     // static void onScanEnded(NimBLEScanResults results);
@@ -230,6 +234,8 @@ private:
     static constexpr size_t kMaxQueuedNotifications = 32;
     static deque<CmdData> currentCommand;
     static deque<AckData> pendingLooperAcks;
+    static uint32_t finalAckRevision_;
+    static AckData lastFinalAck_;
 
     static bool sendMessageToBT(ByteVector &msg);
     static bool takeQueuedMessage(ByteVector &message);

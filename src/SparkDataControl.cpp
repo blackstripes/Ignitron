@@ -21,6 +21,8 @@ queue<ByteVector> SparkDataControl::msgQueue;
 SemaphoreHandle_t SparkDataControl::msgQueueMutex = nullptr;
 deque<CmdData> SparkDataControl::currentCommand;
 deque<AckData> SparkDataControl::pendingLooperAcks;
+uint32_t SparkDataControl::finalAckRevision_ = 0;
+AckData SparkDataControl::lastFinalAck_;
 
 byte SparkDataControl::nextMessageNum = 0x01;
 
@@ -867,6 +869,8 @@ void SparkDataControl::handleIncomingAck() {
         }
     }
     if (lastAck.cmd == 0x04) {
+        lastFinalAck_ = lastAck;
+        ++finalAckRevision_;
         DEBUG_PRINTLN("Received final ACK");
         if (lastAck.subcmd == 0x01) {
             // only execute preset number change on last ack for preset change
@@ -981,6 +985,14 @@ void SparkDataControl::toggleBTMode() {
 
 bool SparkDataControl::isAmpConnected() {
     return bleControl->isAmpConnected();
+}
+
+uint32_t SparkDataControl::finalAckRevision() {
+    return finalAckRevision_;
+}
+
+AckData SparkDataControl::lastFinalAck() {
+    return lastFinalAck_;
 }
 
 bool SparkDataControl::isAppConnected() {
