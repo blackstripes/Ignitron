@@ -267,6 +267,13 @@ rectangle updates. Validate landscape rotation, all touch corners, held touch,
 drag-off behavior, repeated screen recreation, flush latency, memory, and
 watchdog behavior during a sustained run. Use no Spark dependency.
 
+**Initial checkpoint complete:** `panelan-lvgl-bringup` is pinned to LVGL 9.3.0
+and was flashed to the PanelLan board. Its landscape display and LVGL button
+touch path were verified with a single 320x40 RGB565 buffer. It logs memory at
+startup and during steady state. The remaining corner, drag-off, sustained-run,
+and flush-latency checks still apply before treating this as a fully qualified
+production UI port.
+
 ### LVGL/BLE coexistence and protocol-correlation spike
 
 Add the same basic screen plus one preset action. Instrument action ID,

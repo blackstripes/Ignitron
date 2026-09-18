@@ -361,6 +361,14 @@ Add a dedicated PlatformIO target, suggested name:
 
 `panelan-lvgl-bringup`
 
+**Completed on the PanelLan ZX2D80CE02S / SC05_X.** The checked-in target uses
+LVGL 9.3.0, one 320x40 RGB565 partial buffer in internal memory, synchronous
+LovyanGFX flushes, and the existing landscape FT5x06 path. Display rendering
+and button touch interaction were verified on hardware. Startup telemetry
+reported approximately 271 KB free internal heap, 263 KB DMA-capable heap,
+and 2 MB free PSRAM. Re-measure these values after dependency or UI changes;
+they are a baseline, not a capacity guarantee.
+
 It must prove:
 
 - LVGL initializes.
