@@ -6,5 +6,6 @@
 // and measurement cadence stable while the PanelLan/LovyanGFX port is proven.
 #define LV_COLOR_DEPTH 16
 #define LV_DEF_REFR_PERIOD 16
+#define LV_FONT_MONTSERRAT_20 1
 
 #endif

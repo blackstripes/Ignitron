@@ -22,6 +22,7 @@ struct ControllerSnapshot {
     bool identityKnown = false;
     std::string ampName;
     std::string ampSerial;
+    std::string presetName;
     uint8_t confirmedHardwarePreset = 0;
     uint8_t pendingHardwarePreset = 0;
     bool presetActionFailed = false;

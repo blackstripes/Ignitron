@@ -1,6 +1,7 @@
 #include "controller/ControllerState.h"
 
 #include "SparkDataControl.h"
+#include "SparkPresetControl.h"
 #include "SparkStatus.h"
 
 void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
@@ -26,6 +27,7 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     SparkStatus &status = SparkStatus::getInstance();
     next.ampName = status.ampName();
     next.ampSerial = status.ampSerialNumber();
+    next.presetName = SparkPresetControl::getInstance().activePreset().name;
     const int reportedPreset = status.currentPresetNumber();
     next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= 4 ? reportedPreset : 0;
     next.identityKnown = dataControl.ampNameReceived() && !next.ampName.empty();
@@ -44,6 +46,7 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
         snapshot_.identityKnown == next.identityKnown &&
         snapshot_.ampName == next.ampName &&
         snapshot_.ampSerial == next.ampSerial &&
+        snapshot_.presetName == next.presetName &&
         snapshot_.confirmedHardwarePreset == next.confirmedHardwarePreset &&
         snapshot_.pendingHardwarePreset == next.pendingHardwarePreset &&
         snapshot_.presetActionFailed == next.presetActionFailed) {
