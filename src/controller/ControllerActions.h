@@ -22,4 +22,6 @@ private:
     uint8_t sentPreset_ = 0;
     uint8_t presetBeforeRequest_ = 0;
     uint32_t sentAtMs_ = 0;
+    bool currentPresetQueryIssued_ = false;
+    uint32_t currentPresetQueryAtMs_ = 0;
 };

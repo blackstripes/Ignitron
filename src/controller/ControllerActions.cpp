@@ -17,6 +17,25 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
 
 void ControllerActions::process(SparkDataControl &dataControl) {
     const ControllerSnapshot &snapshot = state_.snapshot();
+    if (snapshot.connectionPhase == ControllerConnectionPhase::Scanning ||
+        snapshot.connectionPhase == ControllerConnectionPhase::Reconnecting ||
+        snapshot.connectionPhase == ControllerConnectionPhase::Identifying) {
+        currentPresetQueryIssued_ = false;
+        return;
+    }
+
+    // The legacy startup flow fetches the complete current preset but not its
+    // hardware-preset number. The controller cannot safely enable a preset
+    // action until that separate Spark-owned value has been observed.
+    if (snapshot.connectionPhase == ControllerConnectionPhase::Syncing &&
+        (!currentPresetQueryIssued_ || millis() - currentPresetQueryAtMs_ >= kPresetTimeoutMs)) {
+        currentPresetQueryIssued_ = dataControl.getCurrentPresetNum();
+        if (currentPresetQueryIssued_) {
+            currentPresetQueryAtMs_ = millis();
+        }
+        return;
+    }
+
     if (sentPreset_ != 0) {
         if (snapshot.connectionPhase != ControllerConnectionPhase::Ready) {
             state_.failHardwarePresetRequest();
