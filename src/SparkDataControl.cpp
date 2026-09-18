@@ -1022,7 +1022,10 @@ void SparkDataControl::queueMessage(ByteVector &blk) {
         return;
     }
 
-    if (xSemaphoreTake(msgQueueMutex, 0) != pdTRUE) {
+    // NimBLE invokes this from a task, not an interrupt. A small bounded wait
+    // avoids losing a one-shot Spark response while the controller loop is
+    // popping/resetting the queue; it never waits through protocol parsing.
+    if (xSemaphoreTake(msgQueueMutex, pdMS_TO_TICKS(5)) != pdTRUE) {
         Serial.println("Dropping Spark notification: ingress queue busy");
         return;
     }

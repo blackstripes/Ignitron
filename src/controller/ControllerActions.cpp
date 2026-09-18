@@ -29,6 +29,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     // action until that separate Spark-owned value has been observed.
     if (snapshot.connectionPhase == ControllerConnectionPhase::Syncing &&
         (!currentPresetQueryIssued_ || millis() - currentPresetQueryAtMs_ >= kPresetTimeoutMs)) {
+        Serial.println("Controller: requesting current hardware preset");
         currentPresetQueryIssued_ = dataControl.getCurrentPresetNum();
         if (currentPresetQueryIssued_) {
             currentPresetQueryAtMs_ = millis();
@@ -48,11 +49,13 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 // Spark NEO Core accepts a hardware-preset command without
                 // necessarily broadcasting a new preset number. ACK is only
                 // a transport milestone; request the authoritative value.
+                Serial.println("Controller: preset ACK received; verifying Spark state");
                 dataControl.getCurrentPresetNum();
                 awaitingConfirmationQuery_ = true;
                 sentAtMs_ = millis();
             }
         } else if (awaitingConfirmationQuery_ && snapshot.confirmedHardwarePreset == sentPreset_) {
+            Serial.printf("Controller: preset %u confirmed by Spark\n", sentPreset_);
             state_.confirmHardwarePresetRequest();
             sentPreset_ = 0;
         } else if (awaitingConfirmationQuery_ && snapshot.confirmedHardwarePreset != 0 &&
@@ -60,8 +63,10 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             // A reported preset change other than our intended target wins.
             // It is an external/conflicting action, never a local success.
             state_.failHardwarePresetRequest();
+            Serial.printf("Controller: preset conflict (Spark reports %u)\n", snapshot.confirmedHardwarePreset);
             sentPreset_ = 0;
         } else if (millis() - sentAtMs_ >= kPresetTimeoutMs) {
+            Serial.println("Controller: preset confirmation timed out; resyncing");
             state_.failHardwarePresetRequest();
             dataControl.getCurrentPresetFromSpark();
             sentPreset_ = 0;
@@ -75,6 +80,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     const uint8_t preset = queuedPreset_;
     queuedPreset_ = 0;
     if (dataControl.changeHWPreset(preset)) {
+        Serial.printf("Controller: sending preset %u\n", preset);
         sentPreset_ = preset;
         sentAtMs_ = millis();
         sentAfterAckRevision_ = SparkDataControl::finalAckRevision();
