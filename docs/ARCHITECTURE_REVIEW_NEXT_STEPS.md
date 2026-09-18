@@ -289,6 +289,14 @@ unavailable remembered targets, rapid requests, and delayed/lost response
 injection. This validates bounded UI stalls, stale-event rejection, and the
 real confirmation contract.
 
+**Initial action slice implemented:** the PanelLan LVGL target now routes
+hardware presets 1–4 through a single `ControllerActions` request. It uses
+fresh observed hardware-preset state for confirmation, treats a differing
+external preset report as a conflict, and fails after five seconds. This is a
+hardware checkpoint, not the final correlation design: action ID, connection
+epoch, and wire-message correlation are still required before more action
+types or concurrent UI/CLI operation are enabled.
+
 ### Spark 2 behavior capture
 
 Capture raw protocol traces for:

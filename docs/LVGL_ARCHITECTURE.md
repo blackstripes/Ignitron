@@ -394,8 +394,14 @@ scanning and a live Spark connection were verified on the physical PanelLan.
 Reconnect and sustained-touch runs remain required before this milestone
 passes.
 
-This target intentionally has no preset/FX touch action. It must not be used
-as a shortcut around `ControllerState` and `ControllerActions`.
+The target now contains one deliberately narrow action: hardware presets 1–4
+go through `ControllerActions`, which permits one request only after a fresh
+reported hardware-preset value is known. The old confirmed tile remains green,
+the requested tile is amber while pending, and it turns green only after the
+reported preset matches; conflict or a five-second timeout fails the request.
+FX, tuner, looper, bank, and settings controls remain absent. Serial CLI
+commands have not yet migrated to this action layer, so do not operate the CLI
+concurrently with this checkpoint.
 
 Prove:
 
