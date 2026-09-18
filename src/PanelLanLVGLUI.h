@@ -83,6 +83,7 @@ private:
     static void readTouch(lv_indev_t *, lv_indev_data_t *data);
     static void onPresetClicked(lv_event_t *event);
     static void onPresetCardClicked(lv_event_t *event);
+    static void onFxClicked(lv_event_t *event);
     static void onNavClicked(lv_event_t *event);
     void createUi();
     void renderStatus(const ControllerSnapshot &snapshot);

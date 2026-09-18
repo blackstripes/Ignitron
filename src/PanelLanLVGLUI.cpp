@@ -560,8 +560,10 @@ void PanelLanLVGLUI::createUi() {
         lv_obj_set_style_border_width(tile, 2, 0);
         lv_obj_set_style_radius(tile, 7, 0);
         lv_obj_set_style_pad_all(tile, 0, 0);
-        lv_obj_remove_flag(tile, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(tile, onFxClicked, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<uintptr_t>(fx)));
 
         detailTileIcons_[fx] = createGlyph(tile, fx, 40, 36);
         lv_obj_align(detailTileIcons_[fx], LV_ALIGN_TOP_MID, 0, 21);
@@ -624,6 +626,14 @@ void PanelLanLVGLUI::onPresetClicked(lv_event_t *event) {
 
 void PanelLanLVGLUI::onPresetCardClicked(lv_event_t *) {
     lv_obj_remove_flag(uiInstance->presetPicker_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void PanelLanLVGLUI::onFxClicked(lv_event_t *event) {
+    if (!uiInstance->actions_ || uiInstance->activeScreen_ != Screen::Fx) {
+        return;
+    }
+    const uint8_t slot = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+    uiInstance->actions_->requestFxToggle(slot);
 }
 
 void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
@@ -701,22 +711,56 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         static const char *kFxNames[] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};
         for (uint8_t fx = 0; fx < 6; ++fx) {
             const ControllerFxSlot &slot = snapshot.fxSlots[fx];
-            const bool current = slot.known && !snapshot.sparkStateStale;
-            const bool enabled = current && slot.enabled;
-            const lv_color_t accent = enabled ? kFxAccents[fx] : lv_color_hex(0x96A5B7);
+            const bool needsSync = snapshot.sparkStateStale || !slot.known;
+            // Pending and failed requests deliberately retain the confirmed
+            // card body. Only ControllerState can change `enabled`; this
+            // renderer only makes the trust level legible.
+            const bool confirmedEnabled = slot.known && slot.enabled;
+            const bool pending = !needsSync && slot.pending;
+            const bool failed = !needsSync && !pending && slot.actionFailed;
             const char *name = slot.known ? slot.label.c_str() : kFxNames[fx];
             lv_label_set_text(detailTileLabels_[fx], name);
-            lv_label_set_text(detailTileStateLabels_[fx], current ? (enabled ? "ON" : "OFF") : "SYNC");
-            lv_obj_set_style_bg_color(detailTiles_[fx], enabled ? kFxOnBackgrounds[fx] : lv_color_hex(0x242D35), 0);
-            lv_obj_set_style_bg_grad_color(detailTiles_[fx], enabled ? lv_color_mix(kFxOnBackgrounds[fx], lv_color_black(), 110)
-                                                                 : lv_color_hex(0x101820), 0);
+            const lv_color_t confirmedAccent = confirmedEnabled ? kFxAccents[fx] : lv_color_hex(0x96A5B7);
+            lv_color_t border = confirmedEnabled ? confirmedAccent : lv_color_hex(0x4B5965);
+            lv_color_t iconColor = confirmedAccent;
+            lv_color_t stateColor = lv_color_hex(0xDCE7EF);
+            const char *state = confirmedEnabled ? "ON" : "OFF";
+            lv_color_t background = confirmedEnabled ? kFxOnBackgrounds[fx] : lv_color_hex(0x242D35);
+            lv_color_t gradient = confirmedEnabled
+                                      ? lv_color_mix(kFxOnBackgrounds[fx], lv_color_black(), 110)
+                                      : lv_color_hex(0x101820);
+
+            // Trust state takes precedence over the apparent effect state:
+            // a stale/unknown Spark observation must never look like a
+            // confirmed bypass or enabled pedal.
+            if (needsSync) {
+                state = "SYNC";
+                background = lv_color_hex(0x242D35);
+                gradient = lv_color_hex(0x101820);
+                border = lv_color_hex(0x7B6135);
+                iconColor = lv_color_hex(0xD9B877);
+                stateColor = lv_color_hex(0xD9B877);
+            } else if (pending) {
+                state = slot.pendingDesiredEnabled ? "TURNING ON" : "TURNING OFF";
+                border = lv_color_hex(0xD9B877);
+                iconColor = lv_color_hex(0xFFD06A);
+                stateColor = lv_color_hex(0xFFD06A);
+            } else if (failed) {
+                state = "RETRY";
+                border = lv_color_hex(0xFF5965);
+                iconColor = lv_color_hex(0xFF6C76);
+                stateColor = lv_color_hex(0xFF6C76);
+            }
+
+            lv_label_set_text(detailTileStateLabels_[fx], state);
+            lv_obj_set_style_bg_color(detailTiles_[fx], background, 0);
+            lv_obj_set_style_bg_grad_color(detailTiles_[fx], gradient, 0);
             lv_obj_set_style_bg_grad_dir(detailTiles_[fx], LV_GRAD_DIR_VER, 0);
-            lv_obj_set_style_border_color(detailTiles_[fx], enabled ? accent : lv_color_hex(0x4B5965), 0);
-            lv_obj_set_style_text_color(detailTileIcons_[fx], accent, 0);
+            lv_obj_set_style_border_color(detailTiles_[fx], border, 0);
+            lv_obj_set_style_text_color(detailTileIcons_[fx], iconColor, 0);
             lv_obj_invalidate(detailTileIcons_[fx]);
             lv_obj_set_style_text_color(detailTileLabels_[fx], lv_color_hex(0xF1F4F7), 0);
-            lv_obj_set_style_text_color(detailTileStateLabels_[fx], current ? lv_color_hex(0xDCE7EF)
-                                                                           : lv_color_hex(0xD9B877), 0);
+            lv_obj_set_style_text_color(detailTileStateLabels_[fx], stateColor, 0);
         }
         return;
     }

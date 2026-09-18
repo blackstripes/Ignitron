@@ -151,6 +151,10 @@ Implication:
   reached the protocol acknowledgement path.
 - confirm only after a post-send FX_ONOFF observation for the same requested
   effect model reports the requested state in fresh Spark-owned preset data.
+- the protocol does not correlate that observation to a specific outgoing
+  command. A matching external Spark/App event after the request is therefore
+  indistinguishable from the controller's result and resolves to the same
+  Spark-owned state; a conflicting event cancels/fails the pending intent.
 
 ## Preset changes should remain atomic
 
