@@ -220,22 +220,36 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_width(detailMessage_, 292);
     lv_label_set_long_mode(detailMessage_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_color(detailMessage_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
-    lv_obj_align(detailMessage_, LV_ALIGN_TOP_LEFT, 14, 43);
+    lv_obj_align(detailMessage_, LV_ALIGN_TOP_LEFT, 14, 42);
 
     const int16_t detailX[] = {-105, 0, 105, -105, 0, 105};
     for (uint8_t fx = 0; fx < 6; ++fx) {
         lv_obj_t *tile = lv_obj_create(detailPage_);
         detailTiles_[fx] = tile;
-        lv_obj_set_size(tile, 94, 48);
-        lv_obj_align(tile, LV_ALIGN_TOP_MID, detailX[fx], fx < 3 ? 72 : 126);
+        lv_obj_set_size(tile, 94, 54);
+        lv_obj_align(tile, LV_ALIGN_TOP_MID, detailX[fx], fx < 3 ? 64 : 124);
         lv_obj_set_style_border_width(tile, 1, 0);
-        lv_obj_set_style_radius(tile, 6, 0);
+        lv_obj_set_style_radius(tile, 8, 0);
         lv_obj_set_style_pad_all(tile, 0, 0);
+
+        detailTileAccents_[fx] = lv_obj_create(tile);
+        lv_obj_set_size(detailTileAccents_[fx], 76, 3);
+        lv_obj_align(detailTileAccents_[fx], LV_ALIGN_TOP_MID, 0, 7);
+        lv_obj_set_style_border_width(detailTileAccents_[fx], 0, 0);
+        lv_obj_set_style_radius(detailTileAccents_[fx], 2, 0);
+        lv_obj_set_style_pad_all(detailTileAccents_[fx], 0, 0);
+
         detailTileLabels_[fx] = lv_label_create(tile);
         lv_obj_set_width(detailTileLabels_[fx], 94);
         lv_obj_set_style_text_align(detailTileLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(detailTileLabels_[fx], lv_color_white(), 0);
-        lv_obj_center(detailTileLabels_[fx]);
+        lv_obj_set_style_text_font(detailTileLabels_[fx], &lv_font_montserrat_14, 0);
+        lv_obj_align(detailTileLabels_[fx], LV_ALIGN_TOP_MID, 0, 15);
+
+        detailTileStateLabels_[fx] = lv_label_create(tile);
+        lv_obj_set_width(detailTileStateLabels_[fx], 94);
+        lv_obj_set_style_text_align(detailTileStateLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(detailTileStateLabels_[fx], LV_ALIGN_BOTTOM_MID, 0, -6);
     }
 
     lv_obj_t *nav = lv_obj_create(screen);
@@ -319,17 +333,46 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         }
     }
     if (isFxPage) {
-        lv_label_set_text(detailTitle_, "FX CONTROL");
-        lv_label_set_text(detailMessage_, "LIVE SPARK EFFECT STATE");
+        lv_label_set_text(detailTitle_, "FX RIG");
+        uint8_t activeCount = 0;
+        uint8_t knownCount = 0;
+        for (const ControllerFxSlot &slot : snapshot.fxSlots) {
+            if (slot.known) {
+                ++knownCount;
+                activeCount += slot.enabled ? 1 : 0;
+            }
+        }
+        if (knownCount == 6) {
+            lv_label_set_text_fmt(detailMessage_, "%u ACTIVE  |  HW %u", activeCount,
+                                  snapshot.confirmedHardwarePreset);
+        } else {
+            lv_label_set_text(detailMessage_, "SYNCING LIVE SPARK STATE");
+        }
+        static const lv_color_t kFxAccents[] = {
+            lv_color_hex(0x22C55E), lv_color_hex(0x14B8A6), lv_color_hex(0xEF4444),
+            lv_color_hex(0x8B5CF6), lv_color_hex(0x38BDF8), lv_color_hex(0xA78BFA),
+        };
+        static const lv_color_t kFxOnBackgrounds[] = {
+            lv_color_hex(0x123C2C), lv_color_hex(0x103A39), lv_color_hex(0x421F25),
+            lv_color_hex(0x2A2144), lv_color_hex(0x12384B), lv_color_hex(0x302449),
+        };
         for (uint8_t fx = 0; fx < 6; ++fx) {
             const ControllerFxSlot &slot = snapshot.fxSlots[fx];
-            const char *name = slot.known && slot.label == "REVERB" ? "REV" : slot.known ? slot.label.c_str() : "--";
-            lv_label_set_text_fmt(detailTileLabels_[fx], "%s\n%s", name,
-                                  slot.known ? (slot.enabled ? "ON" : "OFF") : "SYNC");
-            const lv_color_t color = slot.enabled ? lv_color_hex(0x176B48) : lv_color_hex(0x151F25);
-            lv_obj_set_style_bg_color(detailTiles_[fx], color, 0);
-            lv_obj_set_style_border_color(detailTiles_[fx], slot.enabled ? lv_color_hex(0x2CB67D)
-                                                                         : lv_color_hex(0x34454F), 0);
+            const bool enabled = slot.known && slot.enabled;
+            const lv_color_t accent = slot.known ? kFxAccents[fx] : lv_color_hex(0xD97706);
+            const char *name = slot.known ? slot.label.c_str() : "--";
+            lv_label_set_text(detailTileLabels_[fx], name);
+            lv_label_set_text(detailTileStateLabels_[fx], slot.known ? (enabled ? "ON" : "OFF") : "SYNC");
+            lv_obj_set_style_bg_color(detailTiles_[fx], enabled ? kFxOnBackgrounds[fx] : lv_color_hex(0x111A20), 0);
+            lv_obj_set_style_bg_grad_color(detailTiles_[fx], enabled ? lv_color_hex(0x0E171C) : lv_color_hex(0x0B1115), 0);
+            lv_obj_set_style_bg_grad_dir(detailTiles_[fx], LV_GRAD_DIR_VER, 0);
+            lv_obj_set_style_border_color(detailTiles_[fx], enabled ? accent : lv_color_hex(0x34454F), 0);
+            lv_obj_set_style_bg_color(detailTileAccents_[fx], accent, 0);
+            lv_obj_set_style_text_color(detailTileLabels_[fx], slot.known ? lv_color_white()
+                                                                           : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
+            lv_obj_set_style_text_color(detailTileStateLabels_[fx], enabled ? accent
+                                                                            : slot.known ? lv_palette_lighten(LV_PALETTE_GREY, 2)
+                                                                                         : lv_color_hex(0xFBBF24), 0);
         }
         return;
     }

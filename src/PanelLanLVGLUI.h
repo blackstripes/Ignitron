@@ -47,7 +47,9 @@ private:
     lv_obj_t *detailTitle_ = nullptr;
     lv_obj_t *detailMessage_ = nullptr;
     lv_obj_t *detailTiles_[6]{};
+    lv_obj_t *detailTileAccents_[6]{};
     lv_obj_t *detailTileLabels_[6]{};
+    lv_obj_t *detailTileStateLabels_[6]{};
     lv_obj_t *navButtons_[5]{};
     lv_obj_t *navLabels_[5]{};
     Screen activeScreen_ = Screen::Preset;
