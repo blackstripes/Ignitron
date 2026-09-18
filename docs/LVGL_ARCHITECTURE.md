@@ -399,9 +399,20 @@ go through `ControllerActions`, which permits one request only after a fresh
 reported hardware-preset value is known. The old confirmed tile remains green,
 the requested tile is amber while pending, and it turns green only after the
 reported preset matches; conflict or a five-second timeout fails the request.
-FX, tuner, looper, bank, and settings controls remain absent. Serial CLI
-commands have not yet migrated to this action layer, so do not operate the CLI
-concurrently with this checkpoint.
+The first Home screen and navigation shell are now present: the Home screen
+shows the confirmed Spark preset, its pending preset intent, and a compact FX
+summary; the FX page is a live read-only 3x2 slot view. Tuner and looper
+pages deliberately expose no Spark controls yet. Serial CLI commands have not
+yet migrated to this action layer, so do not operate CLI commands that change
+Spark state concurrently with this checkpoint.
+
+For hardware UI regression checks, the PanelLan target accepts the development
+only serial command `touch <x> <y>` and `screenshot`. The helper
+`tools/capture_panelan_screenshot.py` can queue `--touch X Y` values and
+`--command` values before a capture. This drives the normal LVGL input path,
+not a separate widget test path. A complete-preset `refresh` is useful before
+assessing FX content after reconnect, because transport connection and the
+full active-preset payload can arrive at different times.
 
 Prove:
 
@@ -442,6 +453,10 @@ Must show:
 
 Do not fake unknown data.
 
+**Initial implementation completed:** Home renders the connection/device card,
+Spark confirmed hardware preset, pending selection feedback, and six compact
+FX states. The bottom row changes between the touchscreen-prototype pages.
+
 ### Milestone LV4 — FX screen
 
 3 x 2 reusable PerformanceTile grid.
@@ -452,6 +467,11 @@ Must honor:
 - Comp/Wah single-slot semantics
 - pending/confirmed state
 - external Spark/app changes
+
+**Read-only state view completed:** the FX tab renders the six canonical
+slots from `ControllerSnapshot`. Touch toggles stay intentionally absent until
+FX requests have the same pending/confirmed controller-action semantics as
+hardware-preset selection.
 - stale/unknown states
 
 ### Milestone LV5 — Tuner

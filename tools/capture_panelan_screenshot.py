@@ -11,6 +11,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--port", required=True)
 parser.add_argument("--output", required=True)
 parser.add_argument("--wait", type=float, default=8.0, help="seconds to wait after USB CDC opens")
+parser.add_argument(
+    "--command",
+    action="append",
+    help="send a serial CLI command before capture; repeat for a command sequence",
+)
+parser.add_argument("--settle", type=float, default=0.2, help="seconds to wait after each command or touch")
 parser.add_argument("--verbose", action="store_true", help="print firmware text emitted before the screenshot")
 parser.add_argument(
     "--touch",
@@ -28,9 +34,12 @@ try:
     # reach their normal input loop before sending the capture command.
     time.sleep(args.wait)
     port.reset_input_buffer()
+    for command in args.command or []:
+        port.write(f"{command}\n".encode())
+        time.sleep(args.settle)
     for x, y in args.touch or []:
         port.write(f"touch {x} {y}\n".encode())
-        time.sleep(0.2)
+        time.sleep(args.settle)
     port.write(b"screenshot\n")
     marker = b"IGNITRON_SCREENSHOT_PPM 320 240\n"
     data = bytearray()
