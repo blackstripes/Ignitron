@@ -85,6 +85,7 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     next.tunerSampleKnown = status.tunerSampleRevision() != 0;
     next.tunerNote = status.noteString();
     next.tunerOffset = status.noteOffset();
+    next.tunerOffsetCents = status.noteOffsetCents();
     const uint32_t lastTunerSampleAtMs = status.tunerLastSampleAtMs();
     next.tunerSampleFresh = next.tunerActive && next.tunerSampleKnown &&
                             static_cast<uint32_t>(millis() - lastTunerSampleAtMs) <= kTunerSampleFreshMs;
@@ -112,6 +113,7 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
         snapshot_.tunerSampleFresh == next.tunerSampleFresh &&
         snapshot_.tunerNote == next.tunerNote &&
         snapshot_.tunerOffset == next.tunerOffset &&
+        snapshot_.tunerOffsetCents == next.tunerOffsetCents &&
         snapshot_.confirmedHardwarePreset == next.confirmedHardwarePreset &&
         snapshot_.pendingHardwarePreset == next.pendingHardwarePreset &&
         snapshot_.presetActionFailed == next.presetActionFailed &&

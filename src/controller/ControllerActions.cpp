@@ -40,14 +40,15 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
     return true;
 }
 
-bool ControllerActions::requestTuner() {
+bool ControllerActions::requestTuner(bool on) {
     const ControllerSnapshot &snapshot = state_.snapshot();
-    if (snapshot.tunerActive || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
+    if (snapshot.tunerActive == on || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
         queuedPreset_ != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
         return false;
     }
     queuedTunerRequest_ = true;
+    queuedTunerEnabled_ = on;
     return true;
 }
 
@@ -98,14 +99,16 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         return;
     }
 
-    // Do not locally manufacture tuner state. A Spark TUNER_ON observation
-    // is the only confirmation that moves the controller into tuner mode.
+    // Do not locally manufacture tuner state. Spark TUNER_ON/OFF observations
+    // are the only confirmation that moves the controller in or out of tuner.
     if (tunerRequestSent_) {
-        if (snapshot.tunerActive) {
-            Serial.println("Controller: tuner entry confirmed by Spark");
+        if (snapshot.tunerActive == tunerRequestEnabled_) {
+            Serial.printf("Controller: tuner %s confirmed by Spark\n",
+                          tunerRequestEnabled_ ? "entry" : "exit");
             tunerRequestSent_ = false;
         } else if (millis() - tunerRequestSentAtMs_ >= kTunerTimeoutMs) {
-            Serial.println("Controller: tuner entry timed out");
+            Serial.printf("Controller: tuner %s timed out\n",
+                          tunerRequestEnabled_ ? "entry" : "exit");
             tunerRequestSent_ = false;
         }
         return;
@@ -113,12 +116,24 @@ void ControllerActions::process(SparkDataControl &dataControl) {
 
     if (queuedTunerRequest_) {
         queuedTunerRequest_ = false;
-        if (SparkDataControl::switchTuner(true)) {
+        if (!queuedTunerEnabled_) {
+            // Spark 2 accepted the native 0x01/0x65-off command in testing
+            // but did not consistently emit TUNER_OFF. The project's normal
+            // tuner-off path makes the same request and restores preset mode;
+            // a later fresh tuner output still wins and re-enters tuner.
+            SparkDataControl::switchSubMode(SUB_MODE_PRESET);
+            Serial.println("Controller: requested tuner exit via preset mode");
+            return;
+        }
+        if (SparkDataControl::switchTuner(queuedTunerEnabled_)) {
             tunerRequestSent_ = true;
+            tunerRequestEnabled_ = queuedTunerEnabled_;
             tunerRequestSentAtMs_ = millis();
-            Serial.println("Controller: requesting tuner entry");
+            Serial.printf("Controller: requesting tuner %s\n",
+                          queuedTunerEnabled_ ? "entry" : "exit");
         } else {
-            Serial.println("Controller: tuner entry command failed");
+            Serial.printf("Controller: tuner %s command failed\n",
+                          queuedTunerEnabled_ ? "entry" : "exit");
         }
         return;
     }

@@ -192,10 +192,9 @@ lv_obj_t *createText(lv_obj_t *parent, const char *text, int x, int y, int width
     return label;
 }
 
-// The protocol's raw offset is plotted on its nominal 0..1 scale. Its cents
-// mapping has not been calibrated on hardware, so neither the color nor the
-// center tick claims that a note is in tune. Only fresh observations get a
-// pointer; out-of-range values remain visible in the numeric readout.
+// Spark's established 0..1 tuner value maps to -50..+50 cents (the same
+// conversion used by the legacy display and LEDs). Only fresh observations
+// get a pointer; out-of-range values remain visible in the numeric readout.
 void drawTunerMeter(lv_event_t *event) {
     lv_layer_t *layer = lv_event_get_layer(event);
     lv_area_t bounds;
@@ -220,8 +219,9 @@ void drawTunerMeter(lv_event_t *event) {
         std::isfinite(snapshot.tunerOffset) && snapshot.tunerOffset >= 0.0f &&
         snapshot.tunerOffset <= 1.0f) {
         const int x = 11 + static_cast<int>(snapshot.tunerOffset * 260.0f + 0.5f);
-        line(x, 1, 27, 0x123846, 11);
-        line(x, 1, 27, 0x4ED6F0, 5);
+        const bool inTune = snapshot.tunerOffsetCents >= -5 && snapshot.tunerOffsetCents <= 5;
+        line(x, 1, 27, inTune ? 0x173D2A : 0x123846, 11);
+        line(x, 1, 27, inTune ? 0x00E65D : 0x4ED6F0, 5);
     }
 }
 
@@ -550,9 +550,9 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_remove_flag(tunerMeter_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(tunerMeter_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(tunerMeter_, drawTunerMeter, LV_EVENT_DRAW_MAIN, &latestSnapshot_);
-    createText(tunerMeter_, "0", 1, 31, 22, &lv_font_montserrat_12, 0x7E929F, true);
-    createText(tunerMeter_, "0.5", 123, 31, 36, &lv_font_montserrat_12, 0x7E929F, true);
-    createText(tunerMeter_, "1", 259, 31, 22, &lv_font_montserrat_12, 0x7E929F, true);
+    createText(tunerMeter_, "-50", 1, 31, 28, &lv_font_montserrat_12, 0x7E929F, true);
+    createText(tunerMeter_, "0", 130, 31, 22, &lv_font_montserrat_12, 0x7E929F, true);
+    createText(tunerMeter_, "+50", 253, 31, 28, &lv_font_montserrat_12, 0x7E929F, true);
     tunerOffsetLabel_ = createText(tunerPage_, "", 10, 117, 286,
                                     &lv_font_montserrat_20, 0x4ED6F0, true);
     tunerFooter_ = lv_obj_create(tunerPage_);
@@ -690,13 +690,17 @@ void PanelLanLVGLUI::onFxClicked(lv_event_t *event) {
 
 void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
     if (uiInstance->latestSnapshot_.tunerActive) {
+        const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+        if (page == static_cast<uint8_t>(Screen::Tuner) && uiInstance->actions_) {
+            uiInstance->actions_->requestTuner(false);
+        }
         return;
     }
     const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
     if (page <= static_cast<uint8_t>(Screen::Device)) {
         uiInstance->setActiveScreen(static_cast<Screen>(page));
         if (page == static_cast<uint8_t>(Screen::Tuner) && uiInstance->actions_) {
-            uiInstance->actions_->requestTuner();
+            uiInstance->actions_->requestTuner(true);
         }
     }
 }
@@ -717,13 +721,6 @@ void PanelLanLVGLUI::setActiveScreen(Screen screen) {
 }
 
 void PanelLanLVGLUI::renderNavigation() {
-    if (latestSnapshot_.tunerActive) {
-        // Spark is already in tuner mode: its tuner screen temporarily owns
-        // the full interaction surface. Normal navigation must not imply that
-        // a second performance view is still active.
-        lv_obj_add_flag(nav_, LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
     lv_obj_remove_flag(nav_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_height(nav_, 40);
     lv_label_set_text(headerTitle_, latestSnapshot_.identityKnown
@@ -743,6 +740,12 @@ void PanelLanLVGLUI::renderNavigation() {
         lv_obj_set_style_text_color(navLabels_[i], selected ? lv_palette_main(LV_PALETTE_YELLOW)
                                                             : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
         lv_obj_set_style_text_font(navLabels_[i], &lv_font_montserrat_12, 0);
+        if (i == static_cast<uint8_t>(Screen::Tuner) && latestSnapshot_.tunerActive) {
+            lv_label_set_text(navLabels_[i], "EXIT");
+        } else {
+            static const char *kNavLabels[] = {"PRESET", "FX", "LOOPER", "TUNER", "DEVICE"};
+            lv_label_set_text(navLabels_[i], kNavLabels[i]);
+        }
         lv_obj_remove_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(navIcons_[i], selected ? lv_color_hex(0xFFD65A) : lv_color_hex(0xA7B7C3), 0);
         lv_obj_align(navLabels_[i], LV_ALIGN_BOTTOM_MID, 0, -3);
@@ -751,8 +754,7 @@ void PanelLanLVGLUI::renderNavigation() {
 
 void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
     const bool isFxPage = activeScreen_ == Screen::Fx;
-    const bool expandedTuner = activeScreen_ == Screen::Tuner && snapshot.tunerActive;
-    lv_obj_set_height(detailPage_, expandedTuner ? 210 : 180);
+    lv_obj_set_height(detailPage_, 180);
     auto showOnly = [](lv_obj_t *page, bool visible) {
         if (visible) lv_obj_remove_flag(page, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
@@ -836,11 +838,12 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         return;
     }
     if (activeScreen_ == Screen::Tuner) {
-        lv_obj_set_height(tunerPage_, snapshot.tunerActive ? 200 : 160);
-        lv_obj_set_y(tunerNoteLabel_, snapshot.tunerActive ? 29 : 36);
-        lv_obj_set_y(tunerMeter_, 89);
-        lv_obj_set_y(tunerOffsetLabel_, 142);
-        lv_obj_set_y(tunerMessageLabel_, snapshot.tunerActive ? 181 : 136);
+        lv_obj_set_height(tunerPage_, 160);
+        lv_obj_set_y(tunerNoteLabel_, snapshot.tunerActive ? 18 : 36);
+        lv_obj_set_y(tunerMeter_, 68);
+        lv_obj_set_y(tunerOffsetLabel_, 117);
+        lv_obj_set_y(tunerFooter_, 141);
+        lv_obj_set_y(tunerMessageLabel_, snapshot.tunerActive ? 146 : 136);
         showOnly(tunerMeter_, snapshot.tunerActive);
         showOnly(tunerFooter_, snapshot.tunerActive);
         showOnly(tunerOffsetLabel_, snapshot.tunerActive);
@@ -861,12 +864,9 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
             // LVGL's compact formatter does not include float formatting on
             // this target. Render the parsed raw offset with integer pieces
             // so a live sample can never leave a literal "%f" on screen.
-            const int offsetMilli = static_cast<int>(snapshot.tunerOffset * 1000.0f +
-                                                     (snapshot.tunerOffset >= 0.0f ? 0.5f : -0.5f));
-            const int magnitude = offsetMilli >= 0 ? offsetMilli : -offsetMilli;
-            lv_label_set_text_fmt(tunerOffsetLabel_, "OFFSET %c%d.%03d",
-                                  offsetMilli >= 0 ? '+' : '-', magnitude / 1000, magnitude % 1000);
-            lv_label_set_text(tunerMessageLabel_, "Exit tuner on your Spark");
+            const int cents = snapshot.tunerOffsetCents;
+            lv_label_set_text_fmt(tunerOffsetLabel_, "%+d cents", cents);
+            lv_label_set_text(tunerMessageLabel_, "Tap EXIT to return to your preset");
         } else {
             lv_label_set_text(tunerStateLabel_, "ACTIVE");
             lv_obj_set_style_text_color(tunerStateLabel_, lv_color_hex(0x00E65D), 0);

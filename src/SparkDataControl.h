@@ -248,6 +248,7 @@ private:
     static AckData lastFinalAck_;
     static vector<pair<string, uint32_t>> fxModelObservationRevisions_;
     static uint32_t fullPresetObservationRevision_;
+    static uint32_t ignoreTunerOutputUntilMs_;
 
     static bool sendMessageToBT(ByteVector &msg);
     static bool takeQueuedMessage(ByteVector &message);

@@ -56,6 +56,7 @@ struct ControllerSnapshot {
     bool tunerSampleFresh = false;
     std::string tunerNote;
     float tunerOffset = 0.0f;
+    int tunerOffsetCents = 0;
     uint8_t confirmedHardwarePreset = 0;
     uint8_t pendingHardwarePreset = 0;
     bool presetActionFailed = false;

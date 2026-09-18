@@ -25,6 +25,7 @@ uint32_t SparkDataControl::finalAckRevision_ = 0;
 AckData SparkDataControl::lastFinalAck_;
 vector<pair<string, uint32_t>> SparkDataControl::fxModelObservationRevisions_;
 uint32_t SparkDataControl::fullPresetObservationRevision_ = 0;
+uint32_t SparkDataControl::ignoreTunerOutputUntilMs_ = 0;
 
 byte SparkDataControl::nextMessageNum = 0x01;
 
@@ -146,6 +147,10 @@ void SparkDataControl::switchSubMode(SubMode subMode) {
     }
     // Switch off tuner mode at amp if was enabled before but is not matching current subMode
     if (subMode_ == SUB_MODE_TUNER && subMode_ != subMode) {
+        // Spark 2 can leave one pitch packet queued after an explicit tuner
+        // exit. Ignore only this short tail; a later sample is still allowed
+        // to reveal a genuinely active externally-entered tuner session.
+        ignoreTunerOutputUntilMs_ = millis() + 2000;
         switchTuner(false);
     }
     if (subMode == SUB_MODE_TUNER) {
@@ -836,10 +841,11 @@ void SparkDataControl::handleAppModeResponse() {
         }
 
         if (lastMessageType == MSG_TYPE_TUNER_OUTPUT) {
-            // Tuner samples are amp-owned state observations. In particular,
-            // an external tuner session must not be answered with a tuner-off
-            // command from this callback.
-            if (subMode_ != SUB_MODE_TUNER) {
+            // Some Spark 2 sessions emit pitch data before a separate
+            // TUNER_ON indication. It can establish an external session,
+            // except for the short queued-packet tail after an explicit exit.
+            if (subMode_ != SUB_MODE_TUNER &&
+                static_cast<int32_t>(millis() - ignoreTunerOutputUntilMs_) >= 0) {
                 Serial.println("External tuner output received; marking tuner active.");
                 subMode_ = SUB_MODE_TUNER;
             }
