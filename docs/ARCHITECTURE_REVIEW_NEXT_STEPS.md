@@ -276,11 +276,18 @@ production UI port.
 
 ### LVGL/BLE coexistence and protocol-correlation spike
 
-Add the same basic screen plus one preset action. Instrument action ID,
-connection epoch, wire message number, ACK, notification, and observed state.
-Exercise repeated Spark power cycles, unavailable remembered targets, rapid
-requests, and delayed/lost response injection. This validates bounded UI
-stalls, stale-event rejection, and the real confirmation contract.
+`panelan-lvgl-controller` now provides the safe first half: a read-only LVGL
+connection/identity card shares the ordinary Arduino loop with direct Spark
+BLE, and the background preset-cache task is disabled so it cannot race the
+future command owner. The PanelLan boots, serial CLI is available, and BLE
+scanning was observed after flashing.
+
+Next, add one preset action only after the canonical action boundary exists.
+Instrument action ID, connection epoch, wire message number, ACK,
+notification, and observed state. Exercise repeated Spark power cycles,
+unavailable remembered targets, rapid requests, and delayed/lost response
+injection. This validates bounded UI stalls, stale-event rejection, and the
+real confirmation contract.
 
 ### Spark 2 behavior capture
 

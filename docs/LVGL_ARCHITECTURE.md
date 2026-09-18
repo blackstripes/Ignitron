@@ -385,6 +385,17 @@ This is not the final app.
 
 Run LVGL with the existing Spark controller stack.
 
+**Implementation started:** `panelan-lvgl-controller` pins the same LVGL
+9.3.0/PanelLan stack and renders a read-only connection and device-identity
+card from the normal Arduino loop. It also disables the legacy background
+hardware-preset cache task for this target, because that task currently issues
+independent Spark requests outside a canonical command owner. Boot and BLE
+scanning were verified on the physical PanelLan; a Spark connection/reconnect
+and sustained-touch run remain required before this milestone passes.
+
+This target intentionally has no preset/FX touch action. It must not be used
+as a shortcut around `ControllerState` and `ControllerActions`.
+
 Prove:
 
 - BLE scan/connect still works.

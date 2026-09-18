@@ -18,7 +18,11 @@
 #include "SparkSerialCLI.h"
 #endif
 #ifdef PANELAN_SC05X_MODE
+#ifdef PANELAN_LVGL_UI_MODE
+#include "PanelLanLVGLUI.h"
+#else
 #include "PanelLanDisplay.h"
+#endif
 #endif
 
 using namespace std;
@@ -41,7 +45,11 @@ SparkDisplayControl sparkDisplay;
 #endif
 SparkPresetControl &presetControl = SparkPresetControl::getInstance();
 #ifdef PANELAN_SC05X_MODE
+#ifdef PANELAN_LVGL_UI_MODE
+PanelLanLVGLUI panelLanDisplay;
+#else
 PanelLanDisplay panelLanDisplay;
+#endif
 #endif
 
 unsigned long lastInitialPresetTimestamp = 0;
@@ -52,7 +60,7 @@ int initialRequestInterval = 3000;
 bool isInitBoot;
 OperationMode operationMode = SPARK_MODE_APP;
 
-#ifdef PANELAN_SC05X_MODE
+#if defined(PANELAN_SC05X_MODE) && !defined(PANELAN_LVGL_UI_MODE)
 bool selectTouchPreset(uint8_t preset) {
     if (SparkDataControl::isAmpConnected() && spark_dc->ampNameReceived()) {
         // The hardware preset command is the smallest, most reliable control
@@ -89,7 +97,9 @@ void setup() {
     Serial.println("Initializing");
 #ifdef PANELAN_SC05X_MODE
     panelLanDisplay.begin();
+#ifndef PANELAN_LVGL_UI_MODE
     panelLanDisplay.setPresetCallback(selectTouchPreset);
+#endif
 #endif
     spark_dc = new SparkDataControl();
     serialCLI = new SparkSerialCLI(spark_dc);

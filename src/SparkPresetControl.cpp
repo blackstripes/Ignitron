@@ -17,6 +17,7 @@ void SparkPresetControl::init() {
     presetBuilder.init();
     if (operationMode == SPARK_MODE_APP) {
         Serial.print("Initializing APP mode");
+#ifndef DISABLE_BACKGROUND_PRESET_CACHE
         xTaskCreatePinnedToCore(
             checkForMissingPresets, // Function to implement the task
             "HWpresets",            // Name of the task
@@ -26,6 +27,13 @@ void SparkPresetControl::init() {
             NULL,                   // Task handle.
             1                       // Core where the task should run
         );
+#else
+        // The LVGL/controller coexistence checkpoint deliberately has a
+        // single owner for outbound Spark commands. The legacy cache task
+        // sends requests independently, so it remains disabled until command
+        // serialization is implemented for the canonical action layer.
+        Serial.println(" (background preset cache disabled)");
+#endif
     }
     if (operationMode == SPARK_MODE_AMP) {
         Serial.print("Initializing AMP mode");
