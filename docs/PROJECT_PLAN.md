@@ -442,3 +442,40 @@ Current next sequence:
 The six future ST7735S displays remain simple state-driven renderers and should not each run their own LVGL UI.
 
 The current Codex start instructions are maintained in the repository root [CODEX_HANDOFF.md](../CODEX_HANDOFF.md).
+
+
+## UI / UX design target
+
+The detailed implementation target for the touchscreen and future mini displays is maintained in [UI_DESIGN.md](UI_DESIGN.md).
+
+The visual concept is stored at [images/ignitron-ui-concept.jpg](images/ignitron-ui-concept.jpg).
+
+The main touchscreen framework is **LVGL 9.x** on top of the existing PanelLan/LovyanGFX hardware path; see [LVGL_ARCHITECTURE.md](LVGL_ARCHITECTURE.md).
+
+Key direction:
+
+- Treat the controller as a performance instrument, not a generic settings UI.
+- Main display provides performance context: preset, FX, looper, tuner, and device/connection state.
+- Six mini TFTs eventually provide dynamic per-footswitch labels and state.
+- Main touchscreen remains a complete control/debug fallback.
+- Prioritize truthful Spark-synchronized state, large touch targets, standing-height readability, and a dark stage-friendly visual hierarchy.
+- Implement device-capability awareness so Spark-2-only controls are hidden or disabled on other devices.
+- Use reusable LVGL components/theme for the main display.
+- Keep future mini displays lightweight and state-driven rather than running separate LVGL stacks.
+- Build incrementally: isolated LVGL bring-up -> BLE coexistence -> canonical state/actions -> polished Home/Preset -> remaining screens.
+
+## Detailed behavior specifications
+
+The product roadmap is backed by explicit implementation contracts:
+
+- [STATE_MODEL.md](STATE_MODEL.md) defines canonical state, authority, pending/confirmed/stale semantics, capabilities, device switching, and reconnect behavior.
+- [INTERACTION_SPEC.md](INTERACTION_SPEC.md) defines exact behavior for presets, FX, tuner, tempo, looper, MODE, TAP/TUNER, touchscreen, physical switches, mini TFTs, and CLI.
+- [AMP_BEHAVIOR.md](AMP_BEHAVIOR.md) distinguishes amp-native logic from controller logic and contains the hardware verification matrix.
+- [UI_DESIGN.md](UI_DESIGN.md) defines visual hierarchy and screen behavior.
+- [LVGL_ARCHITECTURE.md](LVGL_ARCHITECTURE.md) defines the main-screen UI framework, buffering/tasking rules, reusable components, rollout checkpoints, and model/review workflow.
+
+Central design principle: rely on native Spark behavior whenever possible.
+
+For example, Spark 2 handles tuner mute itself. The controller should send the native tuner command and reflect confirmed state rather than turning off all effects or synthesizing a mute/restore sequence.
+
+Unknown interactions must be tested on hardware and documented in AMP_BEHAVIOR.md before being encoded as product behavior.
