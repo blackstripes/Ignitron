@@ -45,10 +45,15 @@ private:
     ControllerActions *actions_ = nullptr;
     uint32_t renderedRevision_ = UINT32_MAX;
     uint32_t lastLvglTickAt_ = 0;
-    bool injectedTouchPending_ = false;
     bool injectedTouchPressed_ = false;
-    uint16_t injectedTouchX_ = 0;
-    uint16_t injectedTouchY_ = 0;
+    struct InjectedTouch {
+        uint16_t x;
+        uint16_t y;
+    };
+    static constexpr uint8_t kInjectedTouchQueueSize = 8;
+    InjectedTouch injectedTouches_[kInjectedTouchQueueSize]{};
+    uint8_t injectedTouchHead_ = 0;
+    uint8_t injectedTouchCount_ = 0;
 
     static void flushDisplay(lv_display_t *display, const lv_area_t *area, uint8_t *pixelMap);
     static void readTouch(lv_indev_t *, lv_indev_data_t *data);

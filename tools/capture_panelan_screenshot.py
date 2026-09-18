@@ -11,7 +11,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--port", required=True)
 parser.add_argument("--output", required=True)
 parser.add_argument("--wait", type=float, default=8.0, help="seconds to wait after USB CDC opens")
-parser.add_argument("--touch", nargs=2, type=int, metavar=("X", "Y"), help="inject a touch before capture")
+parser.add_argument("--verbose", action="store_true", help="print firmware text emitted before the screenshot")
+parser.add_argument(
+    "--touch",
+    nargs=2,
+    type=int,
+    metavar=("X", "Y"),
+    action="append",
+    help="inject a touch before capture; repeat for a tap sequence",
+)
 args = parser.parse_args()
 
 port = serial.Serial(args.port, 115200, timeout=0.5)
@@ -20,8 +28,8 @@ try:
     # reach their normal input loop before sending the capture command.
     time.sleep(args.wait)
     port.reset_input_buffer()
-    if args.touch:
-        port.write(f"touch {args.touch[0]} {args.touch[1]}\n".encode())
+    for x, y in args.touch or []:
+        port.write(f"touch {x} {y}\n".encode())
         time.sleep(0.2)
     port.write(b"screenshot\n")
     marker = b"IGNITRON_SCREENSHOT_PPM 320 240\n"
@@ -32,6 +40,8 @@ try:
     start = data.find(marker)
     if start < 0:
         raise RuntimeError("Screenshot marker was not received")
+    if args.verbose:
+        print(data[:start].decode(errors="replace"), end="")
     payload = bytearray(data[start + len(marker):])
     ppm_header = b"P6\n320 240\n255\n"
     while len(payload) < len(ppm_header) + 320 * 240 * 3 and time.monotonic() < deadline:
