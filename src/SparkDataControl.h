@@ -16,6 +16,7 @@
 #include "SparkLooperControl.h"
 
 #include <Arduino.h>
+#include <freertos/semphr.h>
 #include <queue>
 #include <stdexcept>
 #include <vector>
@@ -225,10 +226,14 @@ private:
 
     static byte nextMessageNum;
     static queue<ByteVector> msgQueue;
+    static SemaphoreHandle_t msgQueueMutex;
+    static constexpr size_t kMaxQueuedNotifications = 32;
     static deque<CmdData> currentCommand;
     static deque<AckData> pendingLooperAcks;
 
     static bool sendMessageToBT(ByteVector &msg);
+    static bool takeQueuedMessage(ByteVector &message);
+    static void clearQueuedMessages();
     static bool triggerCommand(vector<CmdData> &msg);
     static bool sendNextRequest();
 

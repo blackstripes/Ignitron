@@ -18,6 +18,7 @@ SparkLooperControl SparkDataControl::looperControl_;
 SparkBLEKeyboard SparkDataControl::bleKeyboard = SparkBLEKeyboard();
 
 queue<ByteVector> SparkDataControl::msgQueue;
+SemaphoreHandle_t SparkDataControl::msgQueueMutex = nullptr;
 deque<CmdData> SparkDataControl::currentCommand;
 deque<AckData> SparkDataControl::pendingLooperAcks;
 
@@ -59,6 +60,9 @@ SparkDataControl::SparkDataControl() {
     keyboardControl = new SparkKeyboardControl();
     keyboardControl->init();
     tapEntries = CircularBuffer(tapEntrySize);
+    if (!msgQueueMutex) {
+        msgQueueMutex = xSemaphoreCreateMutex();
+    }
 }
 
 SparkDataControl::~SparkDataControl() {
@@ -321,7 +325,7 @@ void SparkDataControl::resetStatus() {
     sparkAmpName = "Spark 40";
     withDelay = false;
     lastAmpBatteryUpdate = 0;
-    msgQueue = {};
+    clearQueuedMessages();
     currentCommand.clear();
     pendingLooperAcks.clear();
     currentMsg.clear();
@@ -370,9 +374,9 @@ void SparkDataControl::readPresetChecksums() {
 
 void SparkDataControl::checkForUpdates() {
 
-    if (msgQueue.size() > 0) {
-        processSparkData(msgQueue.front());
-        msgQueue.pop();
+    ByteVector queuedMessage;
+    if (takeQueuedMessage(queuedMessage)) {
+        processSparkData(queuedMessage);
     }
 
     SparkPresetControl::getInstance().checkForUpdates(operationMode_);
@@ -920,6 +924,12 @@ void SparkDataControl::startBLEServer() {
 }
 
 bool SparkDataControl::checkBLEConnection() {
+    if (bleControl->consumeReconnectRequest()) {
+        resetStatus();
+        if (!bleControl->isScanning()) {
+            bleControl->startScan();
+        }
+    }
     if (bleControl->isAmpConnected()) {
         return true;
     }
@@ -934,10 +944,12 @@ bool SparkDataControl::checkBLEConnection() {
                 return true;
             }
             Serial.println("Spark notification setup failed; restarting scan");
+            resetStatus();
             bleControl->startScan();
             return false;
         } else {
             Serial.println("Failed to connect, starting scan");
+            resetStatus();
             bleControl->startScan();
             return false;
         }
@@ -987,16 +999,50 @@ void SparkDataControl::bleNotificationCallback(
     // DEBUG_PRINTLN();
     //  DEBUG_PRINTF("Is notify: %s\n", isNotify ? "true" : "false");
     //   Add incoming data to message queue for processing
-    msgQueue.push(chunk);
+    queueMessage(chunk);
     // DEBUG_PRINTF("Seding back data via notify.");
     // vector<ByteVector> notifyVector = { chunk };
     // bleControl->writeBLE(notifyVector, false, false);
 }
 
 void SparkDataControl::queueMessage(ByteVector &blk) {
-    if (blk.size() > 0) {
+    if (blk.empty() || !msgQueueMutex) {
+        return;
+    }
+
+    if (xSemaphoreTake(msgQueueMutex, 0) != pdTRUE) {
+        Serial.println("Dropping Spark notification: ingress queue busy");
+        return;
+    }
+
+    if (msgQueue.size() >= kMaxQueuedNotifications) {
+        Serial.println("Dropping Spark notification: ingress queue full");
+    } else {
         msgQueue.push(blk);
     }
+    xSemaphoreGive(msgQueueMutex);
+}
+
+bool SparkDataControl::takeQueuedMessage(ByteVector &message) {
+    if (!msgQueueMutex || xSemaphoreTake(msgQueueMutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    const bool hasMessage = !msgQueue.empty();
+    if (hasMessage) {
+        message = std::move(msgQueue.front());
+        msgQueue.pop();
+    }
+    xSemaphoreGive(msgQueueMutex);
+    return hasMessage;
+}
+
+void SparkDataControl::clearQueuedMessages() {
+    if (!msgQueueMutex || xSemaphoreTake(msgQueueMutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    msgQueue = {};
+    xSemaphoreGive(msgQueueMutex);
 }
 
 bool SparkDataControl::sendMessageToBT(ByteVector &msg) {

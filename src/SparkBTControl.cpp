@@ -84,7 +84,6 @@ void SparkBTControl::scanEndedCB(NimBLEScanResults results) {
 }
 
 void SparkBTControl::startScan() {
-    spark_dc_->resetStatus();
     NimBLEDevice::getScan()->start(kScanTime, scanEndedCB);
     Serial.println("Scan initiated");
 }
@@ -489,9 +488,9 @@ void SparkBTControl::onDisconnect(NimBLEServer *pServer_) {
 void SparkBTControl::onDisconnect(NimBLEClient *pClient_) {
     isAmpConnected_ = false;
     isConnectionFound_ = false;
-    if (!(NimBLEDevice::getScan()->isScanning())) {
-        startScan();
-    }
+    // This runs in the NimBLE callback context. The controller loop owns
+    // reset/reconnect work so callbacks never clear shared protocol state.
+    reconnectRequested_.store(true);
     NimBLEClientCallbacks::onDisconnect(pClient_);
 }
 

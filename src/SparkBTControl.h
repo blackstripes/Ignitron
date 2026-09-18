@@ -15,6 +15,7 @@
 #include <BluetoothSerial.h>
 #endif
 #include <NimBLEDevice.h>
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -123,6 +124,7 @@ public:
      *
      */
     void startScan();
+    bool consumeReconnectRequest() { return reconnectRequested_.exchange(false); }
 
     /**
      * @brief  Checks if a scan is currently running
@@ -213,6 +215,7 @@ private:
 
     // Server mode functions
     NimBLEServer *server_ = nullptr;
+    std::atomic_bool reconnectRequested_{false};
     NimBLEService *sparkService_ = nullptr;
     NimBLECharacteristic *sparkWriteCharacteristic_ = nullptr;
     NimBLECharacteristic *sparkNotificationCharacteristic_ = nullptr;
