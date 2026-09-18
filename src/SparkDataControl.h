@@ -53,6 +53,10 @@ public:
     // when an incoming FX_ONOFF message for the requested Spark model has
     // been applied to SparkPresetControl; it is not a command/ACK revision.
     static uint32_t fxModelObservationRevision(const string &fxName);
+    // Advances only after a complete MSG_TYPE_PRESET response has been
+    // applied to SparkPresetControl. ACKs and local pending mutations do not
+    // affect this authoritative observation generation.
+    static uint32_t fullPresetObservationRevision();
     static bool isAppConnected(); // true if ESP in AMP mode and client is connected
     void startBLEServer();
     // static void onScanEnded(NimBLEScanResults results);
@@ -83,7 +87,9 @@ public:
     bool changePreset(Preset preset);
 
     // Switch effect on/off
-    static bool switchEffectOnOff(const string &fxName, bool enable);
+    // Optionally returns the message number assigned to this effect command,
+    // so the controller can recognize its serialized action's final ACK.
+    static bool switchEffectOnOff(const string &fxName, bool enable, uint8_t *messageNumber = nullptr);
     static bool toggleEffect(int fxIdentifier);
 
     bool toggleSubMode();
@@ -241,6 +247,7 @@ private:
     static uint32_t finalAckRevision_;
     static AckData lastFinalAck_;
     static vector<pair<string, uint32_t>> fxModelObservationRevisions_;
+    static uint32_t fullPresetObservationRevision_;
 
     static bool sendMessageToBT(ByteVector &msg);
     static bool takeQueuedMessage(ByteVector &message);

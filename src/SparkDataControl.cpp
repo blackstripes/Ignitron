@@ -24,6 +24,7 @@ deque<AckData> SparkDataControl::pendingLooperAcks;
 uint32_t SparkDataControl::finalAckRevision_ = 0;
 AckData SparkDataControl::lastFinalAck_;
 vector<pair<string, uint32_t>> SparkDataControl::fxModelObservationRevisions_;
+uint32_t SparkDataControl::fullPresetObservationRevision_ = 0;
 
 byte SparkDataControl::nextMessageNum = 0x01;
 
@@ -495,12 +496,17 @@ bool SparkDataControl::changePreset(Preset preset) {
     return false;
 }
 
-bool SparkDataControl::switchEffectOnOff(const string &fxName, bool enable) {
+bool SparkDataControl::switchEffectOnOff(const string &fxName, bool enable, uint8_t *messageNumber) {
 
     SparkPresetControl::getInstance().switchFXOnOff(fxName, enable);
     currentMsg = sparkMsg.turnEffectOnOff(nextMessageNum, fxName, enable);
 
-    return triggerCommand(currentMsg);
+    const uint8_t issuedMessageNumber = nextMessageNum;
+    const bool sent = triggerCommand(currentMsg);
+    if (sent && messageNumber != nullptr) {
+        *messageNumber = issuedMessageNumber;
+    }
+    return sent;
 }
 
 bool SparkDataControl::toggleEffect(int fxIdentifier) {
@@ -766,6 +772,12 @@ void SparkDataControl::handleAppModeResponse() {
             // This preset number is between 0 and 3!
             bool isSpecial = lastMessageNumber == specialMsgNum;
             SparkPresetControl::getInstance().updateFromSparkResponsePreset(isSpecial);
+            if (!isSpecial) {
+                // This advances only after the full response has become the
+                // active Spark-owned preset. Cached-background responses,
+                // ACKs, and local pending mutations never advance it.
+                ++fullPresetObservationRevision_;
+            }
         }
 
         if (lastMessageType == MSG_TYPE_FX_ONOFF) {
@@ -1014,6 +1026,10 @@ uint32_t SparkDataControl::fxModelObservationRevision(const string &fxName) {
         }
     }
     return 0;
+}
+
+uint32_t SparkDataControl::fullPresetObservationRevision() {
+    return fullPresetObservationRevision_;
 }
 
 bool SparkDataControl::isAppConnected() {

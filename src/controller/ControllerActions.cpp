@@ -33,8 +33,8 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
     queuedFxDesiredEnabled_ = !fx.enabled;
     queuedFxModelName_ = fx.modelName;
     fxEnabledBeforeRequest_ = fx.enabled;
-    fxHardwarePresetBeforeRequest_ = snapshot.confirmedHardwarePreset;
     fxChainIdentityBeforeRequest_ = snapshot.fxChainIdentity;
+    fxFullPresetObservationRevisionBeforeRequest_ = SparkDataControl::fullPresetObservationRevision();
     state_.beginFxToggleRequest(slot, queuedFxDesiredEnabled_);
     return true;
 }
@@ -43,9 +43,11 @@ bool ControllerActions::hasPendingFxOperation() const {
     return queuedFxSlot_ != kNoFxSlot || sentFxSlot_ != kNoFxSlot;
 }
 
-void ControllerActions::cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh) {
+void ControllerActions::cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh,
+                                        const char *reason) {
     const uint8_t slot = sentFxSlot_ != kNoFxSlot ? sentFxSlot_ : queuedFxSlot_;
     if (slot != kNoFxSlot) {
+        Serial.printf("Controller: FX %u cancelled: %s\n", slot, reason);
         state.failFxToggleRequest(slot);
     }
     clearFxRequest();
@@ -63,19 +65,21 @@ void ControllerActions::clearFxRequest() {
     sentFxModelName_.clear();
     fxChainIdentityBeforeRequest_.clear();
     fxModelObservationRevisionBeforeRequest_ = 0;
+    fxFullPresetObservationRevisionBeforeRequest_ = 0;
+    fxSentAfterAckRevision_ = 0;
+    sentFxMessageNumber_ = 0;
+    fxFullPresetQueryIssued_ = false;
 }
 
 void ControllerActions::process(SparkDataControl &dataControl) {
     const ControllerSnapshot &snapshot = state_.snapshot();
-    if (snapshot.connectionPhase == ControllerConnectionPhase::Scanning ||
-        snapshot.connectionPhase == ControllerConnectionPhase::Reconnecting ||
-        snapshot.connectionPhase == ControllerConnectionPhase::Identifying) {
+    if (!SparkDataControl::isAmpConnected()) {
         currentPresetQueryIssued_ = false;
         // A BLE loss makes any unconfirmed effect command unknowable. The
         // ControllerState has already made the rendered value stale; discard
         // action metadata as well so it cannot be mistaken for a later link.
         if (hasPendingFxOperation()) {
-            cancelFxRequest(state_, nullptr, false);
+            cancelFxRequest(state_, nullptr, false, "BLE disconnected");
         }
         return;
     }
@@ -83,7 +87,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     // The legacy startup flow fetches the complete current preset but not its
     // hardware-preset number. The controller cannot safely enable a preset
     // action until that separate Spark-owned value has been observed.
-    if (snapshot.connectionPhase == ControllerConnectionPhase::Syncing &&
+    if (!hasPendingFxOperation() && snapshot.connectionPhase == ControllerConnectionPhase::Syncing &&
         (!currentPresetQueryIssued_ || millis() - currentPresetQueryAtMs_ >= kPresetTimeoutMs)) {
         Serial.println("Controller: requesting current hardware preset");
         currentPresetQueryIssued_ = dataControl.getCurrentPresetNum();
@@ -131,36 +135,55 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     }
 
     if (sentFxSlot_ != kNoFxSlot) {
-        if (snapshot.connectionPhase != ControllerConnectionPhase::Ready || snapshot.sparkStateStale ||
-            sentFxSlot_ >= snapshot.fxSlots.size() ||
-            snapshot.fxChainIdentity != fxChainIdentityBeforeRequest_ ||
-            snapshot.confirmedHardwarePreset != fxHardwarePresetBeforeRequest_) {
-            // A preset/chain or link transition makes the command target
-            // ambiguous. Do not retarget it to whatever happens to be loaded.
-            cancelFxRequest(state_, &dataControl, true);
+        if (sentFxSlot_ >= snapshot.fxSlots.size()) {
+            cancelFxRequest(state_, &dataControl, true, "invalid FX slot");
             return;
         }
 
         const ControllerFxSlot &fx = snapshot.fxSlots[sentFxSlot_];
-        if (!fx.known || fx.modelName != sentFxModelName_) {
-            cancelFxRequest(state_, &dataControl, true);
+        const bool fullPresetObservedAfterSend =
+            SparkDataControl::fullPresetObservationRevision() != fxFullPresetObservationRevisionBeforeRequest_;
+        if (fullPresetObservedAfterSend &&
+            (!fx.known || fx.modelName != sentFxModelName_ || snapshot.fxChainIdentity != fxChainIdentityBeforeRequest_)) {
+            // Only an applied full-preset response can establish a target
+            // chain change. NEO's transient unknown hardware-preset number
+            // and Syncing phase are not such a change.
+            cancelFxRequest(state_, &dataControl, true, "Spark full preset changed target model/chain");
             return;
         }
 
-        // A final ACK only says the transport saw an acknowledgement. The
-        // controller confirms solely when its exact Spark model is freshly
-        // observed in the requested bypass/on-off state. The before-value
-        // guard prevents pending metadata itself from being treated as proof.
+        // A direct FX_ONOFF update is the preferred confirmation path.
         const bool modelObservedAfterSend =
             SparkDataControl::fxModelObservationRevision(sentFxModelName_) != fxModelObservationRevisionBeforeRequest_;
         if (modelObservedAfterSend && fx.enabled == sentFxDesiredEnabled_ &&
             fx.enabled != fxEnabledBeforeRequest_) {
-            Serial.printf("Controller: FX %u (%s) confirmed by Spark\n", sentFxSlot_, sentFxModelName_.c_str());
+            Serial.printf("Controller: FX %u (%s) confirmed by FX_ONOFF\n", sentFxSlot_, sentFxModelName_.c_str());
             state_.confirmFxToggleRequest(sentFxSlot_);
             clearFxRequest();
+        } else if (modelObservedAfterSend && fx.known && fx.modelName == sentFxModelName_ &&
+                   fx.enabled != sentFxDesiredEnabled_) {
+            cancelFxRequest(state_, &dataControl, true, "FX_ONOFF reported conflicting state");
+        } else if (fullPresetObservedAfterSend && fx.known && fx.modelName == sentFxModelName_ &&
+                   fx.enabled == sentFxDesiredEnabled_ && fx.enabled != fxEnabledBeforeRequest_) {
+            Serial.printf("Controller: FX %u (%s) confirmed by full preset response\n", sentFxSlot_, sentFxModelName_.c_str());
+            state_.confirmFxToggleRequest(sentFxSlot_);
+            clearFxRequest();
+        } else if (fullPresetObservedAfterSend && fx.known && fx.modelName == sentFxModelName_ &&
+                   fx.enabled != sentFxDesiredEnabled_) {
+            cancelFxRequest(state_, &dataControl, true, "full preset reported conflicting FX state");
+        } else if (!fxFullPresetQueryIssued_ &&
+                   SparkDataControl::finalAckRevision() != fxSentAfterAckRevision_) {
+            const AckData ack = SparkDataControl::lastFinalAck();
+            fxSentAfterAckRevision_ = SparkDataControl::finalAckRevision();
+            if (ack.subcmd == 0x15 && ack.msgNum == sentFxMessageNumber_) {
+                // NEO Core can ACK an effect change without a separate
+                // FX_ONOFF event. The ACK starts a query; it never confirms.
+                fxFullPresetQueryIssued_ = dataControl.getCurrentPresetFromSpark();
+                Serial.printf("Controller: FX %u ACK received; querying full preset (%s)\n", sentFxSlot_,
+                              fxFullPresetQueryIssued_ ? "sent" : "send failed");
+            }
         } else if (millis() - fxSentAtMs_ >= kFxTimeoutMs) {
-            Serial.printf("Controller: FX %u confirmation timed out; resyncing\n", sentFxSlot_);
-            cancelFxRequest(state_, &dataControl, true);
+            cancelFxRequest(state_, &dataControl, true, "confirmation timed out");
         }
         return;
     }
@@ -172,12 +195,17 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             return;
         }
 
-        if (snapshot.connectionPhase != ControllerConnectionPhase::Ready || snapshot.sparkStateStale ||
-            queuedFxSlot_ >= snapshot.fxSlots.size() ||
-            snapshot.fxSlots[queuedFxSlot_].modelName != queuedFxModelName_ ||
-            snapshot.fxChainIdentity != fxChainIdentityBeforeRequest_ ||
-            snapshot.confirmedHardwarePreset != fxHardwarePresetBeforeRequest_) {
-            cancelFxRequest(state_, &dataControl, true);
+        if (queuedFxSlot_ >= snapshot.fxSlots.size()) {
+            cancelFxRequest(state_, &dataControl, true, "invalid queued FX slot");
+            return;
+        }
+        const bool fullPresetObservedBeforeSend =
+            SparkDataControl::fullPresetObservationRevision() != fxFullPresetObservationRevisionBeforeRequest_;
+        const ControllerFxSlot &queuedFx = snapshot.fxSlots[queuedFxSlot_];
+        if (fullPresetObservedBeforeSend &&
+            (!queuedFx.known || queuedFx.modelName != queuedFxModelName_ ||
+             snapshot.fxChainIdentity != fxChainIdentityBeforeRequest_)) {
+            cancelFxRequest(state_, &dataControl, true, "Spark full preset changed queued target model/chain");
             return;
         }
 
@@ -186,7 +214,8 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         // incoming FX_ONOFF update for this exact model may confirm success.
         const uint32_t observationBeforeSend =
             SparkDataControl::fxModelObservationRevision(queuedFxModelName_);
-        if (SparkDataControl::switchEffectOnOff(queuedFxModelName_, queuedFxDesiredEnabled_)) {
+        uint8_t messageNumber = 0;
+        if (SparkDataControl::switchEffectOnOff(queuedFxModelName_, queuedFxDesiredEnabled_, &messageNumber)) {
             sentFxSlot_ = queuedFxSlot_;
             sentFxDesiredEnabled_ = queuedFxDesiredEnabled_;
             sentFxModelName_ = queuedFxModelName_;
@@ -194,10 +223,14 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             queuedFxModelName_.clear();
             fxSentAtMs_ = millis();
             fxModelObservationRevisionBeforeRequest_ = observationBeforeSend;
+            fxFullPresetObservationRevisionBeforeRequest_ = SparkDataControl::fullPresetObservationRevision();
+            fxSentAfterAckRevision_ = SparkDataControl::finalAckRevision();
+            sentFxMessageNumber_ = messageNumber;
+            fxFullPresetQueryIssued_ = false;
             Serial.printf("Controller: sending FX %u (%s) %s\n", sentFxSlot_, sentFxModelName_.c_str(),
                           sentFxDesiredEnabled_ ? "on" : "off");
         } else {
-            cancelFxRequest(state_, &dataControl, true);
+            cancelFxRequest(state_, &dataControl, true, "Spark command send failed");
         }
         return;
     }

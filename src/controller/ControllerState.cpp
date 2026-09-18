@@ -10,12 +10,13 @@ constexpr uint8_t kFxSlotCount = 6;
 constexpr uint8_t kPedalIndices[kFxSlotCount] = {0, 1, 2, 4, 5, 6};
 constexpr const char *kFxLabels[kFxSlotCount] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};
 
-std::string makeFxChainIdentity(const Preset &preset, uint8_t hardwarePreset) {
+std::string makeFxChainIdentity(const Preset &preset) {
     // UUID is the strongest identity supplied by a full preset. Older/cache
-    // paths can omit it, so include the observed slot models and hardware
-    // preset as a stable fallback rather than trusting the display name alone.
+    // paths can omit it, so include the observed slot models as a stable
+    // fallback rather than trusting the display name alone. The hardware
+    // preset number is deliberately excluded: NEO Core can transiently
+    // report it as unknown during an otherwise unchanged FX command.
     std::string identity = preset.uuid.empty() ? "preset:" + preset.name : "uuid:" + preset.uuid;
-    identity += "|hw:" + std::to_string(hardwarePreset);
     for (uint8_t pedalIndex : kPedalIndices) {
         identity += "|";
         if (preset.pedals.size() > pedalIndex) {
@@ -68,7 +69,7 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     }
     const int reportedPreset = status.currentPresetNumber();
     next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= 4 ? reportedPreset : 0;
-    next.fxChainIdentity = makeFxChainIdentity(activePreset, next.confirmedHardwarePreset);
+    next.fxChainIdentity = makeFxChainIdentity(activePreset);
     next.identityKnown = dataControl.ampNameReceived() && !next.ampName.empty();
     next.connectionPhase = !next.identityKnown
                                ? ControllerConnectionPhase::Identifying

@@ -258,13 +258,21 @@ On user toggle:
 2. set pending desired state.
 3. capture the exact Spark effect model name plus current preset/chain identity,
    then send that model's explicit on/off command (never a generic toggle).
+   The hardware-preset number is not part of that chain identity: NEO Core can
+   transiently report it as unknown while an unchanged chain is processing an
+   FX command.
 4. render pending distinctly.
-5. confirm only when a post-send incoming FX observation for that same model
-   shows the requested state. A final transport ACK, controller render
-   revision, or pending-state mutation is not state confirmation.
-6. cancel/fail if the link, hardware preset, or signal-chain/model identity
-   changes while pending; on failure/timeout, clear pending and resync the
-   current preset/effect state.
+5. confirm only when either a post-send incoming FX_ONOFF observation for that
+   same model or a post-send authoritative full-preset response shows the
+   requested state. A final transport ACK, controller render revision, or
+   pending-state mutation is not state confirmation. On NEO Core, a matching
+   final `0x15` ACK may trigger the full-preset query because the amp can omit
+   FX_ONOFF; it never confirms the tile by itself.
+6. cancel/fail on disconnect, timeout, a conflicting fresh FX observation, or
+   a full-preset response that proves the target model/chain changed. Do not
+   cancel solely because the hardware-preset number temporarily becomes
+   unknown or ControllerState enters Syncing; on failure/timeout, clear
+   pending and resync the current preset/effect state.
 
 Current Ignitron code already has pending/active concepts in SparkPresetControl; preserve the concept but expose it cleanly to the controller state model.
 

@@ -38,14 +38,18 @@ private:
     bool queuedFxDesiredEnabled_ = false;
     bool sentFxDesiredEnabled_ = false;
     bool fxEnabledBeforeRequest_ = false;
-    uint8_t fxHardwarePresetBeforeRequest_ = 0;
     std::string queuedFxModelName_;
     std::string sentFxModelName_;
     std::string fxChainIdentityBeforeRequest_;
     uint32_t fxSentAtMs_ = 0;
     uint32_t fxModelObservationRevisionBeforeRequest_ = 0;
+    uint32_t fxFullPresetObservationRevisionBeforeRequest_ = 0;
+    uint32_t fxSentAfterAckRevision_ = 0;
+    uint8_t sentFxMessageNumber_ = 0;
+    bool fxFullPresetQueryIssued_ = false;
 
     bool hasPendingFxOperation() const;
-    void cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh);
+    void cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh,
+                         const char *reason);
     void clearFxRequest();
 };

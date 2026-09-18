@@ -149,8 +149,13 @@ Implication:
 - do not permanently flip tile simply because user touched it.
 - do not use a final transport ACK as confirmation; it only proves the command
   reached the protocol acknowledgement path.
-- confirm only after a post-send FX_ONOFF observation for the same requested
-  effect model reports the requested state in fresh Spark-owned preset data.
+- confirm only after either a post-send FX_ONOFF observation for the same
+  requested effect model, or a post-send full-preset response that reports
+  that exact model in the requested state. Both observations must be applied
+  to SparkPresetControl before ControllerActions consumes them.
+- NEO Core may return the final `0x15` transport ACK without an FX_ONOFF
+  notification. For the matching serialized action, use that ACK only to
+  request the full current preset; the ACK itself is never confirmation.
 - the protocol does not correlate that observation to a specific outgoing
   command. A matching external Spark/App event after the request is therefore
   indistinguishable from the controller's result and resolves to the same
