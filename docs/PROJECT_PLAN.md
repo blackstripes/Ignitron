@@ -4,10 +4,12 @@ This fork is being used as the software base for a standalone DIY foot controlle
 
 ## Current status
 
-Development branch: `feature/headless-serial-cli`
+The authoritative development branch is `main`. New Codex and Astra sessions
+must start from `main`. `feature/headless-serial-cli` is historical branch
+history and is retained temporarily for rollback/reference only.
 
-That branch contains the PanelLan touchscreen controller path used to exercise
-the Spark protocol without physical buttons, LEDs, or an OLED. The
+`main` contains the PanelLan touchscreen controller path used to exercise the
+Spark protocol without physical buttons, LEDs, or an OLED. The
 `panelan-sc05x` target now builds and has been manually verified on hardware:
 touch can change the four hardware presets on a Spark NEO Core, and the
 controller reconnects after the headphones are power-cycled. See
@@ -346,9 +348,9 @@ Do not entangle the first S3 bring-up with all displays and switches at once.
 
 ## Recommended development sequence for Codex
 
-### Milestone 1 — stabilize the current headless branch
+### Milestone 1 — stabilize the current headless implementation on main
 
-- Review the current `feature/headless-serial-cli` diff.
+- Review the current `main` implementation and its recent history.
 - Build `esp32dev-headless` with PlatformIO.
 - Fix compile/link issues.
 - Ensure headless boot does not touch OLED/button/LED hardware.

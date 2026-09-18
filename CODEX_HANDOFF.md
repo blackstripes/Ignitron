@@ -1,8 +1,10 @@
 # Codex Handoff — Current Implementation Direction
 
-Work from branch:
+Work from branch: `main`.
 
-`feature/headless-serial-cli`
+`main` is the authoritative development branch. New Codex and Astra sessions
+must start from `main`. `feature/headless-serial-cli` is preserved as historical
+branch history only; do not start new work there.
 
 This file is the current starting point for a new Codex session. Older milestone text elsewhere may describe work that has already been completed; use the documents below as the authoritative current plan.
 
@@ -35,7 +37,8 @@ Before changing architecture or UI, read:
 4. [docs/AMP_BEHAVIOR.md](docs/AMP_BEHAVIOR.md)
 5. [docs/UI_DESIGN.md](docs/UI_DESIGN.md)
 6. [docs/LVGL_ARCHITECTURE.md](docs/LVGL_ARCHITECTURE.md)
-7. [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md)
+7. [docs/ARCHITECTURE_REVIEW_NEXT_STEPS.md](docs/ARCHITECTURE_REVIEW_NEXT_STEPS.md)
+8. [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md)
 
 Visual target:
 
@@ -141,7 +144,12 @@ Comp/Wah is a single slot containing one current model. Toggling it bypasses/ena
 
 ## Immediate implementation task
 
-Do **not** recreate all concept screens in one pass.
+Do **not** recreate all concept screens in one pass. Before the LVGL work below,
+complete the architecture-correction gate in
+[docs/ARCHITECTURE_REVIEW_NEXT_STEPS.md](docs/ARCHITECTURE_REVIEW_NEXT_STEPS.md).
+In particular, do not treat the current legacy ACK/pending behavior as the
+new controller's confirmation contract, and do not rely on the Arduino loop
+as proof that protocol state has a single owner.
 
 ### Phase 1 — isolated LVGL bring-up
 
@@ -306,7 +314,7 @@ Ask Astra to focus on:
 
 A new Codex session can be started with:
 
-> Work on `feature/headless-serial-cli`. Read `CODEX_HANDOFF.md` and every document in its Required reading order before changing code. The next milestone is the LVGL architecture described in `docs/LVGL_ARCHITECTURE.md`: add an isolated LVGL bring-up target first, preserve the working PanelLan/LovyanGFX hardware path, prove display/touch, then prove LVGL + Spark BLE coexistence. Introduce ControllerState/ControllerActions before expanding the polished UI. Do not add mini TFTs, MCP23017, or rewrite Spark protocol. Respect the state semantics in STATE_MODEL.md and behavior rules in INTERACTION_SPEC.md/AMP_BEHAVIOR.md. Stop after the first polished Home/Preset screen and document versions, memory, BLE behavior, and remaining risks for review.
+> Work on `main`. Read `CODEX_HANDOFF.md` and every document in its Required reading order before changing code. The next milestone is the LVGL architecture described in `docs/LVGL_ARCHITECTURE.md`: add an isolated LVGL bring-up target first, preserve the working PanelLan/LovyanGFX hardware path, prove display/touch, then prove LVGL + Spark BLE coexistence. Introduce ControllerState/ControllerActions before expanding the polished UI. Do not add mini TFTs, MCP23017, or rewrite Spark protocol. Respect the state semantics in STATE_MODEL.md and behavior rules in INTERACTION_SPEC.md/AMP_BEHAVIOR.md. Stop after the first polished Home/Preset screen and document versions, memory, BLE behavior, and remaining risks for review.
 
 ## Definition of success for this handoff
 
