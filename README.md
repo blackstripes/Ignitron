@@ -62,15 +62,16 @@ This fork also includes an ESP32-S3 touchscreen-controller target for the
 profile: it uses the board's 2.8-inch ST7789 display and FT5x06 touch panel in
 landscape, and does not use the original OLED, LED, or footswitch GPIO setup.
 
-The current milestone is a direct BLE controller: the touchscreen selects the
-four Spark hardware presets and the screen shows the connected Spark model and
-serial number. It has been manually verified with a Spark NEO Core, including a
-headphone power-cycle and automatic reconnection.
+The current controller uses LVGL for polished Home/Preset, FX, Tuner, and
+Device screens. It shows connected Spark identity/serial, supports confirmed
+preset and FX actions, and has been hardware-tested with Spark 2 native tuner
+entry/exit, live note/cents display, and native mute behavior. Spark 2 internal
+looper control remains a capability-gated work in progress.
 
 Build the controller firmware with:
 
 ```
-pio run -e panelan-sc05x
+pio run -e panelan-lvgl-controller
 ```
 
 For a display-and-touch-only smoke test, use `panelan-display-bringup` instead.

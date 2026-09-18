@@ -1,12 +1,12 @@
-# Architecture Review — Required Next Steps
+# Archived Architecture Review — Implemented Foundations
 
 This document records the architecture/design review of
 `feature/headless-serial-cli` at commit
 `a393c24a9db5e089e68d5f143a2e6250c272c915`.
 
-It is a gate for the next implementation phase. The project should **revise
-the architecture contracts before integrated UI coding**, while allowing a
-strictly isolated LVGL display/touch spike.
+This is a historical review, not the current implementation gate. Its LVGL,
+state/action, and external-tuner ownership corrections informed the current
+PanelLan controller; consult `CODEX_HANDOFF.md` for active work.
 
 ## Decision
 
@@ -282,7 +282,9 @@ BLE, and the background preset-cache task is disabled so it cannot race the
 future command owner. The PanelLan boots, serial CLI is available, and BLE
 scanning and a live Spark connection were observed after flashing.
 
-Next, add one preset action only after the canonical action boundary exists.
+At the time of this review, the next step was one preset action after the
+canonical action boundary existed. That action and the subsequent FX/tuner
+work are now implemented; see `CODEX_HANDOFF.md` for current work.
 Instrument action ID, connection epoch, wire message number, ACK,
 notification, and observed state. Exercise repeated Spark power cycles,
 unavailable remembered targets, rapid requests, and delayed/lost response

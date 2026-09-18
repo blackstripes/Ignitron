@@ -237,8 +237,10 @@ Controller sends native tuner ON and relies on amp.
 
 ### While tuner active
 
-- main display dedicated to tuner.
-- normal preset/FX/looper touch controls hidden.
+- main display presents the tuner as the active performance view.
+- bottom navigation remains visible with stable labels. Tapping TUNER exits to
+  the prior view; tapping another destination exits first and opens it.
+- normal preset/FX/looper actions remain suppressed until tuner exits.
 - MODE exits tuner only.
 - TAP/TUNER exits tuner.
 - six main performance footswitches do not send their normal actions.
@@ -250,7 +252,8 @@ Spark 2's own hardware lets TAP/TUNER or a Preset button exit tuner. Safer contr
 
 1. phase Exiting.
 2. send tuner OFF.
-3. wait for tuner-off confirmation or tested equivalent.
+3. wait for tuner-off confirmation or use the tested preset-mode exit path on
+   Spark 2, which does not reliably publish a distinct tuner-off event.
 4. return previous performance view.
 5. do not send FX restore sequence.
 6. resync current preset/effects if uncertain.

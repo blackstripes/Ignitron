@@ -1,5 +1,11 @@
 # LVGL Architecture and UI Implementation Plan
 
+> Status (2026-09-18): the LVGL controller target, display/touch bring-up,
+> BLE coexistence, canonical preset/FX actions, and polished Home/FX/Tuner/
+> Device screens are implemented on PanelLan hardware. The rollout sections
+> below are retained as architecture rationale; current work starts with
+> verified Spark 2 looper state/actions, not another LVGL bring-up.
+
 This document defines the implementation path for the polished main touchscreen UI shown in the Ignitron concept artwork.
 
 Read first:
@@ -563,7 +569,7 @@ The LVGL path is acceptable only if all are true:
 
 If these fail, fix the port before adding more screens.
 
-## Model / agent execution strategy
+## Historical model / agent execution strategy
 
 Recommended development workflow:
 
@@ -622,7 +628,7 @@ After Preset + FX + Tuner work with real hardware, ask Astra to audit:
 - capability gating
 - whether any amp-native behavior was unnecessarily reimplemented
 
-## First Codex task
+## Historical first Codex task
 
 Codex should not immediately recreate all six concept screens.
 
@@ -647,4 +653,5 @@ Do not:
 - replace the PanelLan hardware path with a generic ST7789 implementation.
 - couple LVGL widgets directly to SparkDataControl.
 
-The next implementation phase begins only after LVGL bring-up + BLE coexistence are stable.
+That implementation gate has passed; the active next phase is documented in
+`CODEX_HANDOFF.md`.

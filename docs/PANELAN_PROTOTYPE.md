@@ -15,7 +15,7 @@ small displays are a later hardware milestone.
 | Touch | FT5x06 capacitive touch |
 | Firmware orientation | Landscape (320x240 logical pixels) |
 | Board support | PanelLan Arduino library with LovyanGFX `BOARD_SC05_X` |
-| Verified Spark | Spark NEO Core, serial `SHP11H15802392E` |
+| Verified Spark | Spark NEO Core and Spark 2 (tuner path) |
 
 The display is deliberately rotated to landscape in `PanelLanDisplay::begin()`.
 LovyanGFX rotates touch coordinates along with the display, so touch targets
@@ -26,8 +26,8 @@ are defined in the same 320x240 coordinate system as the UI.
 Use the PanelLan-specific PlatformIO environment:
 
 ```sh
-pio run -e panelan-sc05x
-pio run -e panelan-sc05x -t upload
+pio run -e panelan-lvgl-controller
+pio run -e panelan-lvgl-controller -t upload
 ```
 
 It is configured for the ESP32-S3, 8 MB flash, QSPI PSRAM, and USB CDC. The
@@ -47,25 +47,26 @@ normal Spark testing.
 
 ## Current UI and behavior
 
-- Landscape player UI with a connection card and four large hardware-preset
-  buttons.
-- The connection card displays Spark model and serial number after the Spark
-  identity handshake. This is the authoritative way to see which nearby Spark
-  device is actually connected.
-- A touch sends one preset command per tap; holding a finger down must not
-  repeatedly send commands.
+- LVGL player UI with Home/Preset, FX, gated Looper, Tuner, and Device screens.
+- Preset and FX requests travel through `ControllerActions`; the visible value
+  stays pending until a fresh Spark-owned observation confirms it.
+- Spark 2 tuner supports display entry/exit and external observation, live
+  note/cents rendering, native amp mute, and stable bottom navigation. A
+  tuner-destination tap exits tuner before opening that destination.
+- Device shows Spark model, amp serial, Bluetooth connection state, and tone
+  freshness. Multi-device selection is still pending.
 - On a Spark reboot, the BLE client refreshes GATT services and subscribes
   again before it considers the connection usable.
 
 The original OLED, LEDs, and footswitch source files are excluded from this
 target because their legacy GPIO initialization overlaps the PanelLan LCD bus.
 
-## Multi-device connection design
+## Deferred multi-device connection design
 
 The desired experience supports both a Spark NEO Core and a Spark 2; the
 controller must not be permanently locked to either one.
 
-The next BLE/UI increment will implement this flow:
+This remains a follow-up after looper/interoperability work:
 
 1. Persist the last successfully connected Spark BLE address, together with
    its displayed model and serial.
@@ -101,18 +102,9 @@ The current hardware prototype should now be evolved using:
 
 The prototype's current direct preset switching is a proven transport/UI checkpoint, not the final state architecture. New controls should route through the shared controller-state/action model rather than adding more direct callbacks from individual UI widgets into SparkDataControl.
 
-## Next UI framework checkpoint
+## Next controller checkpoint
 
-The next main-screen implementation uses **LVGL 9.x** above the existing working PanelLan/LovyanGFX display/touch path.
-
-Do not replace this known-good hardware support during the LVGL migration.
-
-Follow [LVGL_ARCHITECTURE.md](LVGL_ARCHITECTURE.md):
-
-1. isolated LVGL display/touch bring-up,
-2. LVGL + Spark BLE coexistence,
-3. canonical ControllerState/ControllerActions,
-4. first polished Home/Preset screen,
-5. review before broad screen expansion.
-
-The current raw PanelLan UI remains the fallback/reference checkpoint until the LVGL path proves equivalent BLE/display/touch reliability.
+LVGL 9.x is now running above the known-good PanelLan/LovyanGFX path. Do not
+replace that board support. The next controller checkpoint is verified Spark 2
+internal-looper capability/state, followed by tap-tempo and interoperability
+testing before external physical controls are added.

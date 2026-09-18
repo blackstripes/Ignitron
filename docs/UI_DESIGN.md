@@ -342,33 +342,27 @@ Examples:
 
 A simple capability structure keyed from verified amp identity is preferable to scattered string comparisons throughout the UI.
 
-## Immediate implementation sequence
+## Implementation status and next sequence
 
 ### UI milestone A — navigation shell
 
-- Add a screen enum/state machine
-- Persistent compact connection header
-- Touchscreen navigation between Preset / FX / Looper / Tuner / Device
-- Keep current working preset buttons functional
+- Complete: screen state, persistent connection header, and touchscreen
+  navigation between Preset / FX / Looper / Tuner / Device.
 
 ### UI milestone B — trustworthy preset state
 
-- Show current preset number/name from Spark
-- Highlight the actual active preset
-- Ensure reconnect refreshes state correctly
+- Complete: current preset number/name, confirmed/pending presentation, and
+  reconnect refresh behavior for the current controller path.
 
 ### UI milestone C — FX
 
-- Implement 3x2 FX tile screen
-- Read effect states
-- Toggle from touch
-- Sync UI from Spark responses
+- Complete: 3x2 FX screen, Spark-owned effect state, touch actions through
+  `ControllerActions`, and fresh-observation confirmation.
 
 ### UI milestone D — tuner
 
-- Render live tuner note + cents
-- Enter/exit tuner reliably
-- Optimize for standing readability
+- Complete: live tuner note + cents, display/external entry, tested exit, and
+  standing-readable stage layout on Spark 2.
 
 ### UI milestone E — Spark 2 looper
 
@@ -457,4 +451,6 @@ The polished main-screen concept is now explicitly targeted at LVGL rather than 
 
 See [LVGL_ARCHITECTURE.md](LVGL_ARCHITECTURE.md) before implementing UI screens.
 
-The visual concept remains the design target, but implementation should first prove LVGL display/touch bring-up and BLE coexistence, then establish ControllerState/ControllerActions, and only then expand screen-by-screen.
+The visual concept remains the design target. LVGL/display/touch/BLE coexistence
+and the initial ControllerState/ControllerActions screens are complete; expand
+only through verified capability work, beginning with Spark 2 looper state.

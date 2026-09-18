@@ -37,7 +37,15 @@ Incoming Spark state events are observations, never commands to echo. For
 example, external tuner ON/OFF and tuner-output events update the local view of
 Spark-owned tuner state; handling those events must not send a native tuner
 ON/OFF command back to the amp. A tuner-output sample is positive evidence that
-the tuner remains active.
+the tuner remains active, except for the short, explicitly bounded queued-
+packet tail after a local Spark 2 tuner exit.
+
+## Implementation status
+
+`ControllerState`/`ControllerActions` currently cover connection identity,
+presets, FX actions, and Spark 2 tuner observation/entry/exit. Looper and tap
+tempo have not yet been migrated to this canonical action/state path; they must
+not introduce a competing source of truth.
 
 ## Recommended top-level model
 

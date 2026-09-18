@@ -18,12 +18,14 @@ Confirmed on physical hardware:
 - FT5x06 capacitive touch
 - landscape 320x240 UI coordinates
 - PanelLan/LovyanGFX display/touch support works
-- `panelan-sc05x` builds
+- `panelan-lvgl-controller` builds and flashes
 - direct BLE connection to Spark NEO Core works
-- touchscreen hardware-preset switching works
-- NEO Core identity/serial can be displayed
-- reconnect after NEO Core power cycle works
-- serial/headless service path exists
+- touchscreen hardware-preset and confirmed FX switching works
+- Spark 2 identity/serial, external tuner observation, display entry/exit,
+  fresh note/cents display, and native tuner mute behavior work
+- reconnect after amp power cycle works
+- serial/headless service, screenshot capture, and bounded serial observer
+  paths exist
 
 Do not regress these checkpoints.
 
@@ -142,112 +144,45 @@ Different slots may coexist. Do not invent cross-slot mutual exclusion.
 
 Comp/Wah is a single slot containing one current model. Toggling it bypasses/enables that model; it does not mean compressor and wah can both be independently enabled in the same slot.
 
-## Immediate implementation task
+## Current implementation status
 
-Do **not** recreate all concept screens in one pass. Before the LVGL work below,
-complete the architecture-correction gate in
-[docs/ARCHITECTURE_REVIEW_NEXT_STEPS.md](docs/ARCHITECTURE_REVIEW_NEXT_STEPS.md).
-In particular, do not treat the current legacy ACK/pending behavior as the
-new controller's confirmation contract, and do not rely on the Arduino loop
-as proof that protocol state has a single owner.
+The original LVGL bring-up, BLE coexistence, controller-state, and first-screen
+checkpoints are complete in `panelan-lvgl-controller`. Do not repeat them as a
+new feature effort.
 
-### Phase 1 — isolated LVGL bring-up
+Verified on the connected PanelLan/Spark hardware:
 
-Create a separate PlatformIO target, suggested:
+- polished Home/Preset, FX, Tuner, and Device screens render on the 320x240
+  PanelLan display; touch and development touch injection work;
+- preset and FX actions use `ControllerActions`; FX success is confirmed by
+  fresh Spark-owned observations rather than a transport ACK alone;
+- Spark 2 tuner can be entered from the display or externally, shows fresh
+  note/cents data, preserves stable navigation labels, and exits to the
+  selected destination; Spark performs its own tuner mute;
+- Device shows Spark identity, amp serial, connection state, and tone-state
+  freshness; and
+- serial CLI/screenshot/serial-observer tooling remains available.
 
-`panelan-lvgl-bringup`
+The next product milestone is **verified Spark 2 internal looper control**.
+Start with a protocol/capability probe, then add canonical looper state and
+actions before enabling the current gated Looper screen. Do not claim looper
+support from the touchscreen until its commands and state have been exercised
+on Spark 2 hardware.
 
-Prove:
+## Recommended next sequence
 
-- LVGL 9.x initializes
-- landscape rendering is correct
-- FT5x06 touch mapping is correct
-- touch does not repeat actions from a held finger
-- partial-buffer rendering is stable
-- free internal heap + PSRAM are logged
-- board runs for several minutes without watchdog/reset
-
-No Spark dependency is required in this target.
-
-Pin the exact LVGL version after this is known-good.
-
-### Phase 2 — LVGL + Spark BLE coexistence
-
-Integrate LVGL with the existing PanelLan application while preserving current behavior.
-
-Prove:
-
-- NEO Core still scans/connects
-- current identity display can be represented
-- preset switching still works
-- NEO power-cycle reconnect still works
-- UI remains responsive during scan/connect/reconnect
-- no watchdog/reset or obvious memory leak
-- serial CLI remains available
-
-Do not expand to all screens until this passes.
-
-### Phase 3 — ControllerState / ControllerActions skeleton
-
-Introduce the minimum canonical state/action architecture described in the specs.
-
-Route the existing preset control through it.
-
-Required first state:
-
-- connection phase
-- device identity
-- current/confirmed preset
-- pending preset
-- stale/unknown semantics
-- current controller view
-
-Do not rewrite Spark protocol internals without demonstrated need.
-
-### Phase 4 — first polished LVGL screen
-
-Build the Home/Preset screen using reusable LVGL components:
-
-- StatusHeader
-- PerformanceTile
-- StatusBadge
-- navigation shell/theme
-
-It must visually distinguish:
-
-- confirmed
-- pending
-- unknown
-- stale
-- disconnected/reconnecting
-
-Use the concept art as visual direction, not pixel-perfect layout.
-
-### Stop point
-
-After Phase 4, stop the broad feature expansion and document:
-
-- exact dependency versions
-- memory usage
-- measured redraw responsiveness
-- BLE behavior
-- any architecture compromises
-- any hardware assumptions still unverified
-
-At that point perform an architecture review before implementing FX/Tuner/Device/Looper screens.
-
-## Subsequent screen order
-
-After the stop-point review:
-
-1. FX
-2. Tuner
-3. Device selection
-4. Spark 2 looper after real Spark 2 verification
-5. Settings/diagnostics
-6. external mini TFT + footswitch hardware
-
-Device selection can move earlier if multiple nearby Spark devices interfere with testing.
+1. Probe Spark 2 looper commands/status through the existing serial CLI and
+   record the result in `docs/AMP_BEHAVIOR.md`.
+2. Add capability-gated `ControllerState`/`ControllerActions` looper flow;
+   preserve pending/confirmed/stale semantics and destructive-clear handling.
+3. Enable the Looper UI only for a verified capability and perform the T3–T5,
+   T9–T10 hardware matrix scenarios.
+4. Add tap-tempo through the same action boundary and verify its relationship
+   to delay and looper tempo.
+5. Exercise Spark-app interoperability, reconnect/resync, and rapid-command
+   collision cases.
+6. Only then bring up one mini TFT, shared SPI/MCP23017 inputs, and eventually
+   the physical footswitch surface.
 
 ## UI implementation rules
 
@@ -272,11 +207,13 @@ Keep working where practical:
 - `panelan-display-bringup`
 - current `panelan-sc05x`
 
-Add LVGL as a separate target first. Move it into the normal PanelLan target only after display/touch + BLE coexistence is proven.
+Use `panelan-lvgl-controller` for the current touchscreen controller. Keep the
+bring-up targets as diagnostics; do not fold unrelated hardware into the
+controller target without a focused hardware checkpoint.
 
 ## Hardware not to implement yet
 
-Do not add these during the LVGL architecture phase:
+Do not add these until looper/state interoperability is stable:
 
 - six ST7735S mini displays
 - MCP23017 switch expansion
@@ -286,18 +223,20 @@ Do not add these during the LVGL architecture phase:
 
 Those come after the main UI/state architecture is stable.
 
-## Model / agent workflow recommendation
+## Review workflow recommendation
 
 For the operator running Codex:
 
-- use **Sol High** for the initial LVGL integration, ControllerState/ControllerActions split, BLE/UI boundary, and first reusable UI architecture.
-- use **Sol Medium** for individual screens and repetitive implementation after architecture stabilizes.
-- use **Astra** as a review gate, not as the default implementation model.
+- use ordinary implementation/review capacity for bounded UI and controller
+  work; keep protocol research evidence-based;
+- use Astra for visual or unusually cross-cutting review, not as the default
+  implementation path.
 
 Recommended Astra reviews:
 
-1. after Codex proposes/implements the LVGL + state architecture but before broad screen implementation.
-2. after Preset + FX + Tuner work on real hardware.
+1. before enabling Spark 2 looper controls;
+2. after the looper/physical-control integration changes task ownership or
+   state boundaries.
 
 Ask Astra to focus on:
 
@@ -314,17 +253,17 @@ Ask Astra to focus on:
 
 A new Codex session can be started with:
 
-> Work on `main`. Read `CODEX_HANDOFF.md` and every document in its Required reading order before changing code. The next milestone is the LVGL architecture described in `docs/LVGL_ARCHITECTURE.md`: add an isolated LVGL bring-up target first, preserve the working PanelLan/LovyanGFX hardware path, prove display/touch, then prove LVGL + Spark BLE coexistence. Introduce ControllerState/ControllerActions before expanding the polished UI. Do not add mini TFTs, MCP23017, or rewrite Spark protocol. Respect the state semantics in STATE_MODEL.md and behavior rules in INTERACTION_SPEC.md/AMP_BEHAVIOR.md. Stop after the first polished Home/Preset screen and document versions, memory, BLE behavior, and remaining risks for review.
+> Work on `main`. Read `CODEX_HANDOFF.md` and every document in its Required reading order before changing code. The PanelLan LVGL controller, Home/FX/Tuner/Device screens, canonical preset/FX actions, and Spark 2 tuner path are already implemented and hardware-tested. The next milestone is capability-gated Spark 2 internal looper control: first probe the existing protocol/CLI on hardware, record evidence, then add canonical state/actions and truthful UI. Preserve the PanelLan/LovyanGFX path, one LVGL owner, and the distinction between pending intent and Spark-confirmed state. Do not add mini TFTs, MCP23017, or expression hardware yet.
 
 ## Definition of success for this handoff
 
 The next phase is successful when:
 
-- LVGL runs reliably on the exact PanelLan hardware.
-- touch works correctly in landscape.
-- BLE connection/reconnect remains stable.
-- current preset control still works.
-- controller state has a clean authoritative/pending model.
-- first polished Preset/Home screen uses reusable components.
+- Spark 2 looper capability, commands, and authoritative status are measured
+  on hardware;
+- looper actions share the same controller boundary as touch, CLI, and future
+  footswitches;
+- the Looper screen never presents an invented transport state;
+- tuner/preset/FX behavior survives looper testing, reconnect, and external
+  Spark/App changes; and
 - no mini-display hardware has been prematurely entangled.
-- docs record what was measured rather than guessed.

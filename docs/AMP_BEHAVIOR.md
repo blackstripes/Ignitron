@@ -221,8 +221,8 @@ https://help.positivegrid.com/hc/en-us/articles/28134103894157-Technical-Specifi
 | Behavior | Spark 2 | NEO Core | Controller rule |
 | --- | --- | --- | --- |
 | Direct BLE preset switching | needs final Spark 2 validation in this fork | Verified on hardware | native preset command |
-| Tuner protocol | exists in Ignitron; hardware validation needed | native ON probe produced no ON/OFF event or pitch sample in 5 s | keep capability-gated |
-| Tuner mutes output | Verified by Positive Grid | unknown | rely on amp; do not simulate |
+| Tuner protocol | Verified on hardware: local/external entry, exit path, and pitch samples | native ON probe produced no ON/OFF event or pitch sample in 5 s | capability-gate by evidence |
+| Tuner mutes output | Verified by Positive Grid and hardware | unknown | rely on amp; do not simulate |
 | Tuner turns FX bypass states off | Not documented | unknown | assume no; never rewrite FX for tuner |
 | Tap tempo amp-native | Verified by Positive Grid | device-specific validation needed | native tap logic |
 | Internal looper | Supported | no onboard looper documented | show only on verified supported device |
@@ -269,6 +269,11 @@ Expected controller behavior unless disproven:
 6. verify preset/FX state.
 
 Goal: prove controller tuner matches native amp tuner.
+
+**2026-09-18 result:** PanelLan display entry/exit, native mute, live note,
+and cents rendering were exercised on Spark 2. Spark 2 can leave a pitch packet
+queued after an explicit exit; the controller ignores that short tail so it
+does not reopen tuner. Continue recording preset/FX-resync observations here.
 
 ### T3 — Looper playback + tuner
 

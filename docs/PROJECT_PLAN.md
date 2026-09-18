@@ -8,13 +8,14 @@ The authoritative development branch is `main`. New Codex and Astra sessions
 must start from `main`. `feature/headless-serial-cli` is historical branch
 history and is retained temporarily for rollback/reference only.
 
-`main` contains the PanelLan touchscreen controller path used to exercise the
-Spark protocol without physical buttons, LEDs, or an OLED. The
-`panelan-sc05x` target now builds and has been manually verified on hardware:
-touch can change the four hardware presets on a Spark NEO Core, and the
-controller reconnects after the headphones are power-cycled. See
-[PANELAN_PROTOTYPE.md](PANELAN_PROTOTYPE.md) for the current build, wiring, UI,
-and device-selection status.
+`main` contains the `panelan-lvgl-controller` touchscreen controller path used
+to exercise the Spark protocol without the legacy buttons, LEDs, or OLED.
+Hardware verification now covers PanelLan display/touch, direct Spark BLE,
+Home/Preset and confirmed FX actions, Device identity/serial, reconnect, and
+the Spark 2 native tuner (external observation plus display entry/exit and
+fresh note/cents rendering). Spark 2 internal looper is the next major
+unimplemented control surface. See [PANELAN_PROTOTYPE.md](PANELAN_PROTOTYPE.md)
+and [CODEX_HANDOFF.md](../CODEX_HANDOFF.md) for the live status.
 
 The upstream Ignitron code is built around classic ESP32 targets and uses NimBLE for Spark communication. The final controller hardware will be ESP32-S3-based, so there will be a deliberate port step rather than assuming the stock target is drop-in compatible.
 
@@ -263,7 +264,9 @@ Keep the serial CLI in the finished firmware as a development/service interface 
 
 ## Serial/headless development mode
 
-The immediate development branch adds a first pass at headless serial control. Codex should compile-review it before assuming it works.
+The serial CLI is an existing service/diagnostic path. Keep it available while
+touch and future physical controls mature; it is the first place to probe an
+unverified Spark capability without inventing UI behavior.
 
 Desired serial commands include at least:
 
@@ -304,14 +307,14 @@ Headless mode must not require an OLED, LEDs, or physical buttons to boot. Stock
 
 The Spark 2 is the primary supported amp for this project.
 
-First functional milestone after a successful BLE connection:
+Current functional checkpoint after a successful BLE connection:
 
-1. Read amp identity / serial / current preset state.
-2. Change hardware preset.
-3. Read/update FX state.
-4. Enter/exit tuner and display tuner data.
-5. Exercise Spark 2 internal looper commands.
-6. Verify reconnect behavior after amp/controller restart.
+1. Read amp identity / serial / current preset state — verified.
+2. Change hardware preset — verified.
+3. Read/update FX state — verified for the PanelLan action path.
+4. Enter/exit tuner and display fresh note/cents data — verified on Spark 2.
+5. Exercise Spark 2 internal looper commands/status — pending.
+6. Verify reconnect behavior after amp/controller restart — ongoing matrix.
 
 The controller should use Ignitron's normal APP-mode/direct BLE path for Spark 2.
 
@@ -346,7 +349,11 @@ Important differences from classic ESP32:
 
 Do not entangle the first S3 bring-up with all displays and switches at once.
 
-## Recommended development sequence for Codex
+## Archived initial development sequence
+
+Milestones 1–5 below describe the completed initial port/LVGL rollout and are
+kept for context. The active sequence is the looper-first plan in
+`CODEX_HANDOFF.md` and the "Immediate Codex task" section below.
 
 ### Milestone 1 — stabilize the current headless implementation on main
 
@@ -379,7 +386,7 @@ Do not entangle the first S3 bring-up with all displays and switches at once.
 - Run the minimal NEO Core test sequence.
 - Document exact findings and any code differences required.
 
-### Milestone 5 — main display UI
+### Milestone 5 — main display UI (completed foundation)
 
 - Use the PanelLan/LovyanGFX support path for the onboard 2.8-inch ST7789 parallel TFT and FT5x06 touch.
 - Start with connection/preset/FX/tuner/looper status.
@@ -426,20 +433,19 @@ Do not entangle the first S3 bring-up with all displays and switches at once.
 
 ## Immediate Codex task
 
-The main touchscreen framework decision is now **LVGL 9.x**, layered over the already-working PanelLan/LovyanGFX hardware support.
+The main touchscreen framework is **LVGL 9.x** over the working
+PanelLan/LovyanGFX path; that bring-up and the first polished screens are
+complete. The next sequence is:
 
-See [LVGL_ARCHITECTURE.md](LVGL_ARCHITECTURE.md) for the complete integration and rollout plan.
-
-Current next sequence:
-
-1. Add an isolated `panelan-lvgl-bringup` target without disturbing existing known-good targets.
-2. Prove LVGL display + FT5x06 touch in landscape and log memory.
-3. Prove LVGL and the existing Spark BLE stack coexist without scan/connect/reconnect regressions.
-4. Introduce the minimum `ControllerState` / `ControllerActions` architecture from [STATE_MODEL.md](STATE_MODEL.md) and [INTERACTION_SPEC.md](INTERACTION_SPEC.md).
-5. Route the existing preset action/state through that layer.
-6. Build the first polished Home/Preset LVGL screen using reusable components/theme.
-7. Stop and document versions, memory, BLE behavior, and unresolved risks before implementing the rest of the screens.
-8. Do not add the six mini displays, MCP23017, physical switches, or expression hardware during this phase.
+1. Probe Spark 2 internal-looper commands/status through the serial CLI and
+   record actual behavior in [AMP_BEHAVIOR.md](AMP_BEHAVIOR.md).
+2. Add capability-gated canonical looper state/actions; do not create a
+   parallel looper-only UI state path.
+3. Enable the Looper screen only after a measured capability; validate clear,
+   undo/redo, preset/FX/tuner coexistence, and reconnect behavior on hardware.
+4. Add tap tempo through the same action boundary and validate shared tempo.
+5. Keep the six mini displays, MCP23017, physical switches, and expression
+   hardware deferred until this state/interoperability work is stable.
 
 The six future ST7735S displays remain simple state-driven renderers and should not each run their own LVGL UI.
 
@@ -464,7 +470,8 @@ Key direction:
 - Implement device-capability awareness so Spark-2-only controls are hidden or disabled on other devices.
 - Use reusable LVGL components/theme for the main display.
 - Keep future mini displays lightweight and state-driven rather than running separate LVGL stacks.
-- Build incrementally: isolated LVGL bring-up -> BLE coexistence -> canonical state/actions -> polished Home/Preset -> remaining screens.
+- Build incrementally: verified looper protocol -> canonical looper state/actions
+  -> truthful Looper UI -> interoperability matrix -> physical controls.
 
 ## Detailed behavior specifications
 
