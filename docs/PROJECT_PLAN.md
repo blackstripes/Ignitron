@@ -432,3 +432,19 @@ Start on `feature/headless-serial-cli`.
 4. For the S3 port, target the now-identified **PanelLan ZX2D80CE02S / SC05_X** board and its existing LovyanGFX/FT5x06 support.
 5. Do not wire all six mini displays/switches at once; bring up BLE, then main display/touch, then one mini TFT, then the expander, then the full set.
 6. Leave concise notes in the repository describing anything that still requires hardware verification.
+
+
+## UI / UX design target
+
+The detailed implementation target for the touchscreen and future mini displays is now maintained in [UI_DESIGN.md](UI_DESIGN.md).
+
+The visual concept is stored at [images/ignitron-ui-concept.jpg](images/ignitron-ui-concept.jpg).
+
+Key direction:
+- Treat the controller as a performance instrument, not a generic settings UI.
+- Main display provides performance context: preset, FX, looper, tuner, and device/connection state.
+- Six mini TFTs eventually provide dynamic per-footswitch labels and state.
+- Main touchscreen remains a complete control/debug fallback.
+- Prioritize truthful Spark-synchronized state, large touch targets, standing-height readability, and a dark stage-friendly visual hierarchy.
+- Implement device-capability awareness so Spark-2-only controls are hidden or disabled on other devices.
+- Build the UI incrementally on the already-working PanelLan display/touch target before adding external displays and footswitches.
