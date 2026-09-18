@@ -52,6 +52,8 @@ private:
     lv_obj_t *tunerNoteLabel_ = nullptr;
     lv_obj_t *tunerOffsetLabel_ = nullptr;
     lv_obj_t *tunerMessageLabel_ = nullptr;
+    lv_obj_t *tunerMeter_ = nullptr;
+    lv_obj_t *tunerFooter_ = nullptr;
     lv_obj_t *devicePage_ = nullptr;
     lv_obj_t *deviceCard_ = nullptr;
     lv_obj_t *devicePortrait_ = nullptr;

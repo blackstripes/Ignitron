@@ -7,6 +7,7 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (preset < 1 || preset > 4 || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || hasPendingFxOperation() ||
+        queuedTunerRequest_ || tunerRequestSent_ ||
         preset == snapshot.confirmedHardwarePreset) {
         return false;
     }
@@ -20,7 +21,7 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (slot >= snapshot.fxSlots.size() || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
-        queuedPreset_ != 0 || hasPendingFxOperation()) {
+        queuedPreset_ != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
         return false;
     }
 
@@ -36,6 +37,17 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
     fxChainIdentityBeforeRequest_ = snapshot.fxChainIdentity;
     fxFullPresetObservationRevisionBeforeRequest_ = SparkDataControl::fullPresetObservationRevision();
     state_.beginFxToggleRequest(slot, queuedFxDesiredEnabled_);
+    return true;
+}
+
+bool ControllerActions::requestTuner() {
+    const ControllerSnapshot &snapshot = state_.snapshot();
+    if (snapshot.tunerActive || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
+        snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
+        queuedPreset_ != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
+        return false;
+    }
+    queuedTunerRequest_ = true;
     return true;
 }
 
@@ -75,11 +87,38 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (!SparkDataControl::isAmpConnected()) {
         currentPresetQueryIssued_ = false;
+        queuedTunerRequest_ = false;
+        tunerRequestSent_ = false;
         // A BLE loss makes any unconfirmed effect command unknowable. The
         // ControllerState has already made the rendered value stale; discard
         // action metadata as well so it cannot be mistaken for a later link.
         if (hasPendingFxOperation()) {
             cancelFxRequest(state_, nullptr, false, "BLE disconnected");
+        }
+        return;
+    }
+
+    // Do not locally manufacture tuner state. A Spark TUNER_ON observation
+    // is the only confirmation that moves the controller into tuner mode.
+    if (tunerRequestSent_) {
+        if (snapshot.tunerActive) {
+            Serial.println("Controller: tuner entry confirmed by Spark");
+            tunerRequestSent_ = false;
+        } else if (millis() - tunerRequestSentAtMs_ >= kTunerTimeoutMs) {
+            Serial.println("Controller: tuner entry timed out");
+            tunerRequestSent_ = false;
+        }
+        return;
+    }
+
+    if (queuedTunerRequest_) {
+        queuedTunerRequest_ = false;
+        if (SparkDataControl::switchTuner(true)) {
+            tunerRequestSent_ = true;
+            tunerRequestSentAtMs_ = millis();
+            Serial.println("Controller: requesting tuner entry");
+        } else {
+            Serial.println("Controller: tuner entry command failed");
         }
         return;
     }

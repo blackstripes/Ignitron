@@ -17,11 +17,14 @@ public:
     // Queues one model-specific bypass/on-off request. Confirmation is based
     // exclusively on a fresh Spark-owned slot observation, never an ACK.
     bool requestFxToggle(uint8_t slot);
+    // The amp's TUNER_ON event, not this request, confirms active tuner mode.
+    bool requestTuner();
     void process(SparkDataControl &dataControl);
 
 private:
     static constexpr uint32_t kPresetTimeoutMs = 5000;
     static constexpr uint32_t kFxTimeoutMs = 5000;
+    static constexpr uint32_t kTunerTimeoutMs = 3000;
     static constexpr uint8_t kNoFxSlot = 0xFF;
     ControllerState &state_;
     uint8_t queuedPreset_ = 0;
@@ -47,6 +50,10 @@ private:
     uint32_t fxSentAfterAckRevision_ = 0;
     uint8_t sentFxMessageNumber_ = 0;
     bool fxFullPresetQueryIssued_ = false;
+
+    bool queuedTunerRequest_ = false;
+    bool tunerRequestSent_ = false;
+    uint32_t tunerRequestSentAtMs_ = 0;
 
     bool hasPendingFxOperation() const;
     void cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh,

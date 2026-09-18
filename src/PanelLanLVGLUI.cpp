@@ -2,6 +2,7 @@
 #include "controller/ControllerActions.h"
 
 #include <esp_heap_caps.h>
+#include <cmath>
 
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
 
@@ -189,6 +190,39 @@ lv_obj_t *createText(lv_obj_t *parent, const char *text, int x, int y, int width
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_set_style_text_align(label, centered ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT, 0);
     return label;
+}
+
+// The protocol's raw offset is plotted on its nominal 0..1 scale. Its cents
+// mapping has not been calibrated on hardware, so neither the color nor the
+// center tick claims that a note is in tune. Only fresh observations get a
+// pointer; out-of-range values remain visible in the numeric readout.
+void drawTunerMeter(lv_event_t *event) {
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_area_t bounds;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    const auto &snapshot = *static_cast<const ControllerSnapshot *>(lv_event_get_user_data(event));
+    auto line = [&](int x, int top, int bottom, uint32_t color, int width = 1) {
+        lv_draw_line_dsc_t dsc;
+        lv_draw_line_dsc_init(&dsc);
+        dsc.p1 = {bounds.x1 + x, bounds.y1 + top};
+        dsc.p2 = {bounds.x1 + x, bounds.y1 + bottom};
+        dsc.color = lv_color_hex(color);
+        dsc.width = width;
+        dsc.round_start = dsc.round_end = 1;
+        lv_draw_line(layer, &dsc);
+    };
+    for (int i = 0; i <= 20; ++i) {
+        const int height = i == 10 ? 22 : i % 5 == 0 ? 17 : 10;
+        line(11 + i * 13, 25 - height, 25, i == 10 ? 0xA7B6BF : 0x53636D);
+    }
+    if (snapshot.tunerActive && snapshot.tunerSampleFresh &&
+        !snapshot.tunerNote.empty() && snapshot.tunerNote != " " &&
+        std::isfinite(snapshot.tunerOffset) && snapshot.tunerOffset >= 0.0f &&
+        snapshot.tunerOffset <= 1.0f) {
+        const int x = 11 + static_cast<int>(snapshot.tunerOffset * 260.0f + 0.5f);
+        line(x, 1, 27, 0x123846, 11);
+        line(x, 1, 27, 0x4ED6F0, 5);
+    }
 }
 
 // Decorative empty states, not controls or simulated amp readings. These are
@@ -501,18 +535,34 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_add_flag(looperPage_, LV_OBJ_FLAG_HIDDEN);
 
     tunerPage_ = createPanel(detailPage_, 6, 3, 308, 160);
-    lv_obj_add_event_cb(tunerPage_, drawInstrumentEmptyState, LV_EVENT_DRAW_MAIN,
-                        reinterpret_cast<void *>(1));
+    lv_obj_set_style_bg_color(tunerPage_, lv_color_hex(0x0B151A), 0);
+    lv_obj_set_style_bg_grad_color(tunerPage_, lv_color_hex(0x03090C), 0);
     createText(tunerPage_, "TUNER", 12, 9, 115, &lv_font_montserrat_12, 0xABBAC5);
     tunerStateLabel_ = createText(tunerPage_, "UNAVAILABLE", 180, 9, 116,
                                    &lv_font_montserrat_12, 0xD9B877);
     lv_obj_set_style_text_align(tunerStateLabel_, LV_TEXT_ALIGN_RIGHT, 0);
-    tunerNoteLabel_ = createText(tunerPage_, "--", 45, 37, 218,
+    tunerNoteLabel_ = createText(tunerPage_, "--", 30, 27, 246,
                                   &lv_font_montserrat_48, 0xE1E8ED, true);
-    tunerOffsetLabel_ = createText(tunerPage_, "", 45, 115, 218,
-                                    &lv_font_montserrat_12, 0xA4B3BE, true);
-    tunerMessageLabel_ = createText(tunerPage_, "Pitch and mute are unavailable", 10, 137, 286,
-                                     &lv_font_montserrat_12, 0xB6C2CB, true);
+    tunerMeter_ = lv_obj_create(tunerPage_);
+    lv_obj_remove_style_all(tunerMeter_);
+    lv_obj_set_pos(tunerMeter_, 12, 82);
+    lv_obj_set_size(tunerMeter_, 282, 47);
+    lv_obj_remove_flag(tunerMeter_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(tunerMeter_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(tunerMeter_, drawTunerMeter, LV_EVENT_DRAW_MAIN, &latestSnapshot_);
+    createText(tunerMeter_, "0", 1, 31, 22, &lv_font_montserrat_12, 0x7E929F, true);
+    createText(tunerMeter_, "0.5", 123, 31, 36, &lv_font_montserrat_12, 0x7E929F, true);
+    createText(tunerMeter_, "1", 259, 31, 22, &lv_font_montserrat_12, 0x7E929F, true);
+    tunerOffsetLabel_ = createText(tunerPage_, "", 10, 117, 286,
+                                    &lv_font_montserrat_20, 0x4ED6F0, true);
+    tunerFooter_ = lv_obj_create(tunerPage_);
+    lv_obj_remove_style_all(tunerFooter_);
+    lv_obj_set_pos(tunerFooter_, 10, 174);
+    lv_obj_set_size(tunerFooter_, 286, 1);
+    lv_obj_set_style_bg_color(tunerFooter_, lv_color_hex(0x26343D), 0);
+    lv_obj_set_style_bg_opa(tunerFooter_, LV_OPA_COVER, 0);
+    tunerMessageLabel_ = createText(tunerPage_, "Use the amp tuner when supported", 10, 139, 286,
+                                     &lv_font_montserrat_12, 0x99ADB9, true);
     lv_obj_add_flag(tunerPage_, LV_OBJ_FLAG_HIDDEN);
 
     devicePage_ = lv_obj_create(detailPage_);
@@ -645,6 +695,9 @@ void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
     const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
     if (page <= static_cast<uint8_t>(Screen::Device)) {
         uiInstance->setActiveScreen(static_cast<Screen>(page));
+        if (page == static_cast<uint8_t>(Screen::Tuner) && uiInstance->actions_) {
+            uiInstance->actions_->requestTuner();
+        }
     }
 }
 
@@ -698,6 +751,8 @@ void PanelLanLVGLUI::renderNavigation() {
 
 void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
     const bool isFxPage = activeScreen_ == Screen::Fx;
+    const bool expandedTuner = activeScreen_ == Screen::Tuner && snapshot.tunerActive;
+    lv_obj_set_height(detailPage_, expandedTuner ? 210 : 180);
     auto showOnly = [](lv_obj_t *page, bool visible) {
         if (visible) lv_obj_remove_flag(page, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
@@ -781,18 +836,28 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         return;
     }
     if (activeScreen_ == Screen::Tuner) {
+        lv_obj_set_height(tunerPage_, snapshot.tunerActive ? 200 : 160);
+        lv_obj_set_y(tunerNoteLabel_, snapshot.tunerActive ? 29 : 36);
+        lv_obj_set_y(tunerMeter_, 89);
+        lv_obj_set_y(tunerOffsetLabel_, 142);
+        lv_obj_set_y(tunerMessageLabel_, snapshot.tunerActive ? 181 : 136);
+        showOnly(tunerMeter_, snapshot.tunerActive);
+        showOnly(tunerFooter_, snapshot.tunerActive);
+        showOnly(tunerOffsetLabel_, snapshot.tunerActive);
+        lv_obj_invalidate(tunerMeter_);
         if (!snapshot.tunerActive) {
-            lv_label_set_text(tunerStateLabel_, "UNAVAILABLE");
+            lv_label_set_text(tunerStateLabel_, "READY");
             lv_obj_set_style_text_color(tunerStateLabel_, lv_color_hex(0xD9B877), 0);
             lv_label_set_text(tunerNoteLabel_, "--");
             lv_obj_set_style_text_color(tunerNoteLabel_, lv_color_hex(0xA4B3BE), 0);
             lv_label_set_text(tunerOffsetLabel_, "");
-            lv_label_set_text(tunerMessageLabel_, "Use the amp tuner when supported");
+            lv_label_set_text(tunerMessageLabel_, "Tap TUNER to enter tuner mode");
         } else if (snapshot.tunerSampleFresh && !snapshot.tunerNote.empty() && snapshot.tunerNote != " ") {
             lv_label_set_text(tunerStateLabel_, "ACTIVE");
             lv_obj_set_style_text_color(tunerStateLabel_, lv_color_hex(0x00E65D), 0);
             lv_label_set_text(tunerNoteLabel_, snapshot.tunerNote.c_str());
             lv_obj_set_style_text_color(tunerNoteLabel_, lv_color_hex(0xF1F4F7), 0);
+            lv_obj_set_style_text_color(tunerOffsetLabel_, lv_color_hex(0x4ED6F0), 0);
             // LVGL's compact formatter does not include float formatting on
             // this target. Render the parsed raw offset with integer pieces
             // so a live sample can never leave a literal "%f" on screen.
@@ -801,14 +866,15 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
             const int magnitude = offsetMilli >= 0 ? offsetMilli : -offsetMilli;
             lv_label_set_text_fmt(tunerOffsetLabel_, "OFFSET %c%d.%03d",
                                   offsetMilli >= 0 ? '+' : '-', magnitude / 1000, magnitude % 1000);
-            lv_label_set_text(tunerMessageLabel_, "LIVE PITCH SAMPLE");
+            lv_label_set_text(tunerMessageLabel_, "Exit tuner on your Spark");
         } else {
             lv_label_set_text(tunerStateLabel_, "ACTIVE");
             lv_obj_set_style_text_color(tunerStateLabel_, lv_color_hex(0x00E65D), 0);
             lv_label_set_text(tunerNoteLabel_, "--");
-            lv_obj_set_style_text_color(tunerNoteLabel_, lv_color_hex(0xA4B3BE), 0);
+            lv_obj_set_style_text_color(tunerNoteLabel_, lv_color_hex(0x526874), 0);
+            lv_obj_set_style_text_color(tunerOffsetLabel_, lv_color_hex(0xD9B877), 0);
             lv_label_set_text(tunerOffsetLabel_, "LISTENING");
-            lv_label_set_text(tunerMessageLabel_, "NO FRESH PITCH DATA");
+            lv_label_set_text(tunerMessageLabel_, "Play a note on your guitar");
         }
         return;
     }
