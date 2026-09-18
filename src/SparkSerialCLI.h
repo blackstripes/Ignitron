@@ -23,6 +23,7 @@ private:
     void handleBank(const String &args);
     void handleEffect(const String &args);
     void handleTuner(const String &args);
+    void handleTunerProbe(const String &args);
     void handleLooper(const String &args);
     int effectIndex(const String &name) const;
 };

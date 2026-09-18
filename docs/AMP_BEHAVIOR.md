@@ -198,7 +198,7 @@ https://help.positivegrid.com/hc/en-us/articles/28134103894157-Technical-Specifi
 | Behavior | Spark 2 | NEO Core | Controller rule |
 | --- | --- | --- | --- |
 | Direct BLE preset switching | needs final Spark 2 validation in this fork | Verified on hardware | native preset command |
-| Tuner protocol | exists in Ignitron; hardware validation needed | not yet verified | capability-gated |
+| Tuner protocol | exists in Ignitron; hardware validation needed | native ON probe produced no ON/OFF event or pitch sample in 5 s | keep capability-gated |
 | Tuner mutes output | Verified by Positive Grid | unknown | rely on amp; do not simulate |
 | Tuner turns FX bypass states off | Not documented | unknown | assume no; never rewrite FX for tuner |
 | Tap tempo amp-native | Verified by Positive Grid | device-specific validation needed | native tap logic |
@@ -328,6 +328,12 @@ Desired controller behavior:
 2. confirm tuner data.
 3. determine whether guitar output mutes.
 4. exit.
+
+**2026-09-18 probe:** `tuner probe on` sent the native command while NEO Core
+was connected. No tuner ON/OFF notification or pitch sample arrived during the
+five-second capture window. Native OFF was then sent. Audio mute could not be
+observed through serial and remains unverified. Do not enable tuner controls
+on NEO Core without a repeatable positive protocol trace.
 5. inspect preset/FX state.
 
 Only after this mark tuner Verified for NEO Core.

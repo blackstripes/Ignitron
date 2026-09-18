@@ -133,6 +133,7 @@ void SparkSerialCLI::printHelp() {
     Serial.println("  bank up|down");
     Serial.println("  fx <gate|comp|drive|mod|delay|reverb> <toggle|on|off>");
     Serial.println("  tuner on|off");
+    Serial.println("  tuner probe on|off      Native tuner diagnostic; observe serial events/audio");
     Serial.println("  tap");
     Serial.println("  loop rec|dub|recdub|play|stop|playstop|undo|redo|undoredo|clear");
     Serial.println("  loop status|config");
@@ -258,6 +259,15 @@ void SparkSerialCLI::handleEffect(const String &args) {
 }
 
 void SparkSerialCLI::handleTuner(const String &args) {
+    const int separator = args.indexOf(' ');
+    const String tunerVerb = separator < 0 ? args : args.substring(0, separator);
+    if (tunerVerb == "probe") {
+        String probeArgs = separator < 0 ? "" : args.substring(separator + 1);
+        probeArgs.trim();
+        handleTunerProbe(probeArgs);
+        return;
+    }
+
     if (!SparkDataControl::isAmpConnected()) {
         Serial.println("Spark amp is not connected.");
         return;
@@ -271,6 +281,27 @@ void SparkSerialCLI::handleTuner(const String &args) {
         Serial.println("Tuner disabled.");
     } else {
         Serial.println("Usage: tuner on|off");
+    }
+}
+
+void SparkSerialCLI::handleTunerProbe(const String &args) {
+    if (args != "on" && args != "off") {
+        Serial.println("Usage: tuner probe on|off");
+        return;
+    }
+
+    if (!SparkDataControl::isAmpConnected()) {
+        Serial.println("Spark amp is not connected.");
+        return;
+    }
+
+    const bool enable = args == "on";
+    const bool sent = SparkDataControl::switchTuner(enable);
+    if (sent) {
+        Serial.printf("Native tuner diagnostic command sent (%s). Observe incoming tuner events and amp audio; Ignitron submode was not changed.\n",
+                      enable ? "on" : "off");
+    } else {
+        Serial.println("Native tuner diagnostic command failed to send.");
     }
 }
 
