@@ -582,7 +582,7 @@ void PanelLanLVGLUI::createUi() {
                                        &lv_font_montserrat_12, 0x8FA6B5);
     deviceName_ = createText(deviceCard_, "Searching for Spark", 76, 30, 218,
                              &lv_font_montserrat_20, 0xF1F4F7);
-    deviceSerial_ = createText(deviceCard_, "SN: Not reported", 76, 59, 218,
+    deviceSerial_ = createText(deviceCard_, "", 76, 59, 218,
                                &lv_font_montserrat_12, 0xB4C0CA);
     lv_obj_t *connectionPanel = createPanel(devicePage_, 6, 97, 308, 65);
     lv_obj_set_style_bg_color(connectionPanel, lv_color_hex(0x111C22), 0);
@@ -691,7 +691,13 @@ void PanelLanLVGLUI::onFxClicked(lv_event_t *event) {
 void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
     if (uiInstance->latestSnapshot_.tunerActive) {
         const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
-        if (page == static_cast<uint8_t>(Screen::Tuner) && uiInstance->actions_) {
+        if (page <= static_cast<uint8_t>(Screen::Device) && uiInstance->actions_) {
+            // Keep the nav labels stable while tuner owns the amp. Any
+            // destination first exits tuner, then becomes the restored view.
+            // TUNER itself simply returns to the pre-tuner screen.
+            if (page != static_cast<uint8_t>(Screen::Tuner)) {
+                uiInstance->screenBeforeTuner_ = static_cast<Screen>(page);
+            }
             uiInstance->actions_->requestTuner(false);
         }
         return;
@@ -740,12 +746,8 @@ void PanelLanLVGLUI::renderNavigation() {
         lv_obj_set_style_text_color(navLabels_[i], selected ? lv_palette_main(LV_PALETTE_YELLOW)
                                                             : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
         lv_obj_set_style_text_font(navLabels_[i], &lv_font_montserrat_12, 0);
-        if (i == static_cast<uint8_t>(Screen::Tuner) && latestSnapshot_.tunerActive) {
-            lv_label_set_text(navLabels_[i], "EXIT");
-        } else {
-            static const char *kNavLabels[] = {"PRESET", "FX", "LOOPER", "TUNER", "DEVICE"};
-            lv_label_set_text(navLabels_[i], kNavLabels[i]);
-        }
+        static const char *kNavLabels[] = {"PRESET", "FX", "LOOPER", "TUNER", "DEVICE"};
+        lv_label_set_text(navLabels_[i], kNavLabels[i]);
         lv_obj_remove_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(navIcons_[i], selected ? lv_color_hex(0xFFD65A) : lv_color_hex(0xA7B7C3), 0);
         lv_obj_align(navLabels_[i], LV_ALIGN_BOTTOM_MID, 0, -3);
@@ -892,8 +894,9 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
                                              : linked ? "Identifying Spark" : "Looking for Spark");
         lv_obj_set_style_text_color(deviceName_, known ? lv_color_hex(0xF1F4F7)
                                                        : lv_color_hex(0x98A9B6), 0);
-        lv_label_set_text_fmt(deviceSerial_, "SN: %s", known && !snapshot.ampSerial.empty()
-                                                        ? snapshot.ampSerial.c_str() : "Not reported");
+        // The BLE handshake serial is valuable for diagnostics but is not a
+        // useful musician-facing device detail.
+        lv_label_set_text(deviceSerial_, "");
         lv_obj_set_user_data(devicePortrait_, snapshot.ampName.find("NEO") != std::string::npos
                                                  ? reinterpret_cast<void *>(1) : nullptr);
         lv_obj_invalidate(devicePortrait_);
