@@ -202,6 +202,42 @@ void PanelLanLVGLUI::createUi() {
     lv_label_set_text(actionStatusLabel_, "Hardware presets ready");
     lv_obj_add_flag(actionStatusLabel_, LV_OBJ_FLAG_HIDDEN);
 
+    detailPage_ = lv_obj_create(screen);
+    lv_obj_set_size(detailPage_, 320, 180);
+    lv_obj_align(detailPage_, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_set_style_bg_color(detailPage_, lv_color_hex(0x080D10), 0);
+    lv_obj_set_style_border_width(detailPage_, 0, 0);
+    lv_obj_set_style_radius(detailPage_, 0, 0);
+    lv_obj_set_style_pad_all(detailPage_, 0, 0);
+    lv_obj_add_flag(detailPage_, LV_OBJ_FLAG_HIDDEN);
+
+    detailTitle_ = lv_label_create(detailPage_);
+    lv_obj_set_style_text_color(detailTitle_, lv_color_white(), 0);
+    lv_obj_set_style_text_font(detailTitle_, &lv_font_montserrat_20, 0);
+    lv_obj_align(detailTitle_, LV_ALIGN_TOP_LEFT, 12, 10);
+
+    detailMessage_ = lv_label_create(detailPage_);
+    lv_obj_set_width(detailMessage_, 292);
+    lv_label_set_long_mode(detailMessage_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(detailMessage_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
+    lv_obj_align(detailMessage_, LV_ALIGN_TOP_LEFT, 14, 43);
+
+    const int16_t detailX[] = {-105, 0, 105, -105, 0, 105};
+    for (uint8_t fx = 0; fx < 6; ++fx) {
+        lv_obj_t *tile = lv_obj_create(detailPage_);
+        detailTiles_[fx] = tile;
+        lv_obj_set_size(tile, 94, 48);
+        lv_obj_align(tile, LV_ALIGN_TOP_MID, detailX[fx], fx < 3 ? 72 : 126);
+        lv_obj_set_style_border_width(tile, 1, 0);
+        lv_obj_set_style_radius(tile, 6, 0);
+        lv_obj_set_style_pad_all(tile, 0, 0);
+        detailTileLabels_[fx] = lv_label_create(tile);
+        lv_obj_set_width(detailTileLabels_[fx], 94);
+        lv_obj_set_style_text_align(detailTileLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(detailTileLabels_[fx], lv_color_white(), 0);
+        lv_obj_center(detailTileLabels_[fx]);
+    }
+
     lv_obj_t *nav = lv_obj_create(screen);
     lv_obj_set_size(nav, 320, 30);
     lv_obj_align(nav, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -209,25 +245,24 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_border_width(nav, 0, 0);
     lv_obj_set_style_radius(nav, 0, 0);
     lv_obj_set_style_pad_all(nav, 0, 0);
-    lv_obj_t *selectedNav = lv_obj_create(nav);
-    lv_obj_set_size(selectedNav, 62, 27);
-    lv_obj_align(selectedNav, LV_ALIGN_LEFT_MID, 1, 0);
-    lv_obj_set_style_bg_color(selectedNav, lv_color_hex(0x1E2020), 0);
-    lv_obj_set_style_border_color(selectedNav, lv_palette_main(LV_PALETTE_YELLOW), 0);
-    lv_obj_set_style_border_width(selectedNav, 1, 0);
-    lv_obj_set_style_radius(selectedNav, 4, 0);
-    lv_obj_set_style_pad_all(selectedNav, 0, 0);
-
     const char *navLabels[] = {"PRESET", "FX", "LOOPER", "TUNER", "DEVICE"};
     for (uint8_t i = 0; i < 5; ++i) {
-        lv_obj_t *label = lv_label_create(nav);
+        lv_obj_t *button = lv_button_create(nav);
+        navButtons_[i] = button;
+        lv_obj_set_size(button, 64, 30);
+        lv_obj_align(button, LV_ALIGN_LEFT_MID, i * 64, 0);
+        lv_obj_set_style_pad_all(button, 0, 0);
+        lv_obj_set_style_radius(button, 4, 0);
+        lv_obj_add_event_cb(button, onNavClicked, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
+        lv_obj_t *label = lv_label_create(button);
+        navLabels_[i] = label;
         lv_label_set_text(label, navLabels[i]);
         lv_obj_set_width(label, 64);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_color(label, i == 0 ? lv_palette_main(LV_PALETTE_YELLOW)
-                                                   : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
-        lv_obj_align(label, LV_ALIGN_LEFT_MID, i * 64, 0);
+        lv_obj_center(label);
     }
+    renderNavigation();
 }
 
 void PanelLanLVGLUI::onPresetClicked(lv_event_t *event) {
@@ -241,6 +276,82 @@ void PanelLanLVGLUI::onPresetClicked(lv_event_t *event) {
 
 void PanelLanLVGLUI::onPresetCardClicked(lv_event_t *) {
     lv_obj_remove_flag(uiInstance->presetPicker_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
+    const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+    if (page <= static_cast<uint8_t>(Screen::Device)) {
+        uiInstance->setActiveScreen(static_cast<Screen>(page));
+    }
+}
+
+void PanelLanLVGLUI::setActiveScreen(Screen screen) {
+    activeScreen_ = screen;
+    if (screen == Screen::Preset) {
+        lv_obj_add_flag(detailPage_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(detailPage_, LV_OBJ_FLAG_HIDDEN);
+        renderDetailPage(latestSnapshot_);
+    }
+    renderNavigation();
+}
+
+void PanelLanLVGLUI::renderNavigation() {
+    for (uint8_t i = 0; i < 5; ++i) {
+        const bool selected = i == static_cast<uint8_t>(activeScreen_);
+        lv_obj_set_style_bg_color(navButtons_[i], selected ? lv_color_hex(0x1E2020) : lv_color_hex(0x111B21), 0);
+        lv_obj_set_style_border_color(navButtons_[i], selected ? lv_palette_main(LV_PALETTE_YELLOW)
+                                                               : lv_color_hex(0x111B21), 0);
+        lv_obj_set_style_border_width(navButtons_[i], selected ? 1 : 0, 0);
+        lv_obj_set_style_text_color(navLabels_[i], selected ? lv_palette_main(LV_PALETTE_YELLOW)
+                                                            : lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
+    }
+}
+
+void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
+    const bool isFxPage = activeScreen_ == Screen::Fx;
+    for (uint8_t fx = 0; fx < 6; ++fx) {
+        if (isFxPage) {
+            lv_obj_remove_flag(detailTiles_[fx], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(detailTiles_[fx], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (isFxPage) {
+        lv_label_set_text(detailTitle_, "FX CONTROL");
+        lv_label_set_text(detailMessage_, "LIVE SPARK EFFECT STATE");
+        for (uint8_t fx = 0; fx < 6; ++fx) {
+            const ControllerFxSlot &slot = snapshot.fxSlots[fx];
+            const char *name = slot.known && slot.label == "REVERB" ? "REV" : slot.known ? slot.label.c_str() : "--";
+            lv_label_set_text_fmt(detailTileLabels_[fx], "%s\n%s", name,
+                                  slot.known ? (slot.enabled ? "ON" : "OFF") : "SYNC");
+            const lv_color_t color = slot.enabled ? lv_color_hex(0x176B48) : lv_color_hex(0x151F25);
+            lv_obj_set_style_bg_color(detailTiles_[fx], color, 0);
+            lv_obj_set_style_border_color(detailTiles_[fx], slot.enabled ? lv_color_hex(0x2CB67D)
+                                                                         : lv_color_hex(0x34454F), 0);
+        }
+        return;
+    }
+    switch (activeScreen_) {
+    case Screen::Looper:
+        lv_label_set_text(detailTitle_, "LOOPER");
+        lv_label_set_text(detailMessage_, "Looper controls remain hidden until this Spark device reports verified support.");
+        break;
+    case Screen::Tuner:
+        lv_label_set_text(detailTitle_, "TUNER");
+        lv_label_set_text(detailMessage_, "Tuner entry is capability-gated until its controller action is wired.");
+        break;
+    case Screen::Device:
+        lv_label_set_text(detailTitle_, "DEVICE");
+        lv_label_set_text_fmt(detailMessage_, "%s\n%s\nSpark remains the source of truth.",
+                              snapshot.identityKnown ? snapshot.ampName.c_str() : "Reading Spark device...",
+                              snapshot.connectionPhase == ControllerConnectionPhase::Ready ? "CONNECTED" : "CONNECTING");
+        break;
+    case Screen::Preset:
+    case Screen::Fx:
+        break;
+    }
 }
 
 bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
@@ -281,6 +392,7 @@ bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
 }
 
 void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
+    latestSnapshot_ = snapshot;
     const bool linkEstablished = snapshot.connectionPhase == ControllerConnectionPhase::Identifying ||
                                  snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||
                                  snapshot.connectionPhase == ControllerConnectionPhase::Ready;
@@ -363,6 +475,9 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
         lv_label_set_text(actionStatusLabel_, "Preset switch was not confirmed");
     } else {
         lv_label_set_text(actionStatusLabel_, "Hardware presets ready");
+    }
+    if (activeScreen_ != Screen::Preset) {
+        renderDetailPage(snapshot);
     }
 }
 

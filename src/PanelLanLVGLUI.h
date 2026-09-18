@@ -23,6 +23,7 @@ public:
     void injectTouch(uint16_t x, uint16_t y);
 
 private:
+    enum class Screen : uint8_t { Preset, Fx, Looper, Tuner, Device };
     static constexpr uint16_t kDisplayWidth = 320;
     static constexpr uint16_t kDisplayHeight = 240;
     static constexpr uint16_t kBufferLines = 40;
@@ -42,6 +43,15 @@ private:
     lv_obj_t *fxStateLabels_[6]{};
     lv_obj_t *presetPicker_ = nullptr;
     lv_obj_t *presetButtons_[4]{};
+    lv_obj_t *detailPage_ = nullptr;
+    lv_obj_t *detailTitle_ = nullptr;
+    lv_obj_t *detailMessage_ = nullptr;
+    lv_obj_t *detailTiles_[6]{};
+    lv_obj_t *detailTileLabels_[6]{};
+    lv_obj_t *navButtons_[5]{};
+    lv_obj_t *navLabels_[5]{};
+    Screen activeScreen_ = Screen::Preset;
+    ControllerSnapshot latestSnapshot_{};
     ControllerActions *actions_ = nullptr;
     uint32_t renderedRevision_ = UINT32_MAX;
     uint32_t lastLvglTickAt_ = 0;
@@ -59,8 +69,12 @@ private:
     static void readTouch(lv_indev_t *, lv_indev_data_t *data);
     static void onPresetClicked(lv_event_t *event);
     static void onPresetCardClicked(lv_event_t *event);
+    static void onNavClicked(lv_event_t *event);
     void createUi();
     void renderStatus(const ControllerSnapshot &snapshot);
+    void setActiveScreen(Screen screen);
+    void renderDetailPage(const ControllerSnapshot &snapshot);
+    void renderNavigation();
 };
 
 #endif
