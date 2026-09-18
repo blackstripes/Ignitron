@@ -33,3 +33,21 @@ Full project plan: [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md)
 - Keep the serial CLI in the final firmware as a debug/service interface.
 - Avoid final pin assignments or enclosure dimensions until the actual modules are measured.
 - Do not claim NEO Core or continuous wah support until verified on hardware.
+
+
+## Current hardware/UI status — 2026-09-17
+
+The original checklist above is partially stale. The authoritative current hardware status is in [docs/PANELAN_PROTOTYPE.md](docs/PANELAN_PROTOTYPE.md).
+
+Confirmed now:
+- PanelLan ZX2D80CE02S / SC05_X target builds on ESP32-S3.
+- Main TFT and FT5x06 touch work in landscape.
+- Direct BLE control has been verified on Spark NEO Core.
+- Touchscreen hardware-preset switching works.
+- Reconnection after a NEO Core power cycle works.
+
+UI implementation target:
+- Read [docs/UI_DESIGN.md](docs/UI_DESIGN.md) before changing the touchscreen UX.
+- The visual concept is checked in at [docs/images/ignitron-ui-concept.jpg](docs/images/ignitron-ui-concept.jpg).
+- Preserve protocol/UI separation and implement the UI incrementally.
+- Next functional priorities are remembered-device selection, Spark 2 validation, and touchscreen FX/tuner/looper control before external displays/switches.
