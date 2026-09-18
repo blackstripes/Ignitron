@@ -10,13 +10,14 @@ import time
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", required=True)
 parser.add_argument("--output", required=True)
+parser.add_argument("--wait", type=float, default=8.0, help="seconds to wait after USB CDC opens")
 args = parser.parse_args()
 
 port = serial.Serial(args.port, 115200, timeout=0.5)
 try:
     # Opening USB CDC can reset the ESP32-S3. Let setup(), BLE, and the CLI
     # reach their normal input loop before sending the capture command.
-    time.sleep(3)
+    time.sleep(args.wait)
     port.reset_input_buffer()
     port.write(b"screenshot\n")
     marker = b"IGNITRON_SCREENSHOT_PPM 320 240\n"

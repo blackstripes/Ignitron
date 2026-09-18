@@ -181,6 +181,15 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_border_width(nav, 0, 0);
     lv_obj_set_style_radius(nav, 0, 0);
     lv_obj_set_style_pad_all(nav, 0, 0);
+    lv_obj_t *selectedNav = lv_obj_create(nav);
+    lv_obj_set_size(selectedNav, 62, 27);
+    lv_obj_align(selectedNav, LV_ALIGN_LEFT_MID, 1, 0);
+    lv_obj_set_style_bg_color(selectedNav, lv_color_hex(0x1E2020), 0);
+    lv_obj_set_style_border_color(selectedNav, lv_palette_main(LV_PALETTE_YELLOW), 0);
+    lv_obj_set_style_border_width(selectedNav, 1, 0);
+    lv_obj_set_style_radius(selectedNav, 4, 0);
+    lv_obj_set_style_pad_all(selectedNav, 0, 0);
+
     const char *navLabels[] = {"PRESET", "FX", "LOOPER", "TUNER", "DEVICE"};
     for (uint8_t i = 0; i < 5; ++i) {
         lv_obj_t *label = lv_label_create(nav);
@@ -309,7 +318,9 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
         const ControllerFxSlot &slot = snapshot.fxSlots[fx];
         lv_obj_t *tile = fxTiles_[fx];
         lv_obj_t *label = lv_obj_get_child(tile, 0);
-        lv_label_set_text(label, slot.known ? slot.label.c_str() : "--");
+        const char *labelText = slot.known && slot.label == "REVERB" ? "REV"
+                              : slot.known ? slot.label.c_str() : "--";
+        lv_label_set_text(label, labelText);
         lv_label_set_text(fxStateLabels_[fx], slot.known ? (slot.enabled ? "ON" : "OFF") : "--");
         const lv_color_t color = slot.enabled ? kFxColors[fx] : lv_color_hex(0x151F25);
         lv_obj_set_style_bg_color(tile, color, 0);
