@@ -73,42 +73,89 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_text_align(connectionLabel_, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(connectionLabel_, LV_ALIGN_RIGHT_MID, -10, 0);
 
-    lv_obj_t *hero = lv_obj_create(screen);
-    lv_obj_set_size(hero, 300, 66);
-    lv_obj_align(hero, LV_ALIGN_TOP_MID, 0, 38);
-    lv_obj_set_style_bg_color(hero, lv_color_hex(0x111B21), 0);
-    lv_obj_set_style_border_color(hero, lv_color_hex(0x2A3B45), 0);
+    lv_obj_t *hero = lv_button_create(screen);
+    lv_obj_set_size(hero, 300, 96);
+    lv_obj_align(hero, LV_ALIGN_TOP_MID, 0, 37);
+    lv_obj_set_style_bg_color(hero, lv_color_hex(0x16232B), 0);
+    lv_obj_set_style_bg_grad_color(hero, lv_color_hex(0x0A1116), 0);
+    lv_obj_set_style_bg_grad_dir(hero, LV_GRAD_DIR_HOR, 0);
+    lv_obj_set_style_border_color(hero, lv_color_hex(0x3B515D), 0);
     lv_obj_set_style_border_width(hero, 1, 0);
     lv_obj_set_style_radius(hero, 7, 0);
     lv_obj_set_style_pad_all(hero, 0, 0);
+    lv_obj_add_event_cb(hero, onPresetCardClicked, LV_EVENT_CLICKED, nullptr);
 
     identityLabel_ = lv_label_create(hero);
     lv_obj_set_width(identityLabel_, 270);
     lv_obj_set_style_text_color(identityLabel_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
-    lv_obj_align(identityLabel_, LV_ALIGN_TOP_LEFT, 12, 8);
+    lv_obj_align(identityLabel_, LV_ALIGN_TOP_LEFT, 13, 9);
 
     presetNameLabel_ = lv_label_create(hero);
     lv_obj_set_width(presetNameLabel_, 270);
     lv_label_set_long_mode(presetNameLabel_, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(presetNameLabel_, lv_color_white(), 0);
     lv_obj_set_style_text_font(presetNameLabel_, &lv_font_montserrat_20, 0);
-    lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_LEFT, 11, 24);
+    lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_LEFT, 12, 30);
+
+    presetDescriptionLabel_ = lv_label_create(hero);
+    lv_obj_set_width(presetDescriptionLabel_, 230);
+    lv_label_set_long_mode(presetDescriptionLabel_, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_color(presetDescriptionLabel_, lv_palette_lighten(LV_PALETTE_GREY, 2), 0);
+    lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_LEFT, 14, 61);
 
     presetMetaLabel_ = lv_label_create(hero);
     lv_obj_set_style_text_color(presetMetaLabel_, lv_palette_lighten(LV_PALETTE_BLUE, 2), 0);
-    lv_obj_align(presetMetaLabel_, LV_ALIGN_BOTTOM_RIGHT, -12, -7);
+    lv_obj_align(presetMetaLabel_, LV_ALIGN_BOTTOM_RIGHT, -13, -10);
 
     lv_obj_t *sectionLabel = lv_label_create(screen);
     lv_label_set_text(sectionLabel, "HARDWARE PRESETS");
     lv_obj_set_style_text_color(sectionLabel, lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
-    lv_obj_align(sectionLabel, LV_ALIGN_TOP_LEFT, 11, 111);
+    lv_obj_align(sectionLabel, LV_ALIGN_TOP_LEFT, 12, 139);
+
+    const int16_t fxX[] = {-132, -79, -26, 27, 80, 133};
+    for (uint8_t fx = 0; fx < 6; ++fx) {
+        lv_obj_t *tile = lv_obj_create(screen);
+        fxTiles_[fx] = tile;
+        lv_obj_set_size(tile, 48, 42);
+        lv_obj_align(tile, LV_ALIGN_TOP_MID, fxX[fx], 157);
+        lv_obj_set_style_bg_color(tile, lv_color_hex(0x151F25), 0);
+        lv_obj_set_style_border_color(tile, lv_color_hex(0x34454F), 0);
+        lv_obj_set_style_border_width(tile, 1, 0);
+        lv_obj_set_style_radius(tile, 5, 0);
+        lv_obj_set_style_pad_all(tile, 0, 0);
+        lv_obj_t *label = lv_label_create(tile);
+        lv_label_set_text(label, "FX");
+        lv_obj_set_width(label, 48);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(label, lv_color_white(), 0);
+        lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 6);
+        fxStateLabels_[fx] = lv_label_create(tile);
+        lv_label_set_text(fxStateLabels_[fx], "--");
+        lv_obj_set_width(fxStateLabels_[fx], 48);
+        lv_obj_set_style_text_align(fxStateLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(fxStateLabels_[fx], LV_ALIGN_BOTTOM_MID, 0, -5);
+    }
+
+    presetPicker_ = lv_obj_create(screen);
+    lv_obj_set_size(presetPicker_, 300, 154);
+    lv_obj_align(presetPicker_, LV_ALIGN_CENTER, 0, -3);
+    lv_obj_set_style_bg_color(presetPicker_, lv_color_hex(0x101B21), 0);
+    lv_obj_set_style_border_color(presetPicker_, lv_palette_main(LV_PALETTE_YELLOW), 0);
+    lv_obj_set_style_border_width(presetPicker_, 2, 0);
+    lv_obj_set_style_radius(presetPicker_, 8, 0);
+    lv_obj_set_style_pad_all(presetPicker_, 0, 0);
+    lv_obj_add_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *pickerTitle = lv_label_create(presetPicker_);
+    lv_label_set_text(pickerTitle, "SELECT HARDWARE PRESET");
+    lv_obj_set_style_text_color(pickerTitle, lv_palette_main(LV_PALETTE_YELLOW), 0);
+    lv_obj_align(pickerTitle, LV_ALIGN_TOP_MID, 0, 10);
 
     for (uint8_t preset = 1; preset <= 4; ++preset) {
-        lv_obj_t *button = lv_button_create(screen);
+        lv_obj_t *button = lv_button_create(presetPicker_);
         presetButtons_[preset - 1] = button;
-        const int x = preset % 2 == 1 ? -76 : 76;
-        const int y = preset <= 2 ? 22 : 68;
-        lv_obj_set_size(button, 140, 38);
+        const int x = preset % 2 == 1 ? -72 : 72;
+        const int y = preset <= 2 ? -20 : 42;
+        lv_obj_set_size(button, 128, 48);
         lv_obj_align(button, LV_ALIGN_CENTER, x, y);
         lv_obj_set_style_bg_color(button, lv_color_hex(0x28353D), 0);
         lv_obj_set_style_border_color(button, lv_color_hex(0x3B5868), 0);
@@ -126,7 +173,7 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_add_flag(actionStatusLabel_, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *nav = lv_obj_create(screen);
-    lv_obj_set_size(nav, 320, 27);
+    lv_obj_set_size(nav, 320, 30);
     lv_obj_align(nav, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(nav, lv_color_hex(0x111B21), 0);
     lv_obj_set_style_border_width(nav, 0, 0);
@@ -150,6 +197,42 @@ void PanelLanLVGLUI::onPresetClicked(lv_event_t *event) {
     }
     const uint8_t preset = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
     uiInstance->actions_->requestHardwarePreset(preset);
+    lv_obj_add_flag(uiInstance->presetPicker_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void PanelLanLVGLUI::onPresetCardClicked(lv_event_t *) {
+    lv_obj_remove_flag(uiInstance->presetPicker_, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
+    lv_draw_buf_t *snapshot = lv_snapshot_take(lv_screen_active(), LV_COLOR_FORMAT_RGB565);
+    if (!snapshot || snapshot->header.w != kDisplayWidth || snapshot->header.h != kDisplayHeight) {
+        if (snapshot) {
+            lv_draw_buf_destroy(snapshot);
+        }
+        output.println("IGNITRON_SCREENSHOT_ERROR");
+        return false;
+    }
+
+    // PPM is intentionally simple: the host capture tool can save it without
+    // a graphics dependency, then compare the physical LVGL composition with
+    // the concept image.
+    output.printf("IGNITRON_SCREENSHOT_PPM %u %u\nP6\n%u %u\n255\n",
+                  kDisplayWidth, kDisplayHeight, kDisplayWidth, kDisplayHeight);
+    uint8_t row[kDisplayWidth * 3];
+    const uint16_t *pixels = reinterpret_cast<const uint16_t *>(snapshot->data);
+    for (uint16_t y = 0; y < kDisplayHeight; ++y) {
+        for (uint16_t x = 0; x < kDisplayWidth; ++x) {
+            const uint16_t pixel = pixels[y * kDisplayWidth + x];
+            row[x * 3] = (pixel >> 8) & 0xF8;
+            row[x * 3 + 1] = (pixel >> 3) & 0xFC;
+            row[x * 3 + 2] = (pixel << 3) & 0xF8;
+        }
+        output.write(row, sizeof(row));
+        delay(0);
+    }
+    lv_draw_buf_destroy(snapshot);
+    return true;
 }
 
 void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {

@@ -5,6 +5,11 @@
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
 
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
+#include "PanelLanLVGLUI.h"
+extern PanelLanLVGLUI panelLanDisplay;
+#endif
+
 SparkSerialCLI::SparkSerialCLI(SparkDataControl *dataControl)
     : sparkDC_(dataControl) {
 }
@@ -88,6 +93,12 @@ void SparkSerialCLI::execute(String command) {
             sparkDC_->getCurrentPresetFromSpark();
             Serial.println("Requested current preset.");
         }
+    } else if (verb == "screenshot") {
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
+        panelLanDisplay.writeScreenshot(Serial);
+#else
+        Serial.println("Screenshots are available only in the PanelLan LVGL target.");
+#endif
     } else {
         Serial.println("Unknown command. Type 'help'.");
     }
@@ -98,6 +109,7 @@ void SparkSerialCLI::printHelp() {
     Serial.println("  status");
     Serial.println("  amp                     Request amp identity");
     Serial.println("  refresh                 Request current preset");
+    Serial.println("  screenshot              Stream a PPM screenshot over USB serial");
     Serial.println("  preset <1-4>");
     Serial.println("  bank up|down");
     Serial.println("  fx <gate|comp|drive|mod|delay|reverb> <toggle|on|off>");

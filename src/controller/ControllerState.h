@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <string>
 
 class SparkDataControl;
@@ -16,6 +17,16 @@ enum class ControllerConnectionPhase : uint8_t {
     Ready,
 };
 
+struct ControllerFxSlot {
+    std::string label;
+    bool enabled = false;
+    bool known = false;
+
+    bool operator==(const ControllerFxSlot &other) const {
+        return label == other.label && enabled == other.enabled && known == other.known;
+    }
+};
+
 struct ControllerSnapshot {
     ControllerConnectionPhase connectionPhase = ControllerConnectionPhase::Scanning;
     bool sparkStateStale = true;
@@ -23,6 +34,8 @@ struct ControllerSnapshot {
     std::string ampName;
     std::string ampSerial;
     std::string presetName;
+    std::string presetDescription;
+    std::array<ControllerFxSlot, 6> fxSlots;
     uint8_t confirmedHardwarePreset = 0;
     uint8_t pendingHardwarePreset = 0;
     bool presetActionFailed = false;

@@ -27,7 +27,16 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     SparkStatus &status = SparkStatus::getInstance();
     next.ampName = status.ampName();
     next.ampSerial = status.ampSerialNumber();
-    next.presetName = SparkPresetControl::getInstance().activePreset().name;
+    const Preset &activePreset = SparkPresetControl::getInstance().activePreset();
+    next.presetName = activePreset.name;
+    next.presetDescription = activePreset.description;
+    static constexpr const char *kFxLabels[] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};
+    static constexpr uint8_t kPedalIndices[] = {0, 1, 2, 4, 5, 6};
+    for (size_t i = 0; i < next.fxSlots.size(); ++i) {
+        next.fxSlots[i].label = kFxLabels[i];
+        next.fxSlots[i].known = activePreset.pedals.size() > kPedalIndices[i];
+        next.fxSlots[i].enabled = next.fxSlots[i].known && activePreset.pedals[kPedalIndices[i]].isOn;
+    }
     const int reportedPreset = status.currentPresetNumber();
     next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= 4 ? reportedPreset : 0;
     next.identityKnown = dataControl.ampNameReceived() && !next.ampName.empty();
@@ -47,9 +56,11 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
         snapshot_.ampName == next.ampName &&
         snapshot_.ampSerial == next.ampSerial &&
         snapshot_.presetName == next.presetName &&
+        snapshot_.presetDescription == next.presetDescription &&
         snapshot_.confirmedHardwarePreset == next.confirmedHardwarePreset &&
         snapshot_.pendingHardwarePreset == next.pendingHardwarePreset &&
-        snapshot_.presetActionFailed == next.presetActionFailed) {
+        snapshot_.presetActionFailed == next.presetActionFailed &&
+        snapshot_.fxSlots == next.fxSlots) {
         return;
     }
     snapshot_ = next;
