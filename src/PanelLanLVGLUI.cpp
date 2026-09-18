@@ -582,7 +582,7 @@ void PanelLanLVGLUI::createUi() {
                                        &lv_font_montserrat_12, 0x8FA6B5);
     deviceName_ = createText(deviceCard_, "Searching for Spark", 76, 30, 218,
                              &lv_font_montserrat_20, 0xF1F4F7);
-    deviceSerial_ = createText(deviceCard_, "", 76, 59, 218,
+    deviceSerial_ = createText(deviceCard_, "AMP SERIAL: Not reported", 76, 59, 218,
                                &lv_font_montserrat_12, 0xB4C0CA);
     lv_obj_t *connectionPanel = createPanel(devicePage_, 6, 97, 308, 65);
     lv_obj_set_style_bg_color(connectionPanel, lv_color_hex(0x111C22), 0);
@@ -894,9 +894,8 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
                                              : linked ? "Identifying Spark" : "Looking for Spark");
         lv_obj_set_style_text_color(deviceName_, known ? lv_color_hex(0xF1F4F7)
                                                        : lv_color_hex(0x98A9B6), 0);
-        // The BLE handshake serial is valuable for diagnostics but is not a
-        // useful musician-facing device detail.
-        lv_label_set_text(deviceSerial_, "");
+        lv_label_set_text_fmt(deviceSerial_, "AMP SERIAL: %s", known && !snapshot.ampSerial.empty()
+                                                               ? snapshot.ampSerial.c_str() : "Not reported");
         lv_obj_set_user_data(devicePortrait_, snapshot.ampName.find("NEO") != std::string::npos
                                                  ? reinterpret_cast<void *>(1) : nullptr);
         lv_obj_invalidate(devicePortrait_);
