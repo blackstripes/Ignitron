@@ -1,6 +1,8 @@
 #include "PanelLanLVGLUI.h"
 #include "controller/ControllerActions.h"
 
+#include <esp_heap_caps.h>
+
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
 
 namespace {
@@ -205,10 +207,16 @@ void PanelLanLVGLUI::onPresetCardClicked(lv_event_t *) {
 }
 
 bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
-    lv_draw_buf_t *snapshot = lv_snapshot_take(lv_screen_active(), LV_COLOR_FORMAT_RGB565);
-    if (!snapshot || snapshot->header.w != kDisplayWidth || snapshot->header.h != kDisplayHeight) {
-        if (snapshot) {
-            lv_draw_buf_destroy(snapshot);
+    const size_t captureBytes = kDisplayWidth * kDisplayHeight * sizeof(uint16_t);
+    uint8_t *capture = static_cast<uint8_t *>(heap_caps_malloc(captureBytes, MALLOC_CAP_SPIRAM));
+    lv_image_dsc_t snapshot{};
+    const lv_result_t result = capture
+                                   ? lv_snapshot_take_to_buf(lv_screen_active(), LV_COLOR_FORMAT_RGB565,
+                                                             &snapshot, capture, captureBytes)
+                                   : LV_RESULT_INVALID;
+    if (result != LV_RESULT_OK || snapshot.header.w != kDisplayWidth || snapshot.header.h != kDisplayHeight) {
+        if (capture) {
+            heap_caps_free(capture);
         }
         output.println("IGNITRON_SCREENSHOT_ERROR");
         return false;
@@ -220,7 +228,7 @@ bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
     output.printf("IGNITRON_SCREENSHOT_PPM %u %u\nP6\n%u %u\n255\n",
                   kDisplayWidth, kDisplayHeight, kDisplayWidth, kDisplayHeight);
     uint8_t row[kDisplayWidth * 3];
-    const uint16_t *pixels = reinterpret_cast<const uint16_t *>(snapshot->data);
+    const uint16_t *pixels = reinterpret_cast<const uint16_t *>(snapshot.data);
     for (uint16_t y = 0; y < kDisplayHeight; ++y) {
         for (uint16_t x = 0; x < kDisplayWidth; ++x) {
             const uint16_t pixel = pixels[y * kDisplayWidth + x];
@@ -231,7 +239,7 @@ bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
         output.write(row, sizeof(row));
         delay(0);
     }
-    lv_draw_buf_destroy(snapshot);
+    heap_caps_free(capture);
     return true;
 }
 
