@@ -296,19 +296,26 @@ Renderers should consume this state. Actions should request changes through a co
 
 ## UI implementation guidance
 
-For the first version, direct LovyanGFX drawing is acceptable and likely preferable to introducing a large GUI framework.
+The main PanelLan touchscreen should now use **LVGL 9.x** for the application UI, layered on top of the already-working PanelLan/LovyanGFX display and touch support.
 
-Recommended structure:
+Do **not** replace the proven board-specific ST7789/FT5x06 path with a generic display driver merely to adopt LVGL.
 
-- `PanelLanDisplay`: board/display/touch implementation
-- `ControllerState`: normalized state presented to UI
-- `ControllerActions`: preset/FX/tuner/looper/device actions
-- Per-screen render functions/classes
-- Dirty-region / state-change rendering instead of repainting everything every loop
-- Touch hit targets defined centrally, not scattered magic coordinates
-- Reusable components for buttons, status badges, headers, progress bars
+The six future ST7735S per-switch mini displays should remain lightweight direct-rendered displays driven from canonical controller state; they do not need their own LVGL UI stacks.
 
-Avoid blocking animations. Small transitions are fine later, but they must never delay BLE processing.
+The detailed integration, buffering, tasking, component, build-target, and rollout plan is in [LVGL_ARCHITECTURE.md](LVGL_ARCHITECTURE.md).
+
+Required architecture remains:
+
+- `ControllerState`: normalized canonical state presented to all renderers
+- `ControllerActions`: the only normal path from touch/footswitch/CLI intent to Spark actions
+- LVGL main-screen renderer consumes state; widgets do not call Spark protocol code directly
+- mini-display renderer consumes the same state
+- BLE callbacks/protocol tasks never directly mutate LVGL widgets
+- UI updates happen from one LVGL execution context
+- use partial render buffers initially and measure memory/performance
+- avoid blocking animations or redraw behavior that delays BLE processing
+
+LVGL is a presentation framework, not a state-management system. STATE_MODEL.md and INTERACTION_SPEC.md remain authoritative.
 
 ## Touch sizing
 
@@ -443,3 +450,11 @@ In particular:
 - Spark 2 natively mutes output in tuner mode, so the controller must not disable every effect or alter preset state to create tuner mute.
 - physical controls, touchscreen controls, and serial CLI must route through the same controller action/state path.
 - external changes from the amp/app must update the same canonical state and all renderers.
+
+## Main UI framework decision
+
+The polished main-screen concept is now explicitly targeted at LVGL rather than hand-building a custom widget framework with raw LovyanGFX.
+
+See [LVGL_ARCHITECTURE.md](LVGL_ARCHITECTURE.md) before implementing UI screens.
+
+The visual concept remains the design target, but implementation should first prove LVGL display/touch bring-up and BLE coexistence, then establish ControllerState/ControllerActions, and only then expand screen-by-screen.
