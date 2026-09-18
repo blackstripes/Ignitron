@@ -55,6 +55,28 @@ Software: [click here](https://github.com/stangreg/Ignitron/blob/main/src/)
 
 Hardware: [click here](https://github.com/stangreg/Ignitron/blob/main/hardware/)
 
+## PanelLan touchscreen controller prototype
+
+This fork also includes an ESP32-S3 touchscreen-controller target for the
+**PanelLan ZX2D80CE02S / SC05_X** board. It is a separate, in-progress hardware
+profile: it uses the board's 2.8-inch ST7789 display and FT5x06 touch panel in
+landscape, and does not use the original OLED, LED, or footswitch GPIO setup.
+
+The current milestone is a direct BLE controller: the touchscreen selects the
+four Spark hardware presets and the screen shows the connected Spark model and
+serial number. It has been manually verified with a Spark NEO Core, including a
+headphone power-cycle and automatic reconnection.
+
+Build the controller firmware with:
+
+```
+pio run -e panelan-sc05x
+```
+
+For a display-and-touch-only smoke test, use `panelan-display-bringup` instead.
+The full hardware notes, USB/flashing advice, and planned multi-device pairing
+flow are in [the PanelLan prototype guide](docs/PANELAN_PROTOTYPE.md).
+
 # Operating Ignitron
 
 ## Table of contents

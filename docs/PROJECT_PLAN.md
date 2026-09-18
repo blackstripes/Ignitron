@@ -6,7 +6,13 @@ This fork is being used as the software base for a standalone DIY foot controlle
 
 Development branch: `feature/headless-serial-cli`
 
-That branch contains an initial headless/serial-control path intended to let us exercise the Spark protocol without physical buttons, LEDs, or an OLED. It has **not yet been compile-tested on hardware** and should be treated as a starting point for Codex to review/fix rather than a finished implementation.
+That branch contains the PanelLan touchscreen controller path used to exercise
+the Spark protocol without physical buttons, LEDs, or an OLED. The
+`panelan-sc05x` target now builds and has been manually verified on hardware:
+touch can change the four hardware presets on a Spark NEO Core, and the
+controller reconnects after the headphones are power-cycled. See
+[PANELAN_PROTOTYPE.md](PANELAN_PROTOTYPE.md) for the current build, wiring, UI,
+and device-selection status.
 
 The upstream Ignitron code is built around classic ESP32 targets and uses NimBLE for Spark communication. The final controller hardware will be ESP32-S3-based, so there will be a deliberate port step rather than assuming the stock target is drop-in compatible.
 

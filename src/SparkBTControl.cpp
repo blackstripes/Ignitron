@@ -7,6 +7,11 @@
 
 #include "SparkBTControl.h"
 
+#ifdef PANELAN_SC05X_MODE
+#include "PanelLanDisplay.h"
+extern PanelLanDisplay panelLanDisplay;
+#endif
+
 bool SparkBTControl::isAppConnectedSerial_ = false;
 
 // ClientCallbacks SparkBTControl::clientCB;
@@ -29,15 +34,20 @@ SparkBTControl::~SparkBTControl() {
         delete advDevice_;
         advDevice_ = nullptr;
     }
+#ifndef NO_CLASSIC_BT
     if (btSerial) {
         delete btSerial;
         btSerial = nullptr;
     }
+#endif
 }
 
 // Initializing BLE connection with NimBLE
 void SparkBTControl::initBLE(notify_callback notifyCallback) {
-    // NimBLEDevice::init("");
+    // Legacy builds initialized the BLE stack as a side effect of starting the
+    // BLE keyboard.  The ESP32-S3 profile deliberately omits that unsupported
+    // keyboard path, so initialize NimBLE explicitly before obtaining a scan.
+    NimBLEDevice::init("");
     advDevice_ = new NimBLEAdvertisedDevice();
     notifyCB_ = notifyCallback;
 
@@ -82,13 +92,13 @@ void SparkBTControl::startScan() {
 bool SparkBTControl::connectToServer() {
     /** Check if we have a client we should reuse first **/
     if (NimBLEDevice::getClientListSize()) {
-        /** Special case when we already know this device, we send false as the
-         second argument in connect() to prevent refreshing the service database.
-         This saves considerable time and power.
-         */
+        // A Spark may reboot while the controller remains powered.  Its old
+        // remote-service handles and notification subscription cannot safely
+        // be reused after that reset.
         client_ = NimBLEDevice::getClientByPeerAddress(advDevice_->getAddress());
         if (client_) {
-            if (!client_->connect(advDevice_, false)) {
+            client_->deleteServices();
+            if (!client_->connect(advDevice_, true)) {
                 Serial.println("Reconnect failed");
                 isAmpConnected_ = false;
                 return false;
@@ -144,7 +154,10 @@ bool SparkBTControl::connectToServer() {
 
     Serial.print("Connected to: ");
     Serial.println(client_->getPeerAddress().toString().c_str());
-    isAmpConnected_ = true;
+    // A GATT link alone is not enough: the device may be another Spark-family
+    // peripheral or lack the control notification characteristic.  Mark the
+    // amp connected only after subscribeToNotifications succeeds.
+    isAmpConnected_ = false;
     return true;
 }
 
@@ -172,6 +185,7 @@ bool SparkBTControl::subscribeToNotifications(notify_callback notifyCallback) {
                         Serial.println("Subscribe failed, disconnecting");
                         // Disconnect if subscribe failed
                         client_->disconnect();
+                        isAmpConnected_ = false;
                         return false;
                     }
                 }
@@ -183,6 +197,7 @@ bool SparkBTControl::subscribeToNotifications(notify_callback notifyCallback) {
             }
 
             Serial.println("Done with this device.");
+            isAmpConnected_ = true;
             return true;
         } // pSrv
         else {
@@ -276,6 +291,11 @@ bool SparkBTControl::writeBLE(ByteVector &cmd, bool withDelay, bool response) {
 
 void SparkBTControl::onResult(NimBLEAdvertisedDevice *advertisedDevice) {
 
+#ifdef PANELAN_SC05X_MODE
+    // Keep raw advertisements on USB for diagnosis, but do not put them on the
+    // player-facing screen.
+    Serial.printf("BLE advertisement: %s\n", advertisedDevice->toString().c_str());
+#endif
     if (advertisedDevice->isAdvertisingService(
             NimBLEUUID(SPARK_BLE_SERVICE_UUID))) {
         Serial.println("Found Spark, connecting.");
@@ -423,6 +443,7 @@ void SparkBTControl::notifyClients(const vector<CmdData> &msg) {
         }
     }
 
+#ifndef NO_CLASSIC_BT
     if (btSerial && btSerial->hasClient()) {
         DEBUG_PRINTLN("Sending message via BT Serial:");
         for (auto chunk : msg) {
@@ -438,6 +459,7 @@ void SparkBTControl::notifyClients(const vector<CmdData> &msg) {
             DEBUG_PRINTF("Free Heap size: %d\n", ESP.getFreeHeap());
         }
     }
+#endif
 }
 
 // AMP Mode
@@ -452,7 +474,6 @@ void SparkBTControl::onConnect(NimBLEServer *pServer_,
 // APP mode
 void SparkBTControl::onConnect(NimBLEClient *pClient_) {
     NimBLEClientCallbacks::onConnect(pClient_);
-    spark_dc_->getAmpName();
 }
 
 // AMP mode when App is disconnected
@@ -483,6 +504,7 @@ void SparkBTControl::stopScan() {
     }
 }
 
+#ifndef NO_CLASSIC_BT
 void SparkBTControl::serialCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param) {
     if (event == ESP_SPP_SRV_OPEN_EVT) {
         Serial.println("Client Connected");
@@ -514,6 +536,7 @@ void SparkBTControl::stopBTSerial() {
     btSerial = nullptr;
     Serial.println("BT Serial stopped");
 }
+#endif
 
 void SparkBTControl::stopBLEServer() {
 

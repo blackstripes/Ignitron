@@ -64,8 +64,10 @@ SparkDataControl::SparkDataControl() {
 SparkDataControl::~SparkDataControl() {
     if (bleControl)
         delete bleControl;
+#ifndef HEADLESS_SERIAL_MODE
     if (sparkDisplay)
         delete sparkDisplay;
+#endif
     if (keyboardControl)
         delete keyboardControl;
 }
@@ -83,6 +85,7 @@ OperationMode SparkDataControl::init(OperationMode opModeInput) {
 
     switch (operationMode_) {
     case SPARK_MODE_APP:
+#ifndef HEADLESS_SERIAL_MODE
         // Set MAC address for BLE keyboard
         esp_base_mac_addr_set(&macKeyboard[0]);
 
@@ -91,6 +94,7 @@ OperationMode SparkDataControl::init(OperationMode opModeInput) {
         bleKeyboard.begin();
         // delay(2000);
         bleKeyboard.end();
+#endif
         bleControl->initBLE(&bleNotificationCallback);
         DEBUG_PRINTLN("Starting regular check for empty HW presets.");
 
@@ -317,6 +321,11 @@ void SparkDataControl::resetStatus() {
     sparkAmpName = "Spark 40";
     withDelay = false;
     lastAmpBatteryUpdate = 0;
+    msgQueue = {};
+    currentCommand.clear();
+    pendingLooperAcks.clear();
+    currentMsg.clear();
+    ackMsg.clear();
     SparkPresetControl::getInstance().resetStatus();
     SparkStatus::getInstance().resetStatus();
 }
@@ -702,7 +711,10 @@ void SparkDataControl::handleAppModeResponse() {
             setAmpParameters();
             getHWChecksums();
             printMessage = true;
-            // ampNameReceived_ = true;
+            // The PanelLan profile uses this as the command-readiness gate.
+            // The original source left it disabled, causing valid reconnects
+            // to remain permanently "not ready".
+            ampNameReceived_ = true;
         }
 
         if (lastMessageType == MSG_TYPE_AMP_SERIAL) {
@@ -913,10 +925,17 @@ bool SparkDataControl::checkBLEConnection() {
     }
     if (bleControl->isConnectionFound()) {
         if (bleControl->connectToServer()) {
-            bleControl->subscribeToNotifications(&bleNotificationCallback);
-            Serial.println("BLE connection to Spark established.");
-            // delay(2000);
-            return true;
+            if (bleControl->subscribeToNotifications(&bleNotificationCallback)) {
+                // The initial model query selects the correct Spark 2 / NEO
+                // transport parameters.  It must run only after the GATT
+                // notification channel is usable.
+                getAmpName();
+                Serial.println("BLE connection to Spark established.");
+                return true;
+            }
+            Serial.println("Spark notification setup failed; restarting scan");
+            bleControl->startScan();
+            return false;
         } else {
             Serial.println("Failed to connect, starting scan");
             bleControl->startScan();

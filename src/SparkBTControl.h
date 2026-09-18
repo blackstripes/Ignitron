@@ -11,7 +11,9 @@
 #include "Config_Definitions.h"
 #include "SparkTypes.h"
 #include <Arduino.h>
+#ifndef NO_CLASSIC_BT
 #include <BluetoothSerial.h>
+#endif
 #include <NimBLEDevice.h>
 #include <string>
 #include <vector>
@@ -157,21 +159,19 @@ public:
 
     void stopBLEServer();
 
+#ifndef NO_CLASSIC_BT
     void startBTSerial();
     void stopBTSerial();
-
-    bool byteAvailable() {
-        if (btSerial != NULL) {
-            return btSerial->available();
-        } else
-            return false;
-    }
-    byte readByte() {
-        if (btSerial != NULL) {
-            return btSerial->read();
-        } else
-            return false;
-    }
+    bool byteAvailable() { return btSerial != nullptr && btSerial->available(); }
+    byte readByte() { return btSerial != nullptr ? btSerial->read() : 0; }
+#else
+    // ESP32-S3 supports BLE but not Classic Bluetooth SPP. Spark control uses
+    // BLE, so retain the API while making the unused upstream transport inert.
+    void startBTSerial() { Serial.println("Classic Bluetooth is unavailable on ESP32-S3"); }
+    void stopBTSerial() {}
+    bool byteAvailable() { return false; }
+    byte readByte() { return 0; }
+#endif
 
     void setMaxBleMsgSize(int size) {
         if (size > 0)
@@ -188,7 +188,9 @@ private:
     NimBLEAdvertisedDevice *advDevice_;
     NimBLEClient *client_ = nullptr;
 
+#ifndef NO_CLASSIC_BT
     BluetoothSerial *btSerial = nullptr;
+#endif
     const string btNameBle = "Spark 40 BLE";      // Spark 40 BLE
     const string btNameSerial = "Spark 40 Audio"; // Spark 40 Audio
 
@@ -223,7 +225,9 @@ private:
     void onConnect(NimBLEServer *server, ble_gap_conn_desc *desc);
     void onDisconnect(NimBLEServer *server);
 
+#ifndef NO_CLASSIC_BT
     static void serialCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
+#endif
 
     int notificationCount = 0;
 };

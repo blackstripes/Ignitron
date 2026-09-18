@@ -6,13 +6,19 @@
 #include <Wire.h>
 #include <string>
 
-#include "src/SparkButtonHandler.h"
-#include "src/SparkDataControl.h"
-#include "src/SparkDisplayControl.h"
-#include "src/SparkLEDControl.h"
-#include "src/SparkPresetControl.h"
+#include "SparkDataControl.h"
+#include "SparkPresetControl.h"
+#include "SparkStatus.h"
+#ifndef HEADLESS_SERIAL_MODE
+#include "SparkButtonHandler.h"
+#include "SparkDisplayControl.h"
+#include "SparkLEDControl.h"
+#endif
 #ifdef HEADLESS_SERIAL_MODE
-#include "src/SparkSerialCLI.h"
+#include "SparkSerialCLI.h"
+#endif
+#ifdef PANELAN_SC05X_MODE
+#include "PanelLanDisplay.h"
 #endif
 
 using namespace std;
@@ -21,13 +27,21 @@ using namespace std;
 const string DEVICE_NAME = "Ignitron";
 
 // Control classes
+#ifdef HEADLESS_SERIAL_MODE
+// Construct the Spark control stack after Arduino/USB initialization.  The
+// original firmware constructed it during C++ static initialization, which
+// continuously resets the ESP32-S3 before setup() can run.
+SparkDataControl *spark_dc = nullptr;
+SparkSerialCLI *serialCLI = nullptr;
+#else
 SparkDataControl spark_dc;
 SparkButtonHandler spark_bh;
 SparkLEDControl spark_led;
 SparkDisplayControl sparkDisplay;
+#endif
 SparkPresetControl &presetControl = SparkPresetControl::getInstance();
-#ifdef HEADLESS_SERIAL_MODE
-SparkSerialCLI serialCLI(&spark_dc);
+#ifdef PANELAN_SC05X_MODE
+PanelLanDisplay panelLanDisplay;
 #endif
 
 unsigned long lastInitialPresetTimestamp = 0;
@@ -38,6 +52,18 @@ int initialRequestInterval = 3000;
 bool isInitBoot;
 OperationMode operationMode = SPARK_MODE_APP;
 
+#ifdef PANELAN_SC05X_MODE
+bool selectTouchPreset(uint8_t preset) {
+    if (SparkDataControl::isAmpConnected() && spark_dc->ampNameReceived()) {
+        // The hardware preset command is the smallest, most reliable control
+        // path for this bring-up UI. It avoids stale cached-preset state after
+        // a Spark power cycle.
+        return spark_dc->changeHWPreset(preset);
+    }
+    return false;
+}
+#endif
+
 /////////////////////////////////////////////////////////
 //
 // INIT AND RUN
@@ -47,10 +73,27 @@ OperationMode operationMode = SPARK_MODE_APP;
 void setup() {
 
     Serial.begin(115200);
+#ifdef PANELAN_SC05X_MODE
+    // USB CDC hosts do not always assert DTR (and the display must not depend
+    // on a serial terminal being open). Give the host a brief chance, then
+    // continue with display and BLE bring-up.
+    const unsigned long serialReadyDeadline = millis() + 1500;
+    while (!Serial && millis() < serialReadyDeadline) {
+        delay(10);
+    }
+#else
     while (!Serial)
         ;
+#endif
 
     Serial.println("Initializing");
+#ifdef PANELAN_SC05X_MODE
+    panelLanDisplay.begin();
+    panelLanDisplay.setPresetCallback(selectTouchPreset);
+#endif
+    spark_dc = new SparkDataControl();
+    serialCLI = new SparkSerialCLI(spark_dc);
+    SparkPresetControl::getInstance().setDataControl(spark_dc);
     if (!LittleFS.begin(true)) {
         Serial.println("LittleFS Mount failed");
         return;
@@ -66,7 +109,7 @@ void setup() {
 #endif
 
     // Setting operation mode before initializing
-    operationMode = spark_dc.init(operationMode);
+    operationMode = spark_dc->init(operationMode);
 #ifndef HEADLESS_SERIAL_MODE
     spark_bh.configureButtons();
 #endif
@@ -85,7 +128,7 @@ void setup() {
     }
 
 #ifdef HEADLESS_SERIAL_MODE
-    serialCLI.begin();
+    serialCLI->begin();
 #else
     sparkDisplay.setDataControl(&spark_dc);
     spark_dc.setDisplayControl(&sparkDisplay);
@@ -107,8 +150,14 @@ void loop() {
         // Keep the serial console responsive while BLE scans/connects. The stock
         // firmware stays in a blocking loop here because its buttons/display are
         // its only user interface.
-        if (!(spark_dc.checkBLEConnection())) {
-            serialCLI.update();
+        const bool sparkConnected = spark_dc->checkBLEConnection();
+#ifdef PANELAN_SC05X_MODE
+        SparkStatus &status = SparkStatus::getInstance();
+        panelLanDisplay.setSparkIdentity(status.ampName().c_str(), status.ampSerialNumber().c_str());
+        panelLanDisplay.update(sparkConnected);
+#endif
+        if (!sparkConnected) {
+            serialCLI->update();
             delay(10);
             return;
         }
@@ -122,19 +171,22 @@ void loop() {
 
         // After connection is established, continue.
         // On first boot, get the amp type and initial state.
-        if (spark_dc.isInitBoot()) {
-            spark_dc.getSerialNumber();
-            spark_dc.isInitBoot() = false;
+        if (spark_dc->isInitBoot()) {
+            spark_dc->getSerialNumber();
+            spark_dc->isInitBoot() = false;
         }
     }
 
     // Check if presets have been updated (not needed in Keyboard mode)
     if (operationMode != SPARK_MODE_KEYBOARD) {
-        spark_dc.checkForUpdates();
+        spark_dc->checkForUpdates();
     }
 
 #ifdef HEADLESS_SERIAL_MODE
-    serialCLI.update();
+    serialCLI->update();
+#ifdef PANELAN_SC05X_MODE
+    panelLanDisplay.update(true);
+#endif
     delay(1);
 #else
     // Reading button input

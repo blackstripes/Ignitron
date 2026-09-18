@@ -21,6 +21,7 @@ public:
     SparkPresetControl &operator=(const SparkPresetControl &) = delete;
 
     void init();
+    void setDataControl(SparkDataControl *dataControl) { sparkDC = dataControl; }
 
     // Return active or pending preset/bank, set/get active preset number
     const Preset &activePreset() const { return activePreset_; }
