@@ -70,6 +70,11 @@ Primary MODE cycle:
 
 Tuner is a temporary modal performance state.
 
+For the touchscreen prototype, a newer explicit bottom-navigation tap wins
+over a pending tuner entry. If Spark reports a late TUNER_ON after the player
+has chosen another destination, remain on that destination and serialize the
+native tuner exit; do not let delayed confirmation steal visual focus.
+
 Device and Settings are not part of the physical MODE cycle.
 
 ### MODE switch

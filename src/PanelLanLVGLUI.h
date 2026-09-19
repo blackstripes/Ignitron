@@ -83,6 +83,7 @@ private:
     Screen activeScreen_ = Screen::Preset;
     Screen screenBeforeTuner_ = Screen::Preset;
     bool tunerOverrideActive_ = false;
+    uint32_t suppressTunerTakeoverUntilMs_ = 0;
     ControllerSnapshot latestSnapshot_{};
     ControllerActions *actions_ = nullptr;
     uint32_t renderedRevision_ = UINT32_MAX;

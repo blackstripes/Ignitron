@@ -21,6 +21,8 @@ public:
     // TUNER_OFF for a native exit, so exit uses the established preset-mode
     // transition and fresh tuner output can still reassert amp ownership.
     bool requestTuner(bool on);
+    // A newer explicit navigation choice wins over an in-flight tuner entry.
+    void cancelTunerEntry();
     bool requestLooperRecordDub();
     bool requestLooperPlayStop();
     bool requestLooperPlay();
@@ -68,6 +70,7 @@ private:
     bool tunerRequestSent_ = false;
     bool queuedTunerEnabled_ = false;
     bool tunerRequestEnabled_ = false;
+    bool tunerEntryCancelRequested_ = false;
     uint32_t tunerRequestSentAtMs_ = 0;
     enum class LooperAction : uint8_t { None, RecordDub, PlayStop, Play, Stop, UndoRedo, Clear };
     LooperAction queuedLooperAction_ = LooperAction::None;

@@ -193,8 +193,10 @@ void drawGlyph(lv_event_t *event) {
         line(8,7,12,13,1); line(8,13,12,7,1);
         break;
     case 9: // Tuning fork.
-        line(5,2,5,10,1); line(15,2,15,10,1);
-        arc(10,10,6,0,180,1); line(10,15,10,19,1);
+        line(5,2,5,10,1); line(14,2,14,10,1);
+        // At this size the wider arc made the left tine look offset; align
+        // the U to the tines and apply the matching optical correction right.
+        arc(10,10,5,0,180,1); line(10,15,10,19,1);
         break;
     case 10: // Device / settings.
         arc(10,10,6,0,360,1); arc(10,10,3,0,360,1);
@@ -796,9 +798,15 @@ void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
         return;
     }
     const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
-    if (page == static_cast<uint8_t>(Screen::Looper) &&
-        uiInstance->latestSnapshot_.looperCapability != ControllerLooperCapability::Verified) return;
     if (page <= static_cast<uint8_t>(Screen::Device)) {
+        if (page != static_cast<uint8_t>(Screen::Tuner)) {
+            // A destination tapped after TUNER is the newer intent. Keep the
+            // UI there if a native tuner-on observation arrives late.
+            if (uiInstance->actions_) uiInstance->actions_->cancelTunerEntry();
+            uiInstance->suppressTunerTakeoverUntilMs_ = millis() + 4000;
+        } else {
+            uiInstance->suppressTunerTakeoverUntilMs_ = 0;
+        }
         uiInstance->setActiveScreen(static_cast<Screen>(page));
         if (page == static_cast<uint8_t>(Screen::Tuner) && uiInstance->actions_) {
             uiInstance->actions_->requestTuner(true);
@@ -844,8 +852,6 @@ void PanelLanLVGLUI::renderNavigation() {
     lv_label_set_long_mode(headerTitle_, LV_LABEL_LONG_DOT);
     for (uint8_t i = 0; i < 5; ++i) {
         const bool selected = i == static_cast<uint8_t>(activeScreen_);
-        const bool looperAvailable = i != static_cast<uint8_t>(Screen::Looper) ||
-                                     latestSnapshot_.looperCapability == ControllerLooperCapability::Verified;
         lv_obj_set_height(navButtons_[i], 40);
         lv_obj_set_style_bg_color(navButtons_[i], selected ? lv_color_hex(0x25251C)
                                                           : lv_color_hex(0x090F13), 0);
@@ -859,8 +865,9 @@ void PanelLanLVGLUI::renderNavigation() {
         lv_obj_set_style_text_font(navLabels_[i], &lv_font_montserrat_12, 0);
         static const char *kNavLabels[] = {"PRESET", "FX", "LOOPER", "TUNER", "DEVICE"};
         lv_label_set_text(navLabels_[i], kNavLabels[i]);
-        if (looperAvailable) lv_obj_remove_state(navButtons_[i], LV_STATE_DISABLED);
-        else lv_obj_add_state(navButtons_[i], LV_STATE_DISABLED);
+        // A visible destination explains unsupported capability on its page;
+        // it should not look like broken navigation.
+        lv_obj_remove_state(navButtons_[i], LV_STATE_DISABLED);
         lv_obj_remove_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(navIcons_[i], selected ? lv_color_hex(0xFFD65A) : lv_color_hex(0xA7B7C3), 0);
         lv_obj_align(navLabels_[i], LV_ALIGN_BOTTOM_MID, 0, -3);
@@ -1142,15 +1149,19 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
 }
 
 void PanelLanLVGLUI::reconcileExternalTuner(const ControllerSnapshot &snapshot) {
-    if (snapshot.tunerActive && !tunerOverrideActive_) {
+    const bool suppressTakeover = static_cast<int32_t>(millis() - suppressTunerTakeoverUntilMs_) < 0;
+    if (snapshot.tunerActive && !tunerOverrideActive_ && !suppressTakeover) {
         // Preserve only a performance screen. A manual unavailable Tuner tab
         // is not a useful place to return after the amp exits real tuner mode.
         screenBeforeTuner_ = activeScreen_ == Screen::Tuner ? Screen::Preset : activeScreen_;
         tunerOverrideActive_ = true;
         setActiveScreen(Screen::Tuner);
-    } else if (!snapshot.tunerActive && tunerOverrideActive_) {
-        tunerOverrideActive_ = false;
-        setActiveScreen(screenBeforeTuner_);
+    } else if (!snapshot.tunerActive) {
+        if (tunerOverrideActive_) {
+            tunerOverrideActive_ = false;
+            setActiveScreen(screenBeforeTuner_);
+        }
+        if (!suppressTakeover) suppressTunerTakeoverUntilMs_ = 0;
     }
 }
 

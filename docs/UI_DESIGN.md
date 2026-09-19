@@ -160,6 +160,9 @@ Status priority:
 Destructive clear/delete should require either a long press, two-step confirmation, or physical long-press behavior. Do not make a casual single touchscreen tap erase a loop.
 
 The Spark 2 internal looper is the primary target. NEO Core should not show unsupported controls.
+The touchscreen LOOPER navigation target remains visible on every device:
+when capability is unknown or unsupported it opens a non-actionable page that
+plainly explains the requirement, rather than a greyed-out or missing tab.
 
 ## Screen 4 — Tuner
 

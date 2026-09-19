@@ -53,6 +53,14 @@ bool ControllerActions::requestTuner(bool on) {
     return true;
 }
 
+void ControllerActions::cancelTunerEntry() {
+    if (queuedTunerRequest_ && queuedTunerEnabled_) {
+        queuedTunerRequest_ = false;
+        return;
+    }
+    if (tunerRequestSent_ && tunerRequestEnabled_) tunerEntryCancelRequested_ = true;
+}
+
 bool ControllerActions::canRequestLooper() const {
     const ControllerSnapshot &snapshot = state_.snapshot();
     return snapshot.connectionPhase == ControllerConnectionPhase::Ready && !snapshot.sparkStateStale &&
@@ -139,6 +147,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         currentPresetQueryIssued_ = false;
         queuedTunerRequest_ = false;
         tunerRequestSent_ = false;
+        tunerEntryCancelRequested_ = false;
         queuedLooperAction_ = LooperAction::None;
         sentLooperAction_ = LooperAction::None;
         looperSyncRequestedAtMs_ = 0;
@@ -231,13 +240,23 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     // are the only confirmation that moves the controller in or out of tuner.
     if (tunerRequestSent_) {
         if (snapshot.tunerActive == tunerRequestEnabled_) {
+            if (tunerRequestEnabled_ && tunerEntryCancelRequested_) {
+                // TUNER_ON arrived after a newer navigation destination.
+                tunerRequestSent_ = false;
+                tunerEntryCancelRequested_ = false;
+                queuedTunerRequest_ = true;
+                queuedTunerEnabled_ = false;
+                return;
+            }
             Serial.printf("Controller: tuner %s confirmed by Spark\n",
                           tunerRequestEnabled_ ? "entry" : "exit");
             tunerRequestSent_ = false;
+            tunerEntryCancelRequested_ = false;
         } else if (millis() - tunerRequestSentAtMs_ >= kTunerTimeoutMs) {
             Serial.printf("Controller: tuner %s timed out\n",
                           tunerRequestEnabled_ ? "entry" : "exit");
             tunerRequestSent_ = false;
+            tunerEntryCancelRequested_ = false;
         }
         return;
     }
