@@ -275,22 +275,37 @@ Rules:
 
 ## Looper screen — Spark 2 only when verified
 
-### REC/DUB
+The current PanelLan implementation is enabled only for the measured Spark 2
+model/serial evidence recorded in `AMP_BEHAVIOR.md`. It requests Spark config
+and status before enabling controls. REC/DUB, PLAY/STOP, and UNDO/REDO remain
+pending until an incoming looper notification confirms a transport change; a
+transport ACK is not confirmation. CLEAR requires one tap to arm and a second
+tap within three seconds to send DELETE.
 
-State-driven label:
+### Record and playback controls
 
-- no loop -> REC
-- playing loop -> DUB
-- overdubbing -> STOP DUB or state-appropriate label after verified behavior
-- recording -> reflect recording state
+The circular touchscreen controls use concise, state-specific labels; the
+heading and guidance line explain the action in plain English:
 
-Do not use static label if current state is known.
+| Confirmed state | Record control | Playback controls |
+| --- | --- | --- |
+| Empty | REC | PLAY and STOP (disabled) |
+| Recording | FINISH | PLAY and STOP (enabled if status confirms a loop) |
+| Stopped with a loop | DUB | Separate PLAY and STOP |
+| Playing | DUB | Separate PLAY and STOP |
+| Overdubbing | FINISH | Separate PLAY and STOP |
+| Unknown transport, fresh nonzero loop count | REC/DUB | Separate PLAY and STOP |
 
-### PLAY/STOP
-
-- stopped existing loop -> PLAY
-- playing -> STOP
-- no loop -> disabled unless hardware proves useful behavior
+The large heading shows the Spark-confirmed transport, with one short line of
+guidance beneath it. Pending requests retain the confirmed heading, add an
+amber waiting message, and disable controls until confirmation. Unknown,
+stale and disconnected states have explicit messages and disabled controls.
+Fresh loop-count status enables Play, Stop, Undo/Redo and Clear even when
+transport is unknown. PLAY always requests native playback; the separate STOP
+always requests native stop. Neither depends on guessing current transport.
+Pending commands still temporarily disable all controls. REC starts recording;
+once Spark confirms recording, the same control explicitly reads FINISH and
+ends recording with native finish/play. No tap locally asserts success.
 
 ### UNDO/REDO
 
@@ -301,9 +316,10 @@ If protocol cannot reliably tell which is next, show combined UNDO/REDO rather t
 Destructive touchscreen flow:
 
 1. first tap arms clear.
-2. tile turns red and says TAP AGAIN TO CLEAR.
+2. tile turns red and says AGAIN; heading asks Clear this loop? and
+   explains that the second tap erases the loop.
 3. second tap within short window sends delete-all.
-4. timeout/navigation cancels.
+4. timeout, navigation, or another looper action cancels.
 
 Physical clear:
 

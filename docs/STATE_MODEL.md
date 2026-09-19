@@ -42,10 +42,10 @@ packet tail after a local Spark 2 tuner exit.
 
 ## Implementation status
 
-`ControllerState`/`ControllerActions` currently cover connection identity,
-presets, FX actions, and Spark 2 tuner observation/entry/exit. Looper and tap
-tempo have not yet been migrated to this canonical action/state path; they must
-not introduce a competing source of truth.
+`ControllerState`/`ControllerActions` cover connection identity, presets, FX,
+Spark 2 tuner, and the hardware-verified Spark 2 looper path. Looper transport
+is confirmed only by incoming Spark command/status observations; tap tempo has
+not yet been migrated and must not introduce a competing source of truth.
 
 ## Recommended top-level model
 

@@ -17,6 +17,9 @@ enum class ControllerConnectionPhase : uint8_t {
     Ready,
 };
 
+enum class ControllerLooperCapability : uint8_t { Unknown, Unsupported, Verified };
+enum class ControllerLooperTransport : uint8_t { Unknown, Empty, Stopped, Recording, Playing, Overdubbing };
+
 struct ControllerFxSlot {
     std::string label;
     // Spark's actual effect-model name for this logical signal-chain slot.
@@ -57,6 +60,22 @@ struct ControllerSnapshot {
     std::string tunerNote;
     float tunerOffset = 0.0f;
     int tunerOffsetCents = 0;
+    // Spark 2 looper fields are observations, never inferred from a touch.
+    ControllerLooperCapability looperCapability = ControllerLooperCapability::Unknown;
+    ControllerLooperTransport looperTransport = ControllerLooperTransport::Unknown;
+    // Fresh looper evidence exists; transport may still be Unknown when a
+    // native status reports only loop count. Gate count-based actions on this.
+    bool looperKnown = false;
+    bool looperStale = true;
+    uint8_t looperLoopCount = 0;
+    int looperBpm = 0;
+    int looperBars = 0;
+    bool looperStraight = true;
+    bool looperClick = false;
+    bool looperSettingsKnown = false;
+    bool looperPending = false;
+    bool looperActionFailed = false;
+    bool looperClearArmed = false;
     uint8_t confirmedHardwarePreset = 0;
     uint8_t pendingHardwarePreset = 0;
     bool presetActionFailed = false;
@@ -76,10 +95,18 @@ public:
     void beginFxToggleRequest(uint8_t slot, bool desiredEnabled);
     void confirmFxToggleRequest(uint8_t slot);
     void failFxToggleRequest(uint8_t slot);
+    void beginLooperRequest();
+    void confirmLooperRequest();
+    void failLooperRequest();
+    void armLooperClear();
+    void disarmLooperClear();
 
 private:
     ControllerSnapshot snapshot_;
     bool wasLinkEstablished_ = false;
+    uint32_t lastLooperStatusRevision_ = 0;
+    uint32_t lastLooperSettingsRevision_ = 0;
+    uint32_t lastLooperCommandRevision_ = 0;
 
     void publishIfChanged(const ControllerSnapshot &next);
 };

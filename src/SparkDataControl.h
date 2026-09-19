@@ -57,6 +57,11 @@ public:
     // applied to SparkPresetControl. ACKs and local pending mutations do not
     // affect this authoritative observation generation.
     static uint32_t fullPresetObservationRevision();
+    // Incoming Spark looper observations only. These never advance for an
+    // outgoing command or its transport ACK.
+    static uint32_t looperStatusObservationRevision();
+    static uint32_t looperSettingsObservationRevision();
+    static uint32_t looperCommandObservationRevision();
     static bool isAppConnected(); // true if ESP in AMP mode and client is connected
     void startBLEServer();
     // static void onScanEnded(NimBLEScanResults results);
@@ -248,6 +253,9 @@ private:
     static AckData lastFinalAck_;
     static vector<pair<string, uint32_t>> fxModelObservationRevisions_;
     static uint32_t fullPresetObservationRevision_;
+    static uint32_t looperStatusObservationRevision_;
+    static uint32_t looperSettingsObservationRevision_;
+    static uint32_t looperCommandObservationRevision_;
     static uint32_t ignoreTunerOutputUntilMs_;
 
     static bool sendMessageToBT(ByteVector &msg);

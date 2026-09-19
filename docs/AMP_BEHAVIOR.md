@@ -216,6 +216,23 @@ Spark 2 documents up to 60 seconds onboard looper recording.
 Source:
 https://help.positivegrid.com/hc/en-us/articles/28134103894157-Technical-Specification-for-Spark-2
 
+### Spark 2 looper — verified controller evidence (2026-09-18)
+
+Hardware target: Spark 2 serial `S5011I16101117`.
+
+- A status response reported `BPM 120`, `Count 4`, `Bars 4`, and `Loops 0`.
+- A config response reported straight count, four bars, free mode off, click on,
+  and 60,000 ms maximum duration.
+- In a controlled test, record/count-in produced a recording notification;
+  finish/play produced `Loops 1`; stop was observed; and clear returned
+  `Loops 0`.
+
+The PanelLan controller therefore enables its looper screen only for that
+verified model/serial pair. Its transport label is updated only by incoming
+looper command/status observations, never by a button press or transport ACK.
+Clear is intentionally a two-tap arm/confirm action. Playing/stopped state
+after reconnect remains unknown until Spark sends a transport observation.
+
 ## Known / unknown matrix
 
 | Behavior | Spark 2 | NEO Core | Controller rule |

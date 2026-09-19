@@ -2,6 +2,7 @@
 
 #include "controller/ControllerState.h"
 #include "SparkDataControl.h"
+#include "SparkStatus.h"
 
 bool ControllerActions::requestHardwarePreset(uint8_t preset) {
     const ControllerSnapshot &snapshot = state_.snapshot();
@@ -52,6 +53,54 @@ bool ControllerActions::requestTuner(bool on) {
     return true;
 }
 
+bool ControllerActions::canRequestLooper() const {
+    const ControllerSnapshot &snapshot = state_.snapshot();
+    return snapshot.connectionPhase == ControllerConnectionPhase::Ready && !snapshot.sparkStateStale &&
+           snapshot.looperCapability == ControllerLooperCapability::Verified && !snapshot.looperStale &&
+           !snapshot.looperPending && snapshot.pendingHardwarePreset == 0 && sentPreset_ == 0 && queuedPreset_ == 0 &&
+           !hasPendingFxOperation() && !queuedTunerRequest_ && !tunerRequestSent_ &&
+           queuedLooperAction_ == LooperAction::None && sentLooperAction_ == LooperAction::None;
+}
+
+bool ControllerActions::queueLooperAction(LooperAction action) {
+    if (!canRequestLooper()) return false;
+    state_.disarmLooperClear();
+    queuedLooperAction_ = action;
+    state_.beginLooperRequest();
+    return true;
+}
+
+bool ControllerActions::requestLooperRecordDub() { return queueLooperAction(LooperAction::RecordDub); }
+bool ControllerActions::requestLooperPlayStop() {
+    return state_.snapshot().looperLoopCount > 0 && queueLooperAction(LooperAction::PlayStop);
+}
+bool ControllerActions::requestLooperPlay() {
+    return state_.snapshot().looperLoopCount > 0 && queueLooperAction(LooperAction::Play);
+}
+bool ControllerActions::requestLooperStop() {
+    return state_.snapshot().looperLoopCount > 0 && queueLooperAction(LooperAction::Stop);
+}
+bool ControllerActions::requestLooperUndoRedo() {
+    return state_.snapshot().looperLoopCount > 0 && queueLooperAction(LooperAction::UndoRedo);
+}
+
+bool ControllerActions::requestLooperClear() {
+    const ControllerSnapshot &snapshot = state_.snapshot();
+    if (snapshot.looperLoopCount == 0) return false;
+    if (snapshot.looperClearArmed) {
+        state_.disarmLooperClear();
+        return queueLooperAction(LooperAction::Clear);
+    }
+    if (!canRequestLooper()) return false;
+    state_.armLooperClear();
+    looperSentAtMs_ = millis();
+    return true;
+}
+
+void ControllerActions::cancelLooperClear() {
+    state_.disarmLooperClear();
+}
+
 bool ControllerActions::hasPendingFxOperation() const {
     return queuedFxSlot_ != kNoFxSlot || sentFxSlot_ != kNoFxSlot;
 }
@@ -90,12 +139,91 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         currentPresetQueryIssued_ = false;
         queuedTunerRequest_ = false;
         tunerRequestSent_ = false;
+        queuedLooperAction_ = LooperAction::None;
+        sentLooperAction_ = LooperAction::None;
+        looperSyncRequestedAtMs_ = 0;
         // A BLE loss makes any unconfirmed effect command unknowable. The
         // ControllerState has already made the rendered value stale; discard
         // action metadata as well so it cannot be mistaken for a later link.
         if (hasPendingFxOperation()) {
             cancelFxRequest(state_, nullptr, false, "BLE disconnected");
         }
+        return;
+    }
+
+    if (snapshot.looperClearArmed && queuedLooperAction_ == LooperAction::None &&
+        millis() - looperSentAtMs_ >= kLooperClearArmMs) {
+        state_.disarmLooperClear();
+    }
+
+    if (sentLooperAction_ != LooperAction::None) {
+        const bool commandObserved = SparkDataControl::looperCommandObservationRevision() != looperCommandRevisionBeforeRequest_;
+        const bool statusObserved = SparkDataControl::looperStatusObservationRevision() != looperStatusRevisionBeforeRequest_;
+        const byte observedCommand = SparkStatus::getInstance().lastLooperCommand();
+        bool confirmed = false;
+        if (sentLooperAction_ == LooperAction::Clear) {
+            confirmed = statusObserved && snapshot.looperLoopCount == 0;
+        } else if (sentLooperAction_ == LooperAction::UndoRedo) {
+            confirmed = commandObserved && (observedCommand == SPK_LOOPER_CMD_UNDO || observedCommand == SPK_LOOPER_CMD_REDO);
+        } else if (sentLooperAction_ == LooperAction::PlayStop) {
+            confirmed = commandObserved && (snapshot.looperTransport == ControllerLooperTransport::Playing ||
+                                             snapshot.looperTransport == ControllerLooperTransport::Stopped);
+        } else if (sentLooperAction_ == LooperAction::Play) {
+            confirmed = commandObserved && observedCommand == SPK_LOOPER_CMD_PLAY;
+        } else if (sentLooperAction_ == LooperAction::Stop) {
+            confirmed = commandObserved && observedCommand == SPK_LOOPER_CMD_STOP;
+        } else if (sentLooperAction_ == LooperAction::RecordDub) {
+            confirmed = commandObserved && (snapshot.looperTransport == ControllerLooperTransport::Recording ||
+                                             snapshot.looperTransport == ControllerLooperTransport::Overdubbing ||
+                                             snapshot.looperTransport == ControllerLooperTransport::Playing);
+        }
+        // Only a fresh, action-appropriate Spark notification/status update
+        // resolves pending; command transport ACKs never enter this path.
+        if (confirmed) {
+            state_.confirmLooperRequest();
+            sentLooperAction_ = LooperAction::None;
+        } else if (millis() - looperSentAtMs_ >= kLooperTimeoutMs) {
+            state_.failLooperRequest();
+            dataControl.sparkLooperGetStatus();
+            dataControl.sparkLooperGetConfig();
+            sentLooperAction_ = LooperAction::None;
+        }
+        return;
+    }
+
+    if (queuedLooperAction_ != LooperAction::None) {
+        const LooperAction action = queuedLooperAction_;
+        queuedLooperAction_ = LooperAction::None;
+        const uint32_t commandRevisionBeforeSend = SparkDataControl::looperCommandObservationRevision();
+        const uint32_t statusRevisionBeforeSend = SparkDataControl::looperStatusObservationRevision();
+        bool sent = false;
+        switch (action) {
+        case LooperAction::RecordDub:
+            // Choose the native sequence from observed transport only; this
+            // does not alter ControllerState until Spark notifies us back.
+            if (snapshot.looperTransport == ControllerLooperTransport::Recording ||
+                snapshot.looperTransport == ControllerLooperTransport::Overdubbing) sent = dataControl.sparkLooperStopRecAndPlay();
+            else if (snapshot.looperLoopCount > 0) sent = dataControl.sparkLooperDub();
+            else sent = dataControl.sparkLooperRec();
+            break;
+        case LooperAction::PlayStop:
+            sent = (snapshot.looperTransport == ControllerLooperTransport::Playing ||
+                    snapshot.looperTransport == ControllerLooperTransport::Overdubbing)
+                       ? dataControl.sparkLooperStopPlaying() : dataControl.sparkLooperPlay();
+            break;
+        case LooperAction::UndoRedo: sent = dataControl.sparkLooperUndoRedo(); break;
+        case LooperAction::Play: sent = dataControl.sparkLooperPlay(); break;
+        case LooperAction::Stop: sent = dataControl.sparkLooperStopPlaying(); break;
+        case LooperAction::Clear: sent = dataControl.sparkLooperDeleteAll(); break;
+        default: break;
+        }
+        if (sent) {
+            sentLooperAction_ = action;
+            looperSentAtMs_ = millis();
+            looperCommandRevisionBeforeRequest_ = commandRevisionBeforeSend;
+            looperStatusRevisionBeforeRequest_ = statusRevisionBeforeSend;
+        }
+        else state_.failLooperRequest();
         return;
     }
 
@@ -135,6 +263,19 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             Serial.printf("Controller: tuner %s command failed\n",
                           queuedTunerEnabled_ ? "entry" : "exit");
         }
+        return;
+    }
+
+    // The verified capability is not itself a fresh looper state. Request
+    // both authoritative config and status once the normal preset readiness
+    // barrier has completed; retry boundedly while the amp remains silent.
+    if (snapshot.connectionPhase == ControllerConnectionPhase::Ready &&
+        snapshot.looperCapability == ControllerLooperCapability::Verified &&
+        (!snapshot.looperKnown || !snapshot.looperSettingsKnown) &&
+        (looperSyncRequestedAtMs_ == 0 || millis() - looperSyncRequestedAtMs_ >= kLooperTimeoutMs)) {
+        dataControl.sparkLooperGetConfig();
+        dataControl.sparkLooperGetStatus();
+        looperSyncRequestedAtMs_ = millis();
         return;
     }
 

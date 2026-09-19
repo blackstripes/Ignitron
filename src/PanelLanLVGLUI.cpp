@@ -9,6 +9,58 @@
 namespace {
 PanelLanLVGLUI *uiInstance = nullptr;
 
+// Looper colors communicate transport and intent; text always carries the
+// same meaning so recording, pending and unavailable remain unambiguous.
+namespace LooperTheme {
+constexpr uint32_t surface = 0x10191F;
+constexpr uint32_t border = 0x31434F;
+constexpr uint32_t text = 0xF1F4F7;
+constexpr uint32_t secondary = 0xA9BAC5;
+constexpr uint32_t info = 0x4ED6F0;
+constexpr uint32_t muted = 0x657783;
+constexpr uint32_t record = 0xFF6876;
+constexpr uint32_t recordFill = 0x56252F;
+constexpr uint32_t play = 0x55E6A0;
+constexpr uint32_t playFill = 0x174534;
+constexpr uint32_t warning = 0xFFD06A;
+constexpr uint32_t dangerFill = 0x962E3C;
+}
+
+void styleLooperButton(lv_obj_t *button, uint32_t fill, uint32_t accent) {
+    lv_obj_set_style_bg_color(button, lv_color_hex(fill), 0);
+    lv_obj_set_style_bg_grad_color(button, lv_color_hex(0x090E12), 0);
+    lv_obj_set_style_border_color(button, lv_color_hex(accent), 0);
+    lv_obj_set_style_text_color(button, lv_color_hex(LooperTheme::text), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(button, 1), lv_color_hex(accent), 0);
+}
+
+void drawLooperSurface(lv_event_t *event) {
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_area_t bounds;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    auto line = [&](int x1, int y1, int x2, int y2) {
+        lv_draw_line_dsc_t dsc;
+        lv_draw_line_dsc_init(&dsc);
+        dsc.p1 = {bounds.x1 + x1, bounds.y1 + y1};
+        dsc.p2 = {bounds.x1 + x2, bounds.y1 + y2};
+        dsc.color = lv_color_hex(LooperTheme::border);
+        dsc.width = 1;
+        lv_draw_line(layer, &dsc);
+    };
+    line(9, 25, 298, 25);
+    for (int x : {77, 155, 215}) line(x, 7, x, 20);
+    // Spark does not currently report a trustworthy playhead. Preserve the
+    // concept's segmented rail, but never animate or fill invented progress.
+    for (int segment = 0; segment < 30; ++segment) {
+        lv_draw_rect_dsc_t dsc;
+        lv_draw_rect_dsc_init(&dsc);
+        dsc.bg_color = lv_color_hex(segment % 10 == 0 ? 0x465866 : 0x293842);
+        lv_area_t area = {bounds.x1 + 10 + segment * 6, bounds.y1 + 131,
+                          bounds.x1 + 13 + segment * 6, bounds.y1 + 140};
+        lv_draw_rect(layer, &dsc, &area);
+    }
+}
+
 // A subdued amplifier cabinet gives the preset card the concept's physical
 // texture. Draw directly into LVGL's current partial buffer; no full-screen
 // image allocation, extra framebuffer, or fake amp/model metadata is needed.
@@ -523,15 +575,56 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_remove_flag(detailPage_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(detailPage_, LV_OBJ_FLAG_HIDDEN);
 
-    looperPage_ = createPanel(detailPage_, 6, 3, 308, 160);
-    lv_obj_add_event_cb(looperPage_, drawInstrumentEmptyState, LV_EVENT_DRAW_MAIN, nullptr);
-    createText(looperPage_, "SPARK LOOPER", 12, 9, 145, &lv_font_montserrat_12, 0xABBAC5);
-    createText(looperPage_, "UNAVAILABLE", 191, 9, 107,
-               &lv_font_montserrat_12, 0xD9B877);
-    createText(looperPage_, "Looper unavailable", 12, 94, 282,
-               &lv_font_montserrat_20, 0xE1E8ED, true);
-    createText(looperPage_, "Requires verified device support", 12, 121, 282,
-               &lv_font_montserrat_12, 0xA4B3BE, true);
+    looperPage_ = createPanel(detailPage_, 6, 3, 308, 164);
+    lv_obj_set_style_bg_color(looperPage_, lv_color_hex(LooperTheme::surface), 0);
+    lv_obj_set_style_bg_grad_color(looperPage_, lv_color_hex(0x030A0E), 0);
+    lv_obj_add_event_cb(looperPage_, drawLooperSurface, LV_EVENT_DRAW_MAIN, nullptr);
+    looperBarsLabel_ = createText(looperPage_, "-- BARS", 7, 7, 66,
+                                   &lv_font_montserrat_12, LooperTheme::secondary, true);
+    looperBpmLabel_ = createText(looperPage_, "-- BPM", 82, 7, 68,
+                                  &lv_font_montserrat_12, LooperTheme::info, true);
+    // No time-signature observation exists in ControllerSnapshot yet.
+    createText(looperPage_, "--/--", 160, 7, 50, &lv_font_montserrat_12, LooperTheme::muted, true);
+    looperClickLabel_ = createText(looperPage_, "CLICK --", 220, 7, 78,
+                                    &lv_font_montserrat_12, LooperTheme::secondary, true);
+    looperStateLabel_ = createText(looperPage_, "Reading loop...", 10, 30, 286,
+                                    &lv_font_montserrat_20, LooperTheme::warning);
+    createText(looperPage_, "Position --", 199, 129, 98,
+               &lv_font_montserrat_12, LooperTheme::muted, true);
+    looperInfoLabel_ = createText(looperPage_, "Waiting for Spark status", 10, 146, 286,
+                                   &lv_font_montserrat_12, LooperTheme::secondary);
+    const char *looperLabels[] = {"REC /\nDUB", "PLAY", "STOP", "UNDO /\nREDO", "CLEAR"};
+    const char *looperIcons[] = {LV_SYMBOL_BULLET, LV_SYMBOL_PLAY, LV_SYMBOL_STOP, LV_SYMBOL_REFRESH, LV_SYMBOL_TRASH};
+    lv_obj_t **looperButtons[] = {&looperRecButton_, &looperPlayButton_, &looperStopButton_, &looperUndoButton_, &looperClearButton_};
+    for (uint8_t i = 0; i < 5; ++i) {
+        lv_obj_t *button = lv_button_create(looperPage_);
+        *looperButtons[i] = button;
+        lv_obj_set_size(button, 58, 58);
+        lv_obj_set_pos(button, 2 + i * 61, 58);
+        lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_pad_all(button, 0, 0);
+        lv_obj_set_style_border_width(button, 2, 0);
+        lv_obj_set_style_shadow_width(button, 0, 0);
+        lv_obj_set_style_bg_grad_dir(button, LV_GRAD_DIR_VER, 0);
+        lv_obj_set_style_text_font(button, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_line_space(button, 0, 0);
+        lv_obj_set_style_bg_color(button, lv_color_hex(0x141E25), LV_STATE_DISABLED);
+        lv_obj_set_style_border_color(button, lv_color_hex(0x26343E), LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(button, lv_color_hex(LooperTheme::muted), LV_STATE_DISABLED);
+        lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(button, LV_OPA_COVER, LV_STATE_DISABLED);
+        lv_obj_add_event_cb(button, onLooperClicked, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
+        lv_obj_t *label = lv_label_create(button);
+        lv_obj_set_width(label, 54);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_text(label, looperLabels[i]);
+        lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 26);
+        lv_obj_t *icon = lv_label_create(button);
+        lv_label_set_text(icon, looperIcons[i]);
+        lv_obj_set_style_text_font(icon, &lv_font_montserrat_20, 0);
+        lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 2);
+    }
     lv_obj_add_flag(looperPage_, LV_OBJ_FLAG_HIDDEN);
 
     tunerPage_ = createPanel(detailPage_, 6, 3, 308, 160);
@@ -703,6 +796,8 @@ void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
         return;
     }
     const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+    if (page == static_cast<uint8_t>(Screen::Looper) &&
+        uiInstance->latestSnapshot_.looperCapability != ControllerLooperCapability::Verified) return;
     if (page <= static_cast<uint8_t>(Screen::Device)) {
         uiInstance->setActiveScreen(static_cast<Screen>(page));
         if (page == static_cast<uint8_t>(Screen::Tuner) && uiInstance->actions_) {
@@ -711,9 +806,23 @@ void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
     }
 }
 
+void PanelLanLVGLUI::onLooperClicked(lv_event_t *event) {
+    if (!uiInstance->actions_ || uiInstance->activeScreen_ != Screen::Looper) return;
+    switch (static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)))) {
+    case 0: uiInstance->actions_->requestLooperRecordDub(); break;
+    case 1: uiInstance->actions_->requestLooperPlay(); break;
+    case 2: uiInstance->actions_->requestLooperStop(); break;
+    case 3: uiInstance->actions_->requestLooperUndoRedo(); break;
+    case 4: uiInstance->actions_->requestLooperClear(); break;
+    }
+}
+
 void PanelLanLVGLUI::setActiveScreen(Screen screen) {
     if (tunerOverrideActive_ && screen != Screen::Tuner) {
         return;
+    }
+    if (activeScreen_ == Screen::Looper && screen != Screen::Looper && actions_) {
+        actions_->cancelLooperClear();
     }
     activeScreen_ = screen;
     if (screen == Screen::Preset) {
@@ -735,6 +844,8 @@ void PanelLanLVGLUI::renderNavigation() {
     lv_label_set_long_mode(headerTitle_, LV_LABEL_LONG_DOT);
     for (uint8_t i = 0; i < 5; ++i) {
         const bool selected = i == static_cast<uint8_t>(activeScreen_);
+        const bool looperAvailable = i != static_cast<uint8_t>(Screen::Looper) ||
+                                     latestSnapshot_.looperCapability == ControllerLooperCapability::Verified;
         lv_obj_set_height(navButtons_[i], 40);
         lv_obj_set_style_bg_color(navButtons_[i], selected ? lv_color_hex(0x25251C)
                                                           : lv_color_hex(0x090F13), 0);
@@ -748,6 +859,8 @@ void PanelLanLVGLUI::renderNavigation() {
         lv_obj_set_style_text_font(navLabels_[i], &lv_font_montserrat_12, 0);
         static const char *kNavLabels[] = {"PRESET", "FX", "LOOPER", "TUNER", "DEVICE"};
         lv_label_set_text(navLabels_[i], kNavLabels[i]);
+        if (looperAvailable) lv_obj_remove_state(navButtons_[i], LV_STATE_DISABLED);
+        else lv_obj_add_state(navButtons_[i], LV_STATE_DISABLED);
         lv_obj_remove_flag(navIcons_[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(navIcons_[i], selected ? lv_color_hex(0xFFD65A) : lv_color_hex(0xA7B7C3), 0);
         lv_obj_align(navLabels_[i], LV_ALIGN_BOTTOM_MID, 0, -3);
@@ -880,8 +993,125 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         }
         return;
     }
-    // Looper remains unavailable until its device capability and controller
-    // action contracts are separately verified.
+    if (activeScreen_ == Screen::Looper) {
+        const bool supported = snapshot.looperCapability == ControllerLooperCapability::Verified;
+        const bool linked = snapshot.connectionPhase == ControllerConnectionPhase::Ready ||
+                            snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||
+                            snapshot.connectionPhase == ControllerConnectionPhase::Identifying;
+        // A fresh status proves loop existence even when Spark has not sent
+        // a transport notification. Do not lock out PLAY, Undo or Clear just
+        // because Playing versus Stopped remains unknown after reconnect.
+        const bool ready = supported && snapshot.looperKnown && !snapshot.looperStale;
+        const bool hasLoop = snapshot.looperLoopCount > 0;
+        const bool recording = snapshot.looperTransport == ControllerLooperTransport::Recording;
+        const bool overdubbing = snapshot.looperTransport == ControllerLooperTransport::Overdubbing;
+        const bool settingsFresh = linked && supported && snapshot.looperSettingsKnown && !snapshot.looperStale;
+        if (settingsFresh && snapshot.looperBars > 0) {
+            lv_label_set_text_fmt(looperBarsLabel_, "%d %s", snapshot.looperBars,
+                                  snapshot.looperBars == 1 ? "BAR" : "BARS");
+        } else lv_label_set_text(looperBarsLabel_, "-- BARS");
+        if (settingsFresh && snapshot.looperBpm > 0) {
+            lv_label_set_text_fmt(looperBpmLabel_, "%d BPM", snapshot.looperBpm);
+        } else lv_label_set_text(looperBpmLabel_, "-- BPM");
+        lv_label_set_text(looperClickLabel_, !settingsFresh ? "CLICK --" : snapshot.looperClick ? "CLICK ON" : "CLICK OFF");
+        lv_obj_set_style_text_color(looperClickLabel_, lv_color_hex(settingsFresh && snapshot.looperClick
+                                                                      ? LooperTheme::play : LooperTheme::secondary), 0);
+        const char *transport = hasLoop ? "Loop available" : "State unknown";
+        const char *guidance = hasLoop ? "Transport unknown - PLAY or STOP" : "Waiting for Spark status";
+        uint32_t stateColor = LooperTheme::text;
+        switch (snapshot.looperTransport) {
+        case ControllerLooperTransport::Empty:
+            transport = "No loop yet";
+            guidance = "Tap REC to start recording";
+            break;
+        case ControllerLooperTransport::Stopped:
+            transport = "Loop stopped";
+            guidance = "Play your loop or add another layer";
+            break;
+        case ControllerLooperTransport::Recording:
+            transport = "Recording...";
+            guidance = "Finish below to start playback";
+            stateColor = LooperTheme::record;
+            break;
+        case ControllerLooperTransport::Playing:
+            transport = "Playing loop";
+            guidance = "Overdub adds a layer as the loop plays";
+            stateColor = LooperTheme::play;
+            break;
+        case ControllerLooperTransport::Overdubbing:
+            transport = "Overdubbing...";
+            guidance = "Finish keeps your loop playing";
+            stateColor = LooperTheme::record;
+            break;
+        default: break;
+        }
+        uint32_t infoColor = LooperTheme::secondary;
+        uint32_t borderColor = LooperTheme::border;
+        if (!linked) {
+            transport = "Not connected";
+            guidance = "Reconnect Spark to use the looper";
+            stateColor = LooperTheme::warning;
+        } else if (!supported) {
+            transport = "Unavailable";
+            guidance = "Looper needs a verified Spark 2";
+            stateColor = LooperTheme::muted;
+        } else if (!ready) {
+            transport = snapshot.looperKnown && snapshot.looperStale ? "State out of date" : "State unknown";
+            guidance = "Waiting for fresh Spark status";
+            stateColor = LooperTheme::warning;
+        } else if (snapshot.looperPending) {
+            // Keep the last confirmed transport visible; the request is only
+            // an amber annotation until a Spark observation confirms it.
+            guidance = "Pending - waiting for Spark to confirm";
+            infoColor = borderColor = LooperTheme::warning;
+        } else if (snapshot.looperClearArmed) {
+            transport = "Clear this loop?";
+            guidance = "Tap Clear again within 3 sec to erase";
+            stateColor = infoColor = borderColor = LooperTheme::record;
+        } else if (snapshot.looperActionFailed) {
+            guidance = "Not confirmed - refreshing Spark state";
+            infoColor = borderColor = LooperTheme::record;
+        } else if (snapshot.connectionPhase != ControllerConnectionPhase::Ready || snapshot.sparkStateStale) {
+            guidance = "Syncing Spark - controls will unlock";
+            infoColor = LooperTheme::warning;
+        }
+        lv_label_set_text(looperStateLabel_, transport);
+        lv_label_set_text(looperInfoLabel_, guidance);
+        lv_obj_set_style_text_color(looperStateLabel_, lv_color_hex(stateColor), 0);
+        lv_obj_set_style_text_color(looperInfoLabel_, lv_color_hex(infoColor), 0);
+        lv_obj_set_style_border_color(looperPage_, lv_color_hex(borderColor), 0);
+
+        const char *recordLabel = !ready || snapshot.looperTransport == ControllerLooperTransport::Unknown
+                                      ? "REC /\nDUB" : recording || overdubbing ? "FINISH" : hasLoop ? "DUB" : "REC";
+        lv_label_set_text(lv_obj_get_child(looperRecButton_, 0), recordLabel);
+        lv_label_set_text(lv_obj_get_child(looperClearButton_, 0), snapshot.looperClearArmed ? "AGAIN" : "CLEAR");
+        lv_label_set_text(lv_obj_get_child(looperRecButton_, 1), ready && (recording || overdubbing) ? LV_SYMBOL_OK : LV_SYMBOL_BULLET);
+        styleLooperButton(looperRecButton_, recording || overdubbing ? LooperTheme::playFill : LooperTheme::recordFill,
+                          recording || overdubbing ? LooperTheme::play : LooperTheme::record);
+        styleLooperButton(looperPlayButton_, LooperTheme::playFill, LooperTheme::play);
+        styleLooperButton(looperStopButton_, 0x273846, LooperTheme::warning);
+        styleLooperButton(looperUndoButton_, 0x253039, LooperTheme::secondary);
+        styleLooperButton(looperClearButton_, snapshot.looperClearArmed ? LooperTheme::dangerFill : LooperTheme::surface,
+                          snapshot.looperClearArmed ? LooperTheme::record : LooperTheme::secondary);
+        const bool actionReady = ready && !snapshot.looperPending &&
+                                 snapshot.connectionPhase == ControllerConnectionPhase::Ready &&
+                                 !snapshot.sparkStateStale && !snapshot.tunerActive && snapshot.pendingHardwarePreset == 0;
+        auto enable = [](lv_obj_t *button, bool enabled) {
+            if (enabled) lv_obj_remove_state(button, LV_STATE_DISABLED);
+            else {
+                lv_obj_add_state(button, LV_STATE_DISABLED);
+                lv_obj_set_style_text_color(lv_obj_get_child(button, 1), lv_color_hex(LooperTheme::muted), 0);
+            }
+        };
+        enable(looperRecButton_, actionReady);
+        // Loop-count-dependent actions do not require a complete transport
+        // observation; count-only status must leave existing loops usable.
+        enable(looperPlayButton_, actionReady && hasLoop);
+        enable(looperStopButton_, actionReady && hasLoop);
+        enable(looperUndoButton_, actionReady && hasLoop);
+        enable(looperClearButton_, actionReady && hasLoop);
+        return;
+    }
     if (activeScreen_ == Screen::Device) {
         const bool linked = snapshot.connectionPhase == ControllerConnectionPhase::Identifying ||
                             snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||

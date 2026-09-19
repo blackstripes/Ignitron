@@ -127,20 +127,35 @@ This is a performance screen and should have the largest touch targets after the
 
 Primary controls:
 
-- REC / DUB
-- PLAY / STOP
-- UNDO / REDO
-- CLEAR / DELETE (must be visually distinct and protected from accidental activation)
+- State-specific record action: REC, FINISH, DUB, or neutral REC/DUB when
+  transport is unknown
+- Separate, always-explicit PLAY and STOP actions
+- Quieter UNDO / REDO and CLEAR controls
 
-Status:
+The 320x240 implementation adapts the concept's slim metrics strip to five
+58px circular controls (REC/FINISH, PLAY, STOP, UNDO/REDO, CLEAR), dark metallic gradients, colored rings and
+icons, and segmented position rail. Concise labels fit below each icon;
+UNDO / REDO uses two lines. A confirmed-state heading and short guidance
+line explain the workflow. Recording actions use red; finish/play actions use
+green. Disabled controls use a muted fill, border, icon and text. Clear becomes
+prominent red only when armed, with an explicit erase warning. The existing
+yellow selected-navigation treatment remains. The full state-to-action mapping
+is in `INTERACTION_SPEC.md`.
 
-- Record/play/overdub state
-- Number of bars
-- BPM
-- Straight/shuffle if available
-- Click state
-- Loop count / loop existence
-- Current progress if protocol data makes it reliable
+PLAY and STOP must remain distinct targets: native loop-count status does
+not establish whether an existing loop is playing, so an inferred toggle could
+make STOP unreachable. Both remain available with fresh nonzero loop count
+even when transport is unknown (subject to the shared pending-action gate).
+
+Status priority:
+
+- Record/play/overdub state and the next useful action
+- Loop existence; pending, unknown, stale or disconnected status
+- Bars/BPM/click appear in the slim top strip only from fresh Spark settings;
+  unavailable values show dashes
+- Time signature and loop position are not currently exposed by canonical
+  state: the signature reads `--/--`, the rail is neutral, and its caption is
+  `Position --`. Do not invent an elapsed duration, fill or moving cursor
 
 Destructive clear/delete should require either a long press, two-step confirmation, or physical long-press behavior. Do not make a casual single touchscreen tap erase a loop.
 

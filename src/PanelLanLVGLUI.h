@@ -47,6 +47,16 @@ private:
     lv_obj_t *presetButtons_[4]{};
     lv_obj_t *detailPage_ = nullptr;
     lv_obj_t *looperPage_ = nullptr;
+    lv_obj_t *looperStateLabel_ = nullptr;
+    lv_obj_t *looperInfoLabel_ = nullptr;
+    lv_obj_t *looperBarsLabel_ = nullptr;
+    lv_obj_t *looperBpmLabel_ = nullptr;
+    lv_obj_t *looperClickLabel_ = nullptr;
+    lv_obj_t *looperRecButton_ = nullptr;
+    lv_obj_t *looperPlayButton_ = nullptr;
+    lv_obj_t *looperStopButton_ = nullptr;
+    lv_obj_t *looperUndoButton_ = nullptr;
+    lv_obj_t *looperClearButton_ = nullptr;
     lv_obj_t *tunerPage_ = nullptr;
     lv_obj_t *tunerStateLabel_ = nullptr;
     lv_obj_t *tunerNoteLabel_ = nullptr;
@@ -93,6 +103,7 @@ private:
     static void onPresetCardClicked(lv_event_t *event);
     static void onFxClicked(lv_event_t *event);
     static void onNavClicked(lv_event_t *event);
+    static void onLooperClicked(lv_event_t *event);
     void createUi();
     void renderStatus(const ControllerSnapshot &snapshot);
     void setActiveScreen(Screen screen);

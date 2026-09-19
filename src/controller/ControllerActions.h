@@ -21,12 +21,23 @@ public:
     // TUNER_OFF for a native exit, so exit uses the established preset-mode
     // transition and fresh tuner output can still reassert amp ownership.
     bool requestTuner(bool on);
+    bool requestLooperRecordDub();
+    bool requestLooperPlayStop();
+    bool requestLooperPlay();
+    bool requestLooperStop();
+    bool requestLooperUndoRedo();
+    // First tap arms a short-lived destructive action; only the second sends DELETE.
+    bool requestLooperClear();
+    // Leaving the page or choosing another action cancels destructive intent.
+    void cancelLooperClear();
     void process(SparkDataControl &dataControl);
 
 private:
     static constexpr uint32_t kPresetTimeoutMs = 5000;
     static constexpr uint32_t kFxTimeoutMs = 5000;
     static constexpr uint32_t kTunerTimeoutMs = 3000;
+    static constexpr uint32_t kLooperTimeoutMs = 5000;
+    static constexpr uint32_t kLooperClearArmMs = 3000;
     static constexpr uint8_t kNoFxSlot = 0xFF;
     ControllerState &state_;
     uint8_t queuedPreset_ = 0;
@@ -58,9 +69,18 @@ private:
     bool queuedTunerEnabled_ = false;
     bool tunerRequestEnabled_ = false;
     uint32_t tunerRequestSentAtMs_ = 0;
+    enum class LooperAction : uint8_t { None, RecordDub, PlayStop, Play, Stop, UndoRedo, Clear };
+    LooperAction queuedLooperAction_ = LooperAction::None;
+    LooperAction sentLooperAction_ = LooperAction::None;
+    uint32_t looperSentAtMs_ = 0;
+    uint32_t looperSyncRequestedAtMs_ = 0;
+    uint32_t looperCommandRevisionBeforeRequest_ = 0;
+    uint32_t looperStatusRevisionBeforeRequest_ = 0;
 
     bool hasPendingFxOperation() const;
     void cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh,
                          const char *reason);
     void clearFxRequest();
+    bool canRequestLooper() const;
+    bool queueLooperAction(LooperAction action);
 };

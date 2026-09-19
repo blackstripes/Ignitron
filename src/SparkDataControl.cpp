@@ -25,6 +25,9 @@ uint32_t SparkDataControl::finalAckRevision_ = 0;
 AckData SparkDataControl::lastFinalAck_;
 vector<pair<string, uint32_t>> SparkDataControl::fxModelObservationRevisions_;
 uint32_t SparkDataControl::fullPresetObservationRevision_ = 0;
+uint32_t SparkDataControl::looperStatusObservationRevision_ = 0;
+uint32_t SparkDataControl::looperSettingsObservationRevision_ = 0;
+uint32_t SparkDataControl::looperCommandObservationRevision_ = 0;
 uint32_t SparkDataControl::ignoreTunerOutputUntilMs_ = 0;
 
 byte SparkDataControl::nextMessageNum = 0x01;
@@ -341,6 +344,9 @@ void SparkDataControl::resetStatus() {
     ackMsg.clear();
     SparkPresetControl::getInstance().resetStatus();
     SparkStatus::getInstance().resetStatus();
+    looperStatusObservationRevision_ = 0;
+    looperSettingsObservationRevision_ = 0;
+    looperCommandObservationRevision_ = 0;
 }
 
 /////////////////////////////////////////////////////////
@@ -812,6 +818,7 @@ void SparkDataControl::handleAppModeResponse() {
         if (lastMessageType == MSG_TYPE_LOOPER_SETTING) {
             DEBUG_PRINTLN("New Looper setting received.");
             printMessage = true;
+            ++looperSettingsObservationRevision_;
         }
 
         if (lastMessageType == MSG_TYPE_LOOPER_STATUS) {
@@ -822,11 +829,13 @@ void SparkDataControl::handleAppModeResponse() {
                 looperControl_.isRecAvailable() = true;
             }
             printMessage = true;
+            ++looperStatusObservationRevision_;
         }
 
         if (lastMessageType == MSG_TYPE_LOOPER_COMMAND) {
             DEBUG_PRINTLN("New Looper command received.");
             updateLooperCommand(statusObject.lastLooperCommand());
+            ++looperCommandObservationRevision_;
         }
 
         if (lastMessageType == MSG_TYPE_TAP_TEMPO) {
@@ -1040,6 +1049,18 @@ uint32_t SparkDataControl::fxModelObservationRevision(const string &fxName) {
 
 uint32_t SparkDataControl::fullPresetObservationRevision() {
     return fullPresetObservationRevision_;
+}
+
+uint32_t SparkDataControl::looperStatusObservationRevision() {
+    return looperStatusObservationRevision_;
+}
+
+uint32_t SparkDataControl::looperSettingsObservationRevision() {
+    return looperSettingsObservationRevision_;
+}
+
+uint32_t SparkDataControl::looperCommandObservationRevision() {
+    return looperCommandObservationRevision_;
 }
 
 bool SparkDataControl::isAppConnected() {
@@ -1284,12 +1305,13 @@ bool SparkDataControl::sparkLooperStopPlaying() {
 }
 
 bool SparkDataControl::sparkLooperPlay() {
-    // looperControl_.isPlaying() = true;
+    // The local playback flag can outlive the last trustworthy Spark
+    // observation. It may avoid restarting our timer, never suppress an
+    // explicit native PLAY request or claim that request was sent.
     if (!(looperControl_.isPlaying())) {
         looperControl_.start();
-        return sparkLooperCommand(SPK_LOOPER_CMD_PLAY);
     }
-    return true;
+    return sparkLooperCommand(SPK_LOOPER_CMD_PLAY);
 }
 
 bool SparkDataControl::sparkLooperRec() {
