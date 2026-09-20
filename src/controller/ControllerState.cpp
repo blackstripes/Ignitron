@@ -3,6 +3,7 @@
 #include "SparkDataControl.h"
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
+#include "PersistentEventLog.h"
 
 #include <Arduino.h>
 
@@ -61,6 +62,7 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
                                    : ControllerConnectionPhase::Scanning;
         next.sparkStateStale = true;
         next.identityKnown = false;
+        next.fullPresetObservedForLink = false;
         // Tuner mode is Spark-owned. A dropped link cannot leave the UI in a
         // falsely active/muted-looking tuner surface; retain at most the last
         // sample as context, but it is never fresh without the link.
@@ -87,11 +89,27 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
             }
         }
         wasLinkEstablished_ = false;
+        fullPresetObservationRevisionAtLink_ = 0;
+        fullPresetObservedForLink_ = false;
+        expectedStartupFullPresetMessageNumber_ = 0;
         publishIfChanged(next);
         return;
     }
 
+    if (!wasLinkEstablished_) {
+        // A full preset retained by SparkPresetControl may belong to the prior
+        // BLE session. Capture the protocol generation at this link boundary
+        // and require a later complete response before declaring readiness.
+        fullPresetObservationRevisionAtLink_ = SparkDataControl::fullPresetObservationRevision();
+        fullPresetObservedForLink_ = false;
+    }
     wasLinkEstablished_ = true;
+    if (expectedStartupFullPresetMessageNumber_ != 0 &&
+        SparkDataControl::fullPresetObservationRevision() != fullPresetObservationRevisionAtLink_ &&
+        SparkDataControl::fullPresetObservationMessageNumber() == expectedStartupFullPresetMessageNumber_) {
+        fullPresetObservedForLink_ = true;
+    }
+    next.fullPresetObservedForLink = fullPresetObservedForLink_;
     SparkStatus &status = SparkStatus::getInstance();
     next.ampName = status.ampName();
     next.ampSerial = status.ampSerialNumber();
@@ -105,7 +123,8 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
         next.fxSlots[i].enabled = next.fxSlots[i].known && activePreset.pedals[kPedalIndices[i]].isOn;
     }
     const int reportedPreset = status.currentPresetNumber();
-    next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= 4 ? reportedPreset : 0;
+    const int maxHardwarePreset = SparkPresetControl::getInstance().numberOfHWBanks() * PRESETS_PER_BANK;
+    next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= maxHardwarePreset ? reportedPreset : 0;
     next.fxChainIdentity = makeFxChainIdentity(activePreset);
     next.tunerActive = dataControl.subMode() == SUB_MODE_TUNER;
     next.tunerSampleKnown = status.tunerSampleRevision() != 0;
@@ -160,17 +179,23 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     }
     next.connectionPhase = !next.identityKnown
                                ? ControllerConnectionPhase::Identifying
-                               : next.confirmedHardwarePreset == 0
-                                     ? ControllerConnectionPhase::Syncing
-                                     : ControllerConnectionPhase::Ready;
+                               : next.confirmedHardwarePreset == 0 || !next.fullPresetObservedForLink
+                                      ? ControllerConnectionPhase::Syncing
+                                      : ControllerConnectionPhase::Ready;
     next.sparkStateStale = next.connectionPhase != ControllerConnectionPhase::Ready;
     publishIfChanged(next);
 }
 
+void ControllerState::expectStartupFullPreset(uint8_t messageNumber) {
+    expectedStartupFullPresetMessageNumber_ = messageNumber;
+}
+
 void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
+    if (snapshot_.connectionPhase != next.connectionPhase) persistentEventLog.record(PersistentEvent::SyncPhase, static_cast<uint16_t>(next.connectionPhase), true);
     if (snapshot_.connectionPhase == next.connectionPhase &&
         snapshot_.sparkStateStale == next.sparkStateStale &&
         snapshot_.identityKnown == next.identityKnown &&
+        snapshot_.fullPresetObservedForLink == next.fullPresetObservedForLink &&
         snapshot_.ampName == next.ampName &&
         snapshot_.ampSerial == next.ampSerial &&
         snapshot_.presetName == next.presetName &&

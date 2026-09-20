@@ -197,6 +197,7 @@ private:
     const string btNameSerial = "Spark 40 Audio"; // Spark 40 Audio
 
     bool isAmpConnected_ = false;
+    bool hasConnectedAmp_ = false;
     bool isConnectionFound_ = false;
     // isClientConnected will be set when a client is connected to ESP in AMP mode
     bool isAppConnectedBLE_ = false;

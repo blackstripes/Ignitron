@@ -42,6 +42,7 @@ private:
     // payload of a CmdData object to be interpreted. msgPos is pointing at the next byte to read
     ByteVector msgData;
     int msgPos;
+    bool parseValid_ = true;
     // indicator if a block received is the last one
     bool msgLastBlock = false;
     vector<ByteVector> response;
@@ -105,6 +106,10 @@ public:
     MessageProcessStatus processBlock(ByteVector &block);
     AckData getLastAckAndEmpty();
     void clearMessageBuffer();
+    // Discard all incremental framing state after a lost transport fragment
+    // or a connection reset. Continuing an incomplete response would splice
+    // unrelated Spark notifications into one message.
+    void reset();
 };
 
 #endif

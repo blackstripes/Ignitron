@@ -16,6 +16,7 @@
 #include "SparkLooperControl.h"
 
 #include <Arduino.h>
+#include <atomic>
 #include <freertos/semphr.h>
 #include <queue>
 #include <stdexcept>
@@ -57,11 +58,28 @@ public:
     // applied to SparkPresetControl. ACKs and local pending mutations do not
     // affect this authoritative observation generation.
     static uint32_t fullPresetObservationRevision();
+    // Protocol message number paired with the most recently applied,
+    // non-background full-preset observation.
+    static uint8_t fullPresetObservationMessageNumber();
     // Incoming Spark looper observations only. These never advance for an
     // outgoing command or its transport ACK.
     static uint32_t looperStatusObservationRevision();
     static uint32_t looperSettingsObservationRevision();
     static uint32_t looperCommandObservationRevision();
+    // Compact, monotonic diagnostics counters. These are intentionally
+    // payload-free so they are safe to inspect on a live serial connection.
+    static void recordBleDisconnect();
+    static void recordBleReconnect();
+    static void recordIngressDropBusy();
+    static void recordIngressDropFull();
+    static void recordCompletedFullPreset();
+    static void recordControllerPresetSend();
+    static void recordControllerPresetConfirm();
+    static void recordControllerPresetFailure();
+    static void recordControllerFxSend();
+    static void recordControllerFxConfirm();
+    static void recordControllerFxFailure();
+    static void printDiagnostics();
     static bool isAppConnected(); // true if ESP in AMP mode and client is connected
     void startBLEServer();
     // static void onScanEnded(NimBLEScanResults results);
@@ -83,7 +101,7 @@ public:
     static bool getFirmwareVersion();
     static bool getHWChecksums();
     bool getCurrentPreset(int num);
-    static bool getCurrentPresetFromSpark();
+    static bool getCurrentPresetFromSpark(uint8_t *messageNumber = nullptr);
     static void readHWPreset(int num);
 
     // Switch to a selected preset of the current bank
@@ -247,16 +265,29 @@ private:
     static queue<ByteVector> msgQueue;
     static SemaphoreHandle_t msgQueueMutex;
     static constexpr size_t kMaxQueuedNotifications = 32;
+    static atomic_bool ingressInvalidated_;
     static deque<CmdData> currentCommand;
     static deque<AckData> pendingLooperAcks;
     static uint32_t finalAckRevision_;
     static AckData lastFinalAck_;
     static vector<pair<string, uint32_t>> fxModelObservationRevisions_;
     static uint32_t fullPresetObservationRevision_;
+    static uint8_t fullPresetObservationMessageNumber_;
     static uint32_t looperStatusObservationRevision_;
     static uint32_t looperSettingsObservationRevision_;
     static uint32_t looperCommandObservationRevision_;
     static uint32_t ignoreTunerOutputUntilMs_;
+    static atomic_uint32_t bleDisconnectCount_;
+    static atomic_uint32_t bleReconnectCount_;
+    static atomic_uint32_t ingressDropBusyCount_;
+    static atomic_uint32_t ingressDropFullCount_;
+    static atomic_uint32_t completedFullPresetCount_;
+    static atomic_uint32_t controllerPresetSendCount_;
+    static atomic_uint32_t controllerPresetConfirmCount_;
+    static atomic_uint32_t controllerPresetFailureCount_;
+    static atomic_uint32_t controllerFxSendCount_;
+    static atomic_uint32_t controllerFxConfirmCount_;
+    static atomic_uint32_t controllerFxFailureCount_;
 
     static bool sendMessageToBT(ByteVector &msg);
     static bool takeQueuedMessage(ByteVector &message);

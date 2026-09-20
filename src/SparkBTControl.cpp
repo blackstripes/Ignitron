@@ -6,6 +6,7 @@
  */
 
 #include "SparkBTControl.h"
+#include "PersistentEventLog.h"
 
 #ifdef PANELAN_SC05X_MODE
 #include "PanelLanDisplay.h"
@@ -182,6 +183,7 @@ bool SparkBTControl::subscribeToNotifications(notify_callback notifyCallback) {
                     // Subscribing to Spark characteristic
                     if (!characteristic->subscribe(true, notifyCB_)) {
                         Serial.println("Subscribe failed, disconnecting");
+                        persistentEventLog.record(PersistentEvent::BleSubscribeFailure, 0, true);
                         // Disconnect if subscribe failed
                         client_->disconnect();
                         isAmpConnected_ = false;
@@ -197,6 +199,11 @@ bool SparkBTControl::subscribeToNotifications(notify_callback notifyCallback) {
 
             Serial.println("Done with this device.");
             isAmpConnected_ = true;
+            if (hasConnectedAmp_) {
+                SparkDataControl::recordBleReconnect();
+            }
+            hasConnectedAmp_ = true;
+            persistentEventLog.record(PersistentEvent::BleLinkUp, 0, true);
             return true;
         } // pSrv
         else {
@@ -256,6 +263,7 @@ bool SparkBTControl::writeBLE(ByteVector &cmd, bool withDelay, bool response) {
                     }
                 } else {
                     Serial.println("There was an error with writing!");
+                    persistentEventLog.record(PersistentEvent::BleWriteFailure, 0, true);
                     // Disconnect if write failed
                     client_->disconnect();
                     isAmpConnected_ = false;
@@ -486,7 +494,11 @@ void SparkBTControl::onDisconnect(NimBLEServer *pServer_) {
 
 // APP mode when Amp is disconnected
 void SparkBTControl::onDisconnect(NimBLEClient *pClient_) {
+    if (isAmpConnected_) {
+        SparkDataControl::recordBleDisconnect();
+    }
     isAmpConnected_ = false;
+    persistentEventLog.record(PersistentEvent::BleLinkDown, 0, true);
     isConnectionFound_ = false;
     // This runs in the NimBLE callback context. The controller loop owns
     // reset/reconnect work so callbacks never clear shared protocol state.

@@ -9,6 +9,7 @@
 #include "SparkDataControl.h"
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
+#include "PersistentEventLog.h"
 #ifndef HEADLESS_SERIAL_MODE
 #include "SparkButtonHandler.h"
 #include "SparkDisplayControl.h"
@@ -113,12 +114,16 @@ void setup() {
 #endif
 #endif
     spark_dc = new SparkDataControl();
+    #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
+    serialCLI = new SparkSerialCLI(spark_dc, &controllerActions);
+    #else
     serialCLI = new SparkSerialCLI(spark_dc);
+    #endif
     SparkPresetControl::getInstance().setDataControl(spark_dc);
-    if (!LittleFS.begin(true)) {
-        Serial.println("LittleFS Mount failed");
-        return;
-    }
+    const bool littleFsMounted = LittleFS.begin(false);
+    if (!littleFsMounted) Serial.println("LittleFS Mount failed; continuing with RAM-only event log");
+    persistentEventLog.begin(littleFsMounted);
+    persistentEventLog.record(littleFsMounted ? PersistentEvent::Boot : PersistentEvent::FilesystemUnavailable, 0, true);
 
 #ifdef HEADLESS_SERIAL_MODE
     // Headless builds are always direct controllers (APP mode). Do not depend on
@@ -161,9 +166,13 @@ void setup() {
 #endif
 
     Serial.println("Initialization done.");
+    persistentEventLog.record(PersistentEvent::InitComplete, static_cast<uint16_t>(operationMode), true);
 }
 
 void loop() {
+
+    // The sole regular flash-write context. BLE callbacks only append RAM records.
+    persistentEventLog.service();
 
     // Methods to call only in APP mode
     if (operationMode == SPARK_MODE_APP) {

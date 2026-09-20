@@ -1,17 +1,20 @@
 #include "SparkSerialCLI.h"
 
+#include "controller/ControllerActions.h"
+
 #include "Config_Definitions.h"
 #include "SparkDataControl.h"
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
+#include "PersistentEventLog.h"
 
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
 #include "PanelLanLVGLUI.h"
 extern PanelLanLVGLUI panelLanDisplay;
 #endif
 
-SparkSerialCLI::SparkSerialCLI(SparkDataControl *dataControl)
-    : sparkDC_(dataControl) {
+SparkSerialCLI::SparkSerialCLI(SparkDataControl *dataControl, ControllerActions *controllerActions)
+    : sparkDC_(dataControl), controllerActions_(controllerActions) {
 }
 
 void SparkSerialCLI::begin() {
@@ -65,6 +68,13 @@ void SparkSerialCLI::execute(String command) {
         printHelp();
     } else if (verb == "status") {
         printStatus();
+    } else if (verb == "report" || verb == "diagnostics") {
+        printDiagnostics();
+    } else if (verb == "log") {
+        if (args == "status") persistentEventLog.printStatus(Serial);
+        else if (args == "dump") persistentEventLog.dump(Serial);
+        else if (args == "clear confirm") Serial.println(persistentEventLog.clear() ? "Event log cleared." : "Event log is RAM-only; nothing persisted to clear.");
+        else Serial.println("Usage: log status|dump|clear confirm");
     } else if (verb == "preset") {
         handlePreset(args);
     } else if (verb == "bank") {
@@ -125,11 +135,13 @@ void SparkSerialCLI::execute(String command) {
 void SparkSerialCLI::printHelp() {
     Serial.println("Commands:");
     Serial.println("  status");
+    Serial.println("  report                  Print compact counters since boot (alias: diagnostics)");
+    Serial.println("  log status|dump|clear confirm");
     Serial.println("  amp                     Request amp identity");
     Serial.println("  refresh                 Request current preset");
     Serial.println("  screenshot              Stream a PPM screenshot over USB serial");
     Serial.println("  touch <x> <y>           Inject one LVGL touch press/release (development)");
-    Serial.println("  preset <1-4>");
+    Serial.println("  preset <1-8>             (model dependent)");
     Serial.println("  bank up|down");
     Serial.println("  fx <gate|comp|drive|mod|delay|reverb> <toggle|on|off>");
     Serial.println("  tuner on|off");
@@ -163,10 +175,14 @@ void SparkSerialCLI::printStatus() {
     }
 }
 
+void SparkSerialCLI::printDiagnostics() {
+    SparkDataControl::printDiagnostics();
+}
+
 void SparkSerialCLI::handlePreset(const String &args) {
     int presetNumber = args.toInt();
-    if (presetNumber < 1 || presetNumber > 4) {
-        Serial.println("Usage: preset <1-4>");
+    if (presetNumber < 1 || presetNumber > 8) {
+        Serial.println("Usage: preset <1-8>");
         return;
     }
 
@@ -175,7 +191,13 @@ void SparkSerialCLI::handlePreset(const String &args) {
         return;
     }
 
-    if (SparkPresetControl::getInstance().processPresetSelect(presetNumber)) {
+    if (controllerActions_) {
+        if (controllerActions_->requestHardwarePreset(static_cast<uint8_t>(presetNumber))) {
+            Serial.printf("Preset %d requested.\n", presetNumber);
+        } else {
+            Serial.println("Preset request rejected; wait for synchronization to finish.");
+        }
+    } else if (SparkPresetControl::getInstance().processPresetSelect(presetNumber)) {
         Serial.printf("Preset %d selected.\n", presetNumber);
     } else {
         Serial.printf("Preset %d selection was not completed.\n", presetNumber);
@@ -229,6 +251,13 @@ void SparkSerialCLI::handleEffect(const String &args) {
         return;
     }
 
+#if defined(PANELAN_SC05X_MODE)
+    if (action == "on" || action == "off") {
+        Serial.println("PanelLan controller profile accepts only 'fx ... toggle'.");
+        return;
+    }
+#endif
+
     if (!SparkDataControl::isAmpConnected()) {
         Serial.println("Spark amp is not connected.");
         return;
@@ -241,7 +270,13 @@ void SparkSerialCLI::handleEffect(const String &args) {
     }
 
     bool ok = false;
-    if (action == "toggle") {
+    if (action == "toggle" && controllerActions_) {
+        // ControllerActions uses six logical slots and omits the amp at raw
+        // pedal index 3, while these CLI constants are raw preset indices.
+        const uint8_t controllerSlot = index > INDEX_FX_AMP ? static_cast<uint8_t>(index - 1)
+                                                             : static_cast<uint8_t>(index);
+        ok = controllerActions_->requestFxToggle(controllerSlot);
+    } else if (action == "toggle") {
         ok = SparkDataControl::toggleEffect(index);
     } else if (action == "on" || action == "off") {
         const string &actualEffectName = preset.pedals[index].name;
@@ -255,7 +290,8 @@ void SparkSerialCLI::handleEffect(const String &args) {
         return;
     }
 
-    Serial.println(ok ? "Effect command sent." : "Effect command failed.");
+    Serial.println(ok ? (controllerActions_ && action == "toggle" ? "Effect toggle requested." : "Effect command sent.")
+                      : "Effect command failed or was rejected.");
 }
 
 void SparkSerialCLI::handleTuner(const String &args) {

@@ -42,6 +42,10 @@ struct ControllerSnapshot {
     ControllerConnectionPhase connectionPhase = ControllerConnectionPhase::Scanning;
     bool sparkStateStale = true;
     bool identityKnown = false;
+    // A complete Spark preset response received after the current BLE link was
+    // established. Cached preset data from an earlier link is not sufficient
+    // to make controls writable.
+    bool fullPresetObservedForLink = false;
     std::string ampName;
     std::string ampSerial;
     std::string presetName;
@@ -89,6 +93,9 @@ public:
     // Called only from the Arduino/controller loop, after BLE/protocol work.
     // No BLE callback or renderer may mutate this state.
     void refreshFromSpark(SparkDataControl &dataControl);
+    // The startup synchronizer owns the authoritative full-preset request;
+    // only its matching response may make this link actionable.
+    void expectStartupFullPreset(uint8_t messageNumber);
     void beginHardwarePresetRequest(uint8_t preset);
     void confirmHardwarePresetRequest();
     void failHardwarePresetRequest();
@@ -104,6 +111,9 @@ public:
 private:
     ControllerSnapshot snapshot_;
     bool wasLinkEstablished_ = false;
+    uint32_t fullPresetObservationRevisionAtLink_ = 0;
+    bool fullPresetObservedForLink_ = false;
+    uint8_t expectedStartupFullPresetMessageNumber_ = 0;
     uint32_t lastLooperStatusRevision_ = 0;
     uint32_t lastLooperSettingsRevision_ = 0;
     uint32_t lastLooperCommandRevision_ = 0;

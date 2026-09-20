@@ -6,6 +6,7 @@
  */
 
 #include "SparkDataControl.h"
+#include "PersistentEventLog.h"
 
 SparkBTControl *SparkDataControl::bleControl = nullptr;
 SparkStreamReader SparkDataControl::sparkSsr;
@@ -19,16 +20,29 @@ SparkBLEKeyboard SparkDataControl::bleKeyboard = SparkBLEKeyboard();
 
 queue<ByteVector> SparkDataControl::msgQueue;
 SemaphoreHandle_t SparkDataControl::msgQueueMutex = nullptr;
+atomic_bool SparkDataControl::ingressInvalidated_{false};
 deque<CmdData> SparkDataControl::currentCommand;
 deque<AckData> SparkDataControl::pendingLooperAcks;
 uint32_t SparkDataControl::finalAckRevision_ = 0;
 AckData SparkDataControl::lastFinalAck_;
 vector<pair<string, uint32_t>> SparkDataControl::fxModelObservationRevisions_;
 uint32_t SparkDataControl::fullPresetObservationRevision_ = 0;
+uint8_t SparkDataControl::fullPresetObservationMessageNumber_ = 0;
 uint32_t SparkDataControl::looperStatusObservationRevision_ = 0;
 uint32_t SparkDataControl::looperSettingsObservationRevision_ = 0;
 uint32_t SparkDataControl::looperCommandObservationRevision_ = 0;
 uint32_t SparkDataControl::ignoreTunerOutputUntilMs_ = 0;
+atomic_uint32_t SparkDataControl::bleDisconnectCount_{0};
+atomic_uint32_t SparkDataControl::bleReconnectCount_{0};
+atomic_uint32_t SparkDataControl::ingressDropBusyCount_{0};
+atomic_uint32_t SparkDataControl::ingressDropFullCount_{0};
+atomic_uint32_t SparkDataControl::completedFullPresetCount_{0};
+atomic_uint32_t SparkDataControl::controllerPresetSendCount_{0};
+atomic_uint32_t SparkDataControl::controllerPresetConfirmCount_{0};
+atomic_uint32_t SparkDataControl::controllerPresetFailureCount_{0};
+atomic_uint32_t SparkDataControl::controllerFxSendCount_{0};
+atomic_uint32_t SparkDataControl::controllerFxConfirmCount_{0};
+atomic_uint32_t SparkDataControl::controllerFxFailureCount_{0};
 
 byte SparkDataControl::nextMessageNum = 0x01;
 
@@ -337,7 +351,9 @@ void SparkDataControl::resetStatus() {
     sparkAmpName = "Spark 40";
     withDelay = false;
     lastAmpBatteryUpdate = 0;
+    ingressInvalidated_.store(false);
     clearQueuedMessages();
+    sparkSsr.reset();
     currentCommand.clear();
     pendingLooperAcks.clear();
     currentMsg.clear();
@@ -390,7 +406,24 @@ void SparkDataControl::readPresetChecksums() {
 void SparkDataControl::checkForUpdates() {
 
     ByteVector queuedMessage;
-    if (takeQueuedMessage(queuedMessage)) {
+    while (true) {
+        // A lost BLE fragment invalidates any partial Spark response. Reset
+        // from this controller task rather than from the NimBLE callback.
+        if (ingressInvalidated_.exchange(false)) {
+            persistentEventLog.record(PersistentEvent::IngressInvalidated, 0, true);
+            clearQueuedMessages();
+            sparkSsr.reset();
+            break;
+        }
+        if (!takeQueuedMessage(queuedMessage)) {
+            break;
+        }
+        if (ingressInvalidated_.exchange(false)) {
+            persistentEventLog.record(PersistentEvent::IngressInvalidated, 0, true);
+            clearQueuedMessages();
+            sparkSsr.reset();
+            break;
+        }
         processSparkData(queuedMessage);
     }
 
@@ -479,12 +512,19 @@ bool SparkDataControl::processAction() {
     return isAmpConnected();
 }
 
-bool SparkDataControl::getCurrentPresetFromSpark() {
+bool SparkDataControl::getCurrentPresetFromSpark(uint8_t *messageNumber) {
     int hwPreset = -1;
-    currentMsg = sparkMsg.getCurrentPreset(nextMessageNum, hwPreset);
+    // SparkMessage encodes zero as sequence number one on the wire. Return
+    // that canonical wire value so callers can correlate the response.
+    const uint8_t requestMessageNumber = nextMessageNum == 0 ? 0x01 : nextMessageNum;
+    currentMsg = sparkMsg.getCurrentPreset(requestMessageNumber, hwPreset);
     Serial.println("Getting current preset from Spark");
 
-    return triggerCommand(currentMsg);
+    const bool sent = triggerCommand(currentMsg);
+    if (sent && messageNumber) {
+        *messageNumber = requestMessageNumber;
+    }
+    return sent;
 }
 
 bool SparkDataControl::switchPreset(int pre, bool isInitial) {
@@ -512,7 +552,7 @@ bool SparkDataControl::switchEffectOnOff(const string &fxName, bool enable, uint
     SparkPresetControl::getInstance().switchFXOnOff(fxName, enable);
     currentMsg = sparkMsg.turnEffectOnOff(nextMessageNum, fxName, enable);
 
-    const uint8_t issuedMessageNumber = nextMessageNum;
+    const uint8_t issuedMessageNumber = nextMessageNum == 0 ? 0x01 : nextMessageNum;
     const bool sent = triggerCommand(currentMsg);
     if (sent && messageNumber != nullptr) {
         *messageNumber = issuedMessageNumber;
@@ -582,7 +622,10 @@ bool SparkDataControl::getCurrentPreset(int num) {
 }
 
 bool SparkDataControl::triggerCommand(vector<CmdData> &msg) {
-    nextMessageNum++;
+    // Spark encodes zero as wire sequence one. A command built with zero is
+    // therefore sequence one, so advance directly to two and avoid reusing
+    // one for the following command.
+    nextMessageNum = nextMessageNum == 0 ? 0x02 : static_cast<byte>(nextMessageNum + 1);
     if (msg.size() > 0) {
         currentCommand.assign(msg.begin(), msg.end());
     }
@@ -752,11 +795,17 @@ void SparkDataControl::handleAppModeResponse() {
             printMessage = true;
             SparkPresetControl &presetControl = SparkPresetControl::getInstance();
             presetControl.validateChecksums(statusObject.hwChecksums());
+#if defined(PANELAN_LVGL_UI_MODE)
+            // The PanelLan controller requests the current full preset after
+            // it has observed the hardware-preset number. Do not replay a
+            // filesystem selection or issue a competing full-preset query.
+#else
             // try to load last selected preset from filesystem,
             // if not available, read current preset from amp
             if (!presetControl.readLastPresetFromFile()) {
                 getCurrentPresetFromSpark();
             };
+#endif
         }
 
         if (lastMessageType == MSG_TYPE_HWPRESET) {
@@ -783,10 +832,12 @@ void SparkDataControl::handleAppModeResponse() {
             // This preset number is between 0 and 3!
             bool isSpecial = lastMessageNumber == specialMsgNum;
             SparkPresetControl::getInstance().updateFromSparkResponsePreset(isSpecial);
+            recordCompletedFullPreset();
             if (!isSpecial) {
                 // This advances only after the full response has become the
                 // active Spark-owned preset. Cached-background responses,
                 // ACKs, and local pending mutations never advance it.
+                fullPresetObservationMessageNumber_ = lastMessageNumber;
                 ++fullPresetObservationRevision_;
             }
         }
@@ -1051,6 +1102,10 @@ uint32_t SparkDataControl::fullPresetObservationRevision() {
     return fullPresetObservationRevision_;
 }
 
+uint8_t SparkDataControl::fullPresetObservationMessageNumber() {
+    return fullPresetObservationMessageNumber_;
+}
+
 uint32_t SparkDataControl::looperStatusObservationRevision() {
     return looperStatusObservationRevision_;
 }
@@ -1061,6 +1116,33 @@ uint32_t SparkDataControl::looperSettingsObservationRevision() {
 
 uint32_t SparkDataControl::looperCommandObservationRevision() {
     return looperCommandObservationRevision_;
+}
+
+void SparkDataControl::recordBleDisconnect() { ++bleDisconnectCount_; }
+void SparkDataControl::recordBleReconnect() { ++bleReconnectCount_; }
+void SparkDataControl::recordIngressDropBusy() { ++ingressDropBusyCount_; persistentEventLog.record(PersistentEvent::IngressDropBusy, 0, true); }
+void SparkDataControl::recordIngressDropFull() { ++ingressDropFullCount_; persistentEventLog.record(PersistentEvent::IngressDropFull, 0, true); }
+void SparkDataControl::recordCompletedFullPreset() { ++completedFullPresetCount_; }
+void SparkDataControl::recordControllerPresetSend() { ++controllerPresetSendCount_; }
+void SparkDataControl::recordControllerPresetConfirm() { ++controllerPresetConfirmCount_; }
+void SparkDataControl::recordControllerPresetFailure() { ++controllerPresetFailureCount_; }
+void SparkDataControl::recordControllerFxSend() { ++controllerFxSendCount_; }
+void SparkDataControl::recordControllerFxConfirm() { ++controllerFxConfirmCount_; }
+void SparkDataControl::recordControllerFxFailure() { ++controllerFxFailureCount_; }
+
+void SparkDataControl::printDiagnostics() {
+    Serial.printf("diagnostics ble disconnect=%lu reconnect=%lu ingress busy=%lu full=%lu preset complete=%lu controller preset send=%lu confirm=%lu fail=%lu fx send=%lu confirm=%lu fail=%lu\n",
+                  static_cast<unsigned long>(bleDisconnectCount_.load()),
+                  static_cast<unsigned long>(bleReconnectCount_.load()),
+                  static_cast<unsigned long>(ingressDropBusyCount_.load()),
+                  static_cast<unsigned long>(ingressDropFullCount_.load()),
+                  static_cast<unsigned long>(completedFullPresetCount_.load()),
+                  static_cast<unsigned long>(controllerPresetSendCount_.load()),
+                  static_cast<unsigned long>(controllerPresetConfirmCount_.load()),
+                  static_cast<unsigned long>(controllerPresetFailureCount_.load()),
+                  static_cast<unsigned long>(controllerFxSendCount_.load()),
+                  static_cast<unsigned long>(controllerFxConfirmCount_.load()),
+                  static_cast<unsigned long>(controllerFxFailureCount_.load()));
 }
 
 bool SparkDataControl::isAppConnected() {
@@ -1094,11 +1176,16 @@ void SparkDataControl::queueMessage(ByteVector &blk) {
     // avoids losing a one-shot Spark response while the controller loop is
     // popping/resetting the queue; it never waits through protocol parsing.
     if (xSemaphoreTake(msgQueueMutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+        recordIngressDropBusy();
+        ingressInvalidated_.store(true);
         Serial.println("Dropping Spark notification: ingress queue busy");
         return;
     }
 
     if (msgQueue.size() >= kMaxQueuedNotifications) {
+        recordIngressDropFull();
+        msgQueue = {};
+        ingressInvalidated_.store(true);
         Serial.println("Dropping Spark notification: ingress queue full");
     } else {
         msgQueue.push(blk);

@@ -4,21 +4,24 @@
 #include <Arduino.h>
 
 class SparkDataControl;
+class ControllerActions;
 
 class SparkSerialCLI {
 public:
-    explicit SparkSerialCLI(SparkDataControl *dataControl);
+    SparkSerialCLI(SparkDataControl *dataControl, ControllerActions *controllerActions = nullptr);
 
     void begin();
     void update();
 
 private:
     SparkDataControl *sparkDC_;
+    ControllerActions *controllerActions_;
     String inputBuffer_;
 
     void execute(String command);
     void printHelp();
     void printStatus();
+    void printDiagnostics();
     void handlePreset(const String &args);
     void handleBank(const String &args);
     void handleEffect(const String &args);

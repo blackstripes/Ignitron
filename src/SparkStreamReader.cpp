@@ -20,10 +20,11 @@ void SparkStreamReader::setMessage(const vector<ByteVector> &msg_) {
 }
 
 byte SparkStreamReader::readByte() {
-    byte aByte;
-    aByte = msgData[msgPos];
-    msgPos += 1;
-    return aByte;
+    if (msgPos < 0 || static_cast<size_t>(msgPos) >= msgData.size()) {
+        parseValid_ = false;
+        return 0;
+    }
+    return msgData[msgPos++];
 }
 
 string SparkStreamReader::readPrefixedString() {
@@ -220,7 +221,7 @@ void SparkStreamReader::readPreset() {
     DEBUG_PRINTLN();
     */
 
-    Preset &currentPreset = statusObject.currentPreset();
+    Preset currentPreset;
 
     readByte();
     byte preset = readByte();
@@ -339,6 +340,12 @@ void SparkStreamReader::readPreset() {
     currentPreset.json = sb.getJson();
     currentPreset.isEmpty = false;
 
+    if (!parseValid_) {
+        DEBUG_PRINTLN("Discarding truncated preset response.");
+        return;
+    }
+
+    statusObject.currentPreset() = currentPreset;
     statusObject.isPresetUpdated() = true;
     statusObject.lastMessageType() = MSG_TYPE_PRESET;
 }
@@ -689,6 +696,7 @@ boolean SparkStreamReader::structureData(bool processHeader) {
 void SparkStreamReader::setInterpreter(const ByteVector &_msg) {
     msgData = _msg;
     msgPos = 0;
+    parseValid_ = true;
 }
 
 int SparkStreamReader::runInterpreter(byte _cmd, byte _subCmd) {
@@ -1135,6 +1143,17 @@ unsigned int SparkStreamReader::readInt16() {
 void SparkStreamReader::clearMessageBuffer() {
     DEBUG_PRINTLN("Clearing response buffer.");
     response.clear();
+}
+
+void SparkStreamReader::reset() {
+    response.clear();
+    unstructuredData.clear();
+    message.clear();
+    msgData.clear();
+    msgPos = 0;
+    parseValid_ = true;
+    msgLastBlock = false;
+    lastReadByte = 0;
 }
 
 ByteVector SparkStreamReader::convertDataTo8bit(ByteVector input) {

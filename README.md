@@ -74,6 +74,29 @@ Build the controller firmware with:
 pio run -e panelan-lvgl-controller
 ```
 
+### Post-mortem event log
+
+The controller keeps a compact diagnostic event log. It records event codes and
+small numeric values only—never Spark payloads, amp names, serial numbers, or
+other sensitive strings. A 64-entry RAM ring is always available. When
+LittleFS mounts, the main loop batches records into the bounded rotating files
+`/diag/events.0` and `/diag/events.1`, no more frequently than once every five
+seconds. CRC-checked records make a torn or corrupt tail recoverable: the valid
+prefix is rebuilt before appending. LittleFS is mounted non-destructively, so a
+failed mount leaves the controller running with its RAM-only log.
+
+From the USB serial CLI, use:
+
+```
+log status          # storage mode, capacity, corruption/overrun counters
+log dump            # records: sequence, uptime-ms, event code, numeric value
+log clear confirm   # erase both persistent segments (explicit confirmation)
+```
+
+The log captures boot/init, BLE lifecycle and transport failures, ingress
+drops/resets, controller synchronization phases, and confirmed/failed preset
+and FX actions. It deliberately does not record every BLE packet.
+
 For a display-and-touch-only smoke test, use `panelan-display-bringup` instead.
 The full hardware notes, USB/flashing advice, and planned multi-device pairing
 flow are in [the PanelLan prototype guide](docs/PANELAN_PROTOTYPE.md).

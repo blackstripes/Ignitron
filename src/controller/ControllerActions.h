@@ -48,8 +48,16 @@ private:
     uint32_t sentAtMs_ = 0;
     uint32_t sentAfterAckRevision_ = 0;
     bool awaitingConfirmationQuery_ = false;
+    bool awaitingPresetFullResponse_ = false;
+    uint32_t presetFullObservationRevisionBeforeQuery_ = 0;
+    uint8_t presetFullQueryMessageNumber_ = 0;
     bool currentPresetQueryIssued_ = false;
     uint32_t currentPresetQueryAtMs_ = 0;
+    // This is independent of preset-action verification. It establishes the
+    // initial complete preset observation required for the current BLE link.
+    bool startupFullPresetQueryIssued_ = false;
+    uint32_t startupFullPresetQueryAtMs_ = 0;
+    uint8_t startupFullPresetQueryMessageNumber_ = 0;
 
     uint8_t queuedFxSlot_ = kNoFxSlot;
     uint8_t sentFxSlot_ = kNoFxSlot;

@@ -248,8 +248,10 @@ void SparkPresetControl::setActiveHWPreset() {
     activePresetNum_ = pendingPresetNum_;
     activeHWBank_ = pendingHWBank_;
     if (activePreset_.isEmpty) {
+#if !defined(PANELAN_LVGL_UI_MODE)
         DEBUG_PRINTLN("Cache not filled, getting preset from Spark");
         sparkDC->getCurrentPresetFromSpark();
+#endif
     }
 }
 
@@ -317,8 +319,10 @@ void SparkPresetControl::updateFromSparkResponseHWPreset(int presetNum) {
     // activePreset_ = statusObject.currentPreset();
     Preset newPreset = presetBuilder.getPreset(activeBank_, presetNum);
     if (newPreset.isEmpty) {
+#if !defined(PANELAN_LVGL_UI_MODE)
         Serial.println("Preset number changed, preset not cached, getting current preset from Spark");
         sparkDC->getCurrentPresetFromSpark();
+#endif
     }
     // In case there are more than (PRESETS_PER_BANK) HW Presets, we have to calculate modulo (for internal display);
     activePresetNum_ = ((presetNum - 1) % PRESETS_PER_BANK) + 1;
