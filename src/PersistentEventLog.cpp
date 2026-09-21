@@ -177,7 +177,7 @@ void PersistentEventLog::service() {
 }
 
 const char *PersistentEventLog::eventName(uint8_t event) const {
-    static const char *const names[] = {"?", "boot", "init", "fs-unavailable", "ble-up", "ble-down", "subscribe-fail", "write-fail", "ingress-busy", "ingress-full", "ingress-reset", "sync-phase", "preset-send", "preset-ok", "preset-fail", "fx-send", "fx-ok", "fx-fail"};
+    static const char *const names[] = {"?", "boot", "init", "fs-unavailable", "ble-up", "ble-down", "subscribe-fail", "write-fail", "ingress-busy", "ingress-full", "ingress-reset", "sync-phase", "preset-send", "preset-ok", "preset-fail", "fx-send", "fx-ok", "fx-fail", "loop-send", "loop-ok", "loop-fail", "tuner-send", "tuner-ok", "tuner-fail", "tuner-local-release", "nav", "loop-ack"};
     return event < sizeof(names) / sizeof(names[0]) ? names[event] : "unknown";
 }
 void PersistentEventLog::printRecord(Stream &out, const Record &record) const {

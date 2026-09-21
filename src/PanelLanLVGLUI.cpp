@@ -1,5 +1,6 @@
 #include "PanelLanLVGLUI.h"
 #include "controller/ControllerActions.h"
+#include "PersistentEventLog.h"
 
 #include <esp_heap_caps.h>
 #include <cmath>
@@ -793,7 +794,13 @@ void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
             if (page != static_cast<uint8_t>(Screen::Tuner)) {
                 uiInstance->screenBeforeTuner_ = static_cast<Screen>(page);
             }
-            uiInstance->actions_->requestTuner(false);
+            persistentEventLog.record(PersistentEvent::Navigation, page);
+            if (uiInstance->actions_->requestTuner(false) && page != static_cast<uint8_t>(Screen::Tuner)) {
+                // Accepted OFF restores the selected local presentation now;
+                // ControllerActions still waits for protocol confirmation.
+                uiInstance->tunerOverrideActive_ = false;
+                uiInstance->setActiveScreen(static_cast<Screen>(page));
+            }
         }
         return;
     }
@@ -807,6 +814,7 @@ void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
         } else {
             uiInstance->suppressTunerTakeoverUntilMs_ = 0;
         }
+        persistentEventLog.record(PersistentEvent::Navigation, page);
         uiInstance->setActiveScreen(static_cast<Screen>(page));
         if (page == static_cast<uint8_t>(Screen::Tuner) && uiInstance->actions_) {
             uiInstance->actions_->requestTuner(true);
@@ -1149,7 +1157,8 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
 }
 
 void PanelLanLVGLUI::reconcileExternalTuner(const ControllerSnapshot &snapshot) {
-    const bool suppressTakeover = static_cast<int32_t>(millis() - suppressTunerTakeoverUntilMs_) < 0;
+    const bool exitIntent = actions_ && actions_->tunerExitIntent();
+    const bool suppressTakeover = exitIntent || static_cast<int32_t>(millis() - suppressTunerTakeoverUntilMs_) < 0;
     if (snapshot.tunerActive && !tunerOverrideActive_ && !suppressTakeover) {
         // Preserve only a performance screen. A manual unavailable Tuner tab
         // is not a useful place to return after the amp exits real tuner mode.

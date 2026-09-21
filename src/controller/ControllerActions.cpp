@@ -12,7 +12,8 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
         static_cast<uint8_t>(SparkPresetControl::getInstance().numberOfHWBanks() * PRESETS_PER_BANK);
     if (preset < 1 || preset > maxHardwarePreset || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || hasPendingFxOperation() ||
-        queuedTunerRequest_ || tunerRequestSent_ ||
+        queuedTunerRequest_ || tunerRequestSent_ || queuedLooperAction_ != LooperAction::None ||
+        sentLooperAction_ != LooperAction::None ||
         preset == snapshot.confirmedHardwarePreset) {
         return false;
     }
@@ -26,7 +27,8 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (slot >= snapshot.fxSlots.size() || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
-        queuedPreset_ != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
+        queuedPreset_ != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_ ||
+        queuedLooperAction_ != LooperAction::None || sentLooperAction_ != LooperAction::None) {
         return false;
     }
 
@@ -47,11 +49,39 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
 
 bool ControllerActions::requestTuner(bool on) {
     const ControllerSnapshot &snapshot = state_.snapshot();
-    if (snapshot.tunerActive == on || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
-        snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
-        queuedPreset_ != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
+    if (!on) {
+        // Native OFF is safe and idempotent. Prefer restoring audible output
+        // over preserving a stale local operation; it may supersede an entry.
+        if (queuedTunerRequest_ && queuedTunerEnabled_) queuedTunerRequest_ = false;
+        if (tunerRequestSent_ && tunerRequestEnabled_) {
+            tunerRequestSent_ = false;
+            tunerEntryCancelRequested_ = false;
+        }
+        tunerExitIntent_ = true;
+        queuedTunerRequest_ = true;
+        queuedTunerEnabled_ = false;
+        return true;
+    }
+    // An explicit return to tuner cancels an OFF that has not reached the
+    // transport yet. Once its first packet was accepted it cannot be recalled;
+    // retain the exit intent until that command has settled.
+    if (tunerExitIntent_) {
+        if (queuedTunerRequest_ && !queuedTunerEnabled_) {
+            queuedTunerRequest_ = false;
+            tunerExitIntent_ = false;
+        } else if (tunerRequestSent_ && !tunerRequestEnabled_) {
+            return false;
+        } else {
+            tunerExitIntent_ = false;
+        }
+    }
+    if (snapshot.connectionPhase != ControllerConnectionPhase::Ready || snapshot.sparkStateStale ||
+        snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 || queuedPreset_ != 0 ||
+        hasPendingFxOperation() || queuedLooperAction_ != LooperAction::None ||
+        sentLooperAction_ != LooperAction::None) {
         return false;
     }
+    if (snapshot.tunerActive || queuedTunerRequest_ || tunerRequestSent_) return false;
     queuedTunerRequest_ = true;
     queuedTunerEnabled_ = on;
     return true;
@@ -63,6 +93,15 @@ void ControllerActions::cancelTunerEntry() {
         return;
     }
     if (tunerRequestSent_ && tunerRequestEnabled_) tunerEntryCancelRequested_ = true;
+}
+
+void ControllerActions::printState(Stream &out) const {
+    const ControllerSnapshot &snapshot = state_.snapshot();
+    out.printf("Controller: rev=%lu phase=%u preset=%u pending=%u tuner=%u looper=%u transport=%u loops=%u pending=%u failed=%u\n",
+               static_cast<unsigned long>(snapshot.revision), static_cast<unsigned>(snapshot.connectionPhase),
+               snapshot.confirmedHardwarePreset, snapshot.pendingHardwarePreset, snapshot.tunerActive ? 1 : 0,
+               static_cast<unsigned>(snapshot.looperCapability), static_cast<unsigned>(snapshot.looperTransport),
+               snapshot.looperLoopCount, snapshot.looperPending ? 1 : 0, snapshot.looperActionFailed ? 1 : 0);
 }
 
 bool ControllerActions::canRequestLooper() const {
@@ -84,19 +123,24 @@ bool ControllerActions::queueLooperAction(LooperAction action) {
 
 bool ControllerActions::requestLooperRecordDub() { return queueLooperAction(LooperAction::RecordDub); }
 bool ControllerActions::requestLooperPlayStop() {
+    cancelDeferredLooperRecord();
     return state_.snapshot().looperLoopCount > 0 && queueLooperAction(LooperAction::PlayStop);
 }
 bool ControllerActions::requestLooperPlay() {
+    cancelDeferredLooperRecord();
     return state_.snapshot().looperLoopCount > 0 && queueLooperAction(LooperAction::Play);
 }
 bool ControllerActions::requestLooperStop() {
+    cancelDeferredLooperRecord();
     return state_.snapshot().looperLoopCount > 0 && queueLooperAction(LooperAction::Stop);
 }
 bool ControllerActions::requestLooperUndoRedo() {
+    cancelDeferredLooperRecord();
     return state_.snapshot().looperLoopCount > 0 && queueLooperAction(LooperAction::UndoRedo);
 }
 
 bool ControllerActions::requestLooperClear() {
+    cancelDeferredLooperRecord();
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (snapshot.looperLoopCount == 0) return false;
     if (snapshot.looperClearArmed) {
@@ -111,6 +155,24 @@ bool ControllerActions::requestLooperClear() {
 
 void ControllerActions::cancelLooperClear() {
     state_.disarmLooperClear();
+}
+
+void ControllerActions::cancelDeferredLooperRecord() {
+    SparkDataControl::cancelPendingLooperRecord();
+}
+
+void ControllerActions::failLooperRequest(SparkDataControl *dataControl, const char *reason) {
+    cancelDeferredLooperRecord();
+    state_.failLooperRequest();
+    persistentEventLog.record(PersistentEvent::LooperFailed, static_cast<uint16_t>(sentLooperAction_), true);
+    Serial.printf("Controller: looper action failed: %s\n", reason);
+    // The command-boundary FIFO retains this recovery pair behind any active
+    // multipart tail. Config precedes status so the status is interpreted with
+    // the refreshed looper settings.
+    if (dataControl != nullptr) {
+        dataControl->sparkLooperGetConfig();
+        dataControl->sparkLooperGetStatus();
+    }
 }
 
 bool ControllerActions::hasPendingFxOperation() const {
@@ -152,6 +214,8 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     if (!SparkDataControl::isAmpConnected()) {
         currentPresetQueryIssued_ = false;
         currentPresetQueryAtMs_ = 0;
+        ampIdentityQueryAtMs_ = 0;
+        ampIdentityWaitStarted_ = false;
         startupFullPresetQueryIssued_ = false;
         startupFullPresetQueryAtMs_ = 0;
         startupFullPresetQueryMessageNumber_ = 0;
@@ -169,8 +233,11 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         queuedTunerRequest_ = false;
         tunerRequestSent_ = false;
         tunerEntryCancelRequested_ = false;
+        tunerExitIntent_ = false;
         queuedLooperAction_ = LooperAction::None;
+        if (sentLooperAction_ != LooperAction::None) failLooperRequest(nullptr, "BLE disconnected");
         sentLooperAction_ = LooperAction::None;
+        cancelDeferredLooperRecord();
         looperSyncRequestedAtMs_ = 0;
         // A BLE loss makes any unconfirmed effect command unknowable. The
         // ControllerState has already made the rendered value stale; discard
@@ -186,64 +253,187 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         state_.disarmLooperClear();
     }
 
-    if (sentLooperAction_ != LooperAction::None) {
-        const bool commandObserved = SparkDataControl::looperCommandObservationRevision() != looperCommandRevisionBeforeRequest_;
-        const bool statusObserved = SparkDataControl::looperStatusObservationRevision() != looperStatusRevisionBeforeRequest_;
-        const byte observedCommand = SparkStatus::getInstance().lastLooperCommand();
-        bool confirmed = false;
-        if (sentLooperAction_ == LooperAction::Clear) {
-            confirmed = statusObserved && snapshot.looperLoopCount == 0;
-        } else if (sentLooperAction_ == LooperAction::UndoRedo) {
-            confirmed = commandObserved && (observedCommand == SPK_LOOPER_CMD_UNDO || observedCommand == SPK_LOOPER_CMD_REDO);
-        } else if (sentLooperAction_ == LooperAction::PlayStop) {
-            confirmed = commandObserved && (snapshot.looperTransport == ControllerLooperTransport::Playing ||
-                                             snapshot.looperTransport == ControllerLooperTransport::Stopped);
-        } else if (sentLooperAction_ == LooperAction::Play) {
-            confirmed = commandObserved && observedCommand == SPK_LOOPER_CMD_PLAY;
-        } else if (sentLooperAction_ == LooperAction::Stop) {
-            confirmed = commandObserved && observedCommand == SPK_LOOPER_CMD_STOP;
-        } else if (sentLooperAction_ == LooperAction::RecordDub) {
-            confirmed = commandObserved && (snapshot.looperTransport == ControllerLooperTransport::Recording ||
-                                             snapshot.looperTransport == ControllerLooperTransport::Overdubbing ||
-                                             snapshot.looperTransport == ControllerLooperTransport::Playing);
-        }
-        // Only a fresh, action-appropriate Spark notification/status update
-        // resolves pending; command transport ACKs never enter this path.
-        if (confirmed) {
-            state_.confirmLooperRequest();
-            sentLooperAction_ = LooperAction::None;
-        } else if (millis() - looperSentAtMs_ >= kLooperTimeoutMs) {
-            state_.failLooperRequest();
-            dataControl.sparkLooperGetStatus();
-            dataControl.sparkLooperGetConfig();
-            sentLooperAction_ = LooperAction::None;
+    // BLE subscription may complete before Spark is ready to answer the
+    // initial identity query. Retry boundedly while Identifying rather than
+    // leaving the controller unusable after one lost response.
+    if (snapshot.connectionPhase == ControllerConnectionPhase::Identifying && !ampIdentityWaitStarted_) {
+        // checkBLEConnection() already sent the first query immediately after
+        // notification subscription. Give it a full response window first.
+        ampIdentityWaitStarted_ = true;
+        ampIdentityQueryAtMs_ = millis();
+        return;
+    }
+    if (snapshot.connectionPhase == ControllerConnectionPhase::Identifying &&
+        millis() - ampIdentityQueryAtMs_ >= kPresetTimeoutMs) {
+        if (!SparkDataControl::hasPendingCommandPackets() && dataControl.getAmpName()) {
+            ampIdentityQueryAtMs_ = millis();
+            Serial.println("Controller: retrying amp identity query");
         }
         return;
     }
 
+    // Tuner exit is a safety action, not a normal scheduler participant. Do
+    // not overwrite the remaining packets of an in-flight command: wait for
+    // its intermediate-ACK tail, then issue OFF before dispatching any other
+    // queued controller action in this pass.
+    if (tunerExitIntent_) {
+        if (tunerRequestSent_ && !tunerRequestEnabled_) {
+            if (SparkDataControl::tunerOffObservationRevision() != tunerOffObservationRevisionBeforeRequest_) {
+                Serial.println("Controller: tuner exit confirmed by Spark");
+                tunerRequestSent_ = false;
+                persistentEventLog.record(PersistentEvent::TunerConfirmed, 0, true);
+            } else if (snapshot.tunerActive) {
+                // Local presentation was released when OFF was accepted, so
+                // activity while waiting is a fresh Spark reassertion.
+                // Reissue OFF immediately rather than consuming the grace
+                // timeout while the amp may still be muted in tuner mode.
+                Serial.println("Controller: tuner activity reasserted during OFF grace; retrying");
+                tunerRequestSent_ = false;
+                queuedTunerRequest_ = true;
+                queuedTunerEnabled_ = false;
+                persistentEventLog.record(PersistentEvent::TunerFailed, 0, true);
+            } else if (millis() - tunerRequestSentAtMs_ >= kTunerTimeoutMs) {
+                tunerRequestSent_ = false;
+                // Spark 2 can accept OFF without reporting TUNER_OFF.  A fresh
+                // TUNER_ON/output during this grace period is authoritative
+                // evidence that it remained active, so try OFF again.  In the
+                // absence of that reassertion, release only the local intent;
+                // this is an outcome, never an observed Spark confirmation.
+                tunerExitIntent_ = false;
+                queuedTunerRequest_ = false;
+                tunerEntryCancelRequested_ = false;
+                persistentEventLog.record(PersistentEvent::TunerLocallyReleased, 0, true);
+                Serial.println("Controller: tuner exit locally released after OFF grace timeout (no TUNER_OFF observed)");
+            }
+        }
+
+        // A TUNER_ON/output arriving after a previously observed OFF is a
+        // late reassertion, not permission for the tuner UI to take over.
+        if (snapshot.tunerActive && !tunerRequestSent_) {
+            queuedTunerRequest_ = true;
+            queuedTunerEnabled_ = false;
+        }
+
+        if (queuedTunerRequest_) {
+            if (SparkDataControl::hasPendingCommandPackets()) {
+                return;
+            }
+            queuedTunerRequest_ = false;
+            tunerOffObservationRevisionBeforeRequest_ = SparkDataControl::tunerOffObservationRevision();
+            if (SparkDataControl::exitTuner()) {
+                tunerRequestSent_ = true;
+                tunerRequestEnabled_ = false;
+                tunerRequestSentAtMs_ = millis();
+                persistentEventLog.record(PersistentEvent::TunerSend, 0);
+                // This only restores local presentation. Confirmation remains
+                // exclusively the fresh TUNER_OFF observation above.
+                SparkDataControl::switchSubMode(SUB_MODE_PRESET, false);
+                Serial.println("Controller: native tuner exit locally released/sent; awaiting TUNER_OFF observation");
+            } else {
+                persistentEventLog.record(PersistentEvent::TunerFailed, 0, true);
+                queuedTunerRequest_ = true;
+                queuedTunerEnabled_ = false;
+            }
+            return;
+        }
+        if (tunerRequestSent_) {
+            return;
+        }
+    }
+
+    if (sentLooperAction_ != LooperAction::None) {
+        if (SparkDataControl::looperDeferredRecordFailureRevision() !=
+            looperDeferredRecordFailureRevisionBeforeRequest_) {
+            failLooperRequest(&dataControl, "deferred REC command send failed");
+            sentLooperAction_ = LooperAction::None;
+            return;
+        }
+        const bool commandObserved = SparkDataControl::looperCommandObservationRevision() != looperCommandRevisionBeforeRequest_;
+        const bool statusObserved = SparkDataControl::looperStatusObservationRevision() != looperStatusRevisionBeforeRequest_;
+        const byte observedCommand = SparkStatus::getInstance().lastLooperCommand();
+        const bool stopDeliveryAcknowledged =
+            expectedLooperCommand_ == SPK_LOOPER_CMD_STOP && sentLooperMessageNumber_ != 0 &&
+            !SparkDataControl::looperMessageNumberReused(sentLooperMessageNumber_) &&
+            SparkDataControl::looperAckRevisionForMessage(sentLooperMessageNumber_) > looperAckRevisionBeforeRequest_;
+        bool confirmed = false;
+        if (sentLooperAction_ == LooperAction::Clear) {
+            // A status-only empty response can belong to an external clear or
+            // a delayed probe. Require this action's native DELETE observation.
+            confirmed = commandObserved && observedCommand == SPK_LOOPER_CMD_DELETE &&
+                        statusObserved && snapshot.looperLoopCount == 0;
+        } else if (sentLooperAction_ == LooperAction::UndoRedo) {
+            confirmed = commandObserved && (observedCommand == SPK_LOOPER_CMD_UNDO || observedCommand == SPK_LOOPER_CMD_REDO);
+        } else if (sentLooperAction_ == LooperAction::PlayStop) {
+            confirmed = commandObserved && observedCommand == expectedLooperCommand_;
+        } else if (sentLooperAction_ == LooperAction::Play) {
+            confirmed = commandObserved && observedCommand == expectedLooperCommand_;
+        } else if (sentLooperAction_ == LooperAction::Stop) {
+            confirmed = commandObserved && observedCommand == expectedLooperCommand_;
+        } else if (sentLooperAction_ == LooperAction::RecordDub) {
+            confirmed = commandObserved && observedCommand == expectedLooperCommand_;
+        }
+        // REC/DUB/CLEAR and every non-STOP operation remain strictly
+        // observation-confirmed. Spark 2 can omit STOP's notification, so a
+        // matching final delivery ACK is a bounded fallback only for STOP.
+        if (confirmed) {
+            state_.confirmLooperRequest();
+            persistentEventLog.record(PersistentEvent::LooperConfirmed, static_cast<uint16_t>(sentLooperAction_), true);
+            sentLooperAction_ = LooperAction::None;
+            sentLooperMessageNumber_ = 0;
+        } else if (stopDeliveryAcknowledged) {
+            state_.acknowledgeLooperStopRequest();
+            persistentEventLog.record(PersistentEvent::LooperAcknowledged,
+                                      static_cast<uint16_t>(sentLooperAction_), true);
+            sentLooperAction_ = LooperAction::None;
+            sentLooperMessageNumber_ = 0;
+        } else if (millis() - looperSentAtMs_ >= kLooperTimeoutMs) {
+            failLooperRequest(&dataControl, "observation timed out");
+            sentLooperAction_ = LooperAction::None;
+            sentLooperMessageNumber_ = 0;
+        }
+        // A pending action owns this scheduler pass. In particular, do not
+        // start a looper probe behind a just-issued STOP.
+        return;
+    }
+
     if (queuedLooperAction_ != LooperAction::None) {
+        // Never overwrite an ACK-gated multipart tail. Retain the action
+        // until every packet of the earlier command has drained.
+        if (SparkDataControl::hasPendingCommandPackets()) return;
         const LooperAction action = queuedLooperAction_;
         queuedLooperAction_ = LooperAction::None;
         const uint32_t commandRevisionBeforeSend = SparkDataControl::looperCommandObservationRevision();
         const uint32_t statusRevisionBeforeSend = SparkDataControl::looperStatusObservationRevision();
+        const uint32_t looperAckRevisionBeforeSend = SparkDataControl::looperAckRevision();
+        uint8_t issuedLooperMessageNumber = 0;
         bool sent = false;
         switch (action) {
         case LooperAction::RecordDub:
             // Choose the native sequence from observed transport only; this
             // does not alter ControllerState until Spark notifies us back.
             if (snapshot.looperTransport == ControllerLooperTransport::Recording ||
-                snapshot.looperTransport == ControllerLooperTransport::Overdubbing) sent = dataControl.sparkLooperStopRecAndPlay();
-            else if (snapshot.looperLoopCount > 0) sent = dataControl.sparkLooperDub();
-            else sent = dataControl.sparkLooperRec();
+                snapshot.looperTransport == ControllerLooperTransport::Overdubbing) {
+                expectedLooperCommand_ = SPK_LOOPER_CMD_PLAY;
+                sent = dataControl.sparkLooperStopRecAndPlay();
+            } else if (snapshot.looperLoopCount > 0) {
+                expectedLooperCommand_ = SPK_LOOPER_CMD_PLAY;
+                sent = dataControl.sparkLooperDub();
+            } else {
+                expectedLooperCommand_ = SPK_LOOPER_CMD_REC;
+                sent = dataControl.sparkLooperRec();
+            }
             break;
         case LooperAction::PlayStop:
+            expectedLooperCommand_ = (snapshot.looperTransport == ControllerLooperTransport::Playing ||
+                                      snapshot.looperTransport == ControllerLooperTransport::Overdubbing)
+                                         ? SPK_LOOPER_CMD_STOP : SPK_LOOPER_CMD_PLAY;
             sent = (snapshot.looperTransport == ControllerLooperTransport::Playing ||
                     snapshot.looperTransport == ControllerLooperTransport::Overdubbing)
-                       ? dataControl.sparkLooperStopPlaying() : dataControl.sparkLooperPlay();
+                       ? dataControl.sparkLooperStopPlaying(&issuedLooperMessageNumber) : dataControl.sparkLooperPlay();
             break;
         case LooperAction::UndoRedo: sent = dataControl.sparkLooperUndoRedo(); break;
-        case LooperAction::Play: sent = dataControl.sparkLooperPlay(); break;
-        case LooperAction::Stop: sent = dataControl.sparkLooperStopPlaying(); break;
+        case LooperAction::Play: expectedLooperCommand_ = SPK_LOOPER_CMD_PLAY; sent = dataControl.sparkLooperPlay(); break;
+        case LooperAction::Stop: expectedLooperCommand_ = SPK_LOOPER_CMD_STOP; sent = dataControl.sparkLooperStopPlaying(&issuedLooperMessageNumber); break;
         case LooperAction::Clear: sent = dataControl.sparkLooperDeleteAll(); break;
         default: break;
         }
@@ -252,15 +442,26 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             looperSentAtMs_ = millis();
             looperCommandRevisionBeforeRequest_ = commandRevisionBeforeSend;
             looperStatusRevisionBeforeRequest_ = statusRevisionBeforeSend;
+            // Use the global generation captured before the first write. The
+            // per-message generation is compared against it above, avoiding a
+            // stale ACK when the one-byte protocol sequence is reused.
+            looperAckRevisionBeforeRequest_ = looperAckRevisionBeforeSend;
+            looperDeferredRecordFailureRevisionBeforeRequest_ = SparkDataControl::looperDeferredRecordFailureRevision();
+            sentLooperMessageNumber_ = issuedLooperMessageNumber;
+            persistentEventLog.record(PersistentEvent::LooperSend, static_cast<uint16_t>(action));
         }
-        else state_.failLooperRequest();
+        else failLooperRequest(&dataControl, "command send failed");
         return;
     }
 
     // Do not locally manufacture tuner state. Spark TUNER_ON/OFF observations
     // are the only confirmation that moves the controller in or out of tuner.
     if (tunerRequestSent_) {
-        if (snapshot.tunerActive == tunerRequestEnabled_) {
+        const bool observedRequestedState = tunerRequestEnabled_
+                                               ? snapshot.tunerActive
+                                               : SparkDataControl::tunerOffObservationRevision() !=
+                                                     tunerOffObservationRevisionBeforeRequest_;
+        if (observedRequestedState) {
             if (tunerRequestEnabled_ && tunerEntryCancelRequested_) {
                 // TUNER_ON arrived after a newer navigation destination.
                 tunerRequestSent_ = false;
@@ -273,13 +474,14 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                           tunerRequestEnabled_ ? "entry" : "exit");
             tunerRequestSent_ = false;
             tunerEntryCancelRequested_ = false;
+            persistentEventLog.record(PersistentEvent::TunerConfirmed, tunerRequestEnabled_ ? 1 : 0, true);
         } else if (millis() - tunerRequestSentAtMs_ >= kTunerTimeoutMs) {
             Serial.printf("Controller: tuner %s timed out\n",
                           tunerRequestEnabled_ ? "entry" : "exit");
             tunerRequestSent_ = false;
             tunerEntryCancelRequested_ = false;
+            persistentEventLog.record(PersistentEvent::TunerFailed, tunerRequestEnabled_ ? 1 : 0, true);
         }
-        return;
     }
 
     if (queuedTunerRequest_) {
@@ -289,21 +491,29 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             // but did not consistently emit TUNER_OFF. The project's normal
             // tuner-off path makes the same request and restores preset mode;
             // a later fresh tuner output still wins and re-enters tuner.
-            SparkDataControl::switchSubMode(SUB_MODE_PRESET);
-            Serial.println("Controller: requested tuner exit via preset mode");
-            return;
-        }
-        if (SparkDataControl::switchTuner(queuedTunerEnabled_)) {
+            tunerOffObservationRevisionBeforeRequest_ = SparkDataControl::tunerOffObservationRevision();
+            if (SparkDataControl::exitTuner()) {
+                tunerRequestSent_ = true;
+                tunerRequestEnabled_ = false;
+                tunerRequestSentAtMs_ = millis();
+                persistentEventLog.record(PersistentEvent::TunerSend, 0);
+                SparkDataControl::switchSubMode(SUB_MODE_PRESET, false);
+                Serial.println("Controller: native tuner exit locally released/sent; awaiting TUNER_OFF observation");
+            } else {
+                persistentEventLog.record(PersistentEvent::TunerFailed, 0, true);
+            }
+        } else if (SparkDataControl::switchTuner(queuedTunerEnabled_)) {
             tunerRequestSent_ = true;
             tunerRequestEnabled_ = queuedTunerEnabled_;
             tunerRequestSentAtMs_ = millis();
+            persistentEventLog.record(PersistentEvent::TunerSend, 1);
             Serial.printf("Controller: requesting tuner %s\n",
                           queuedTunerEnabled_ ? "entry" : "exit");
         } else {
             Serial.printf("Controller: tuner %s command failed\n",
                           queuedTunerEnabled_ ? "entry" : "exit");
+            persistentEventLog.record(PersistentEvent::TunerFailed, queuedTunerEnabled_ ? 1 : 0, true);
         }
-        return;
     }
 
     // The verified capability is not itself a fresh looper state. Request

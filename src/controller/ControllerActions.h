@@ -5,6 +5,7 @@
 
 class ControllerState;
 class SparkDataControl;
+class Stream;
 
 // Sole mutation entrypoint for the initial UI action. It serializes one
 // hardware-preset request and keeps the confirmed Spark value separate from
@@ -17,10 +18,14 @@ public:
     // Queues one model-specific bypass/on-off request. Confirmation is based
     // exclusively on a fresh Spark-owned slot observation, never an ACK.
     bool requestFxToggle(uint8_t slot);
-    // Entry is confirmed by Spark TUNER_ON. Spark 2 does not reliably emit
-    // TUNER_OFF for a native exit, so exit uses the established preset-mode
-    // transition and fresh tuner output can still reassert amp ownership.
+    // Entry is confirmed by Spark TUNER_ON/tuner output; exit only by a fresh
+    // Spark TUNER_OFF observation. A ready inactive snapshot may still issue
+    // the idempotent safety exit.
     bool requestTuner(bool on);
+    // Remains latched after an accepted tuner-exit request so presentation can
+    // reject a late TUNER_ON/output observation until the user explicitly
+    // chooses tuner again or the BLE link is lost.
+    bool tunerExitIntent() const { return tunerExitIntent_; }
     // A newer explicit navigation choice wins over an in-flight tuner entry.
     void cancelTunerEntry();
     bool requestLooperRecordDub();
@@ -32,6 +37,7 @@ public:
     bool requestLooperClear();
     // Leaving the page or choosing another action cancels destructive intent.
     void cancelLooperClear();
+    void printState(Stream &out) const;
     void process(SparkDataControl &dataControl);
 
 private:
@@ -53,6 +59,8 @@ private:
     uint8_t presetFullQueryMessageNumber_ = 0;
     bool currentPresetQueryIssued_ = false;
     uint32_t currentPresetQueryAtMs_ = 0;
+    uint32_t ampIdentityQueryAtMs_ = 0;
+    bool ampIdentityWaitStarted_ = false;
     // This is independent of preset-action verification. It establishes the
     // initial complete preset observation required for the current BLE link.
     bool startupFullPresetQueryIssued_ = false;
@@ -79,7 +87,9 @@ private:
     bool queuedTunerEnabled_ = false;
     bool tunerRequestEnabled_ = false;
     bool tunerEntryCancelRequested_ = false;
+    bool tunerExitIntent_ = false;
     uint32_t tunerRequestSentAtMs_ = 0;
+    uint32_t tunerOffObservationRevisionBeforeRequest_ = 0;
     enum class LooperAction : uint8_t { None, RecordDub, PlayStop, Play, Stop, UndoRedo, Clear };
     LooperAction queuedLooperAction_ = LooperAction::None;
     LooperAction sentLooperAction_ = LooperAction::None;
@@ -87,6 +97,10 @@ private:
     uint32_t looperSyncRequestedAtMs_ = 0;
     uint32_t looperCommandRevisionBeforeRequest_ = 0;
     uint32_t looperStatusRevisionBeforeRequest_ = 0;
+    uint32_t looperAckRevisionBeforeRequest_ = 0;
+    uint32_t looperDeferredRecordFailureRevisionBeforeRequest_ = 0;
+    uint8_t expectedLooperCommand_ = 0;
+    uint8_t sentLooperMessageNumber_ = 0;
 
     bool hasPendingFxOperation() const;
     void cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh,
@@ -94,4 +108,6 @@ private:
     void clearFxRequest();
     bool canRequestLooper() const;
     bool queueLooperAction(LooperAction action);
+    void cancelDeferredLooperRecord();
+    void failLooperRequest(SparkDataControl *dataControl, const char *reason);
 };

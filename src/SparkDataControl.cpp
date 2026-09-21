@@ -31,6 +31,9 @@ uint8_t SparkDataControl::fullPresetObservationMessageNumber_ = 0;
 uint32_t SparkDataControl::looperStatusObservationRevision_ = 0;
 uint32_t SparkDataControl::looperSettingsObservationRevision_ = 0;
 uint32_t SparkDataControl::looperCommandObservationRevision_ = 0;
+uint32_t SparkDataControl::looperAckRevision_ = 0;
+vector<pair<uint8_t, uint32_t>> SparkDataControl::looperAckRevisionsByMessage_;
+vector<pair<uint8_t, uint8_t>> SparkDataControl::looperMessageNumberUseCounts_;
 uint32_t SparkDataControl::ignoreTunerOutputUntilMs_ = 0;
 atomic_uint32_t SparkDataControl::bleDisconnectCount_{0};
 atomic_uint32_t SparkDataControl::bleReconnectCount_{0};
@@ -52,6 +55,9 @@ bool SparkDataControl::ampNameReceived_ = false;
 int SparkDataControl::tapEntrySize = 5;
 CircularBuffer SparkDataControl::tapEntries(tapEntrySize);
 bool SparkDataControl::recordStartFlag = false;
+uint32_t SparkDataControl::recordStartDeferredAtMs_ = 0;
+uint32_t SparkDataControl::looperDeferredRecordFailureRevision_ = 0;
+uint32_t SparkDataControl::tunerOffObservationRevision_ = 0;
 
 vector<CmdData>
     SparkDataControl::ackMsg;
@@ -155,7 +161,7 @@ OperationMode SparkDataControl::init(OperationMode opModeInput) {
     return operationMode_;
 }
 
-void SparkDataControl::switchSubMode(SubMode subMode) {
+void SparkDataControl::switchSubMode(SubMode subMode, bool sendTunerCommand) {
     // TODO: Check if that works fine
     if (subMode == SUB_MODE_LOOPER) {
         bleKeyboard.start();
@@ -163,12 +169,12 @@ void SparkDataControl::switchSubMode(SubMode subMode) {
         bleKeyboard.end();
     }
     // Switch off tuner mode at amp if was enabled before but is not matching current subMode
-    if (subMode_ == SUB_MODE_TUNER && subMode_ != subMode) {
+    if (sendTunerCommand && subMode_ == SUB_MODE_TUNER && subMode_ != subMode) {
         // Spark 2 can leave one pitch packet queued after an explicit tuner
         // exit. Ignore only this short tail; a later sample is still allowed
         // to reveal a genuinely active externally-entered tuner session.
         ignoreTunerOutputUntilMs_ = millis() + 2000;
-        switchTuner(false);
+        exitTuner();
     }
     if (subMode == SUB_MODE_TUNER) {
         switchTuner(true);
@@ -356,6 +362,7 @@ void SparkDataControl::resetStatus() {
     sparkSsr.reset();
     currentCommand.clear();
     pendingLooperAcks.clear();
+    cancelPendingLooperRecord();
     currentMsg.clear();
     ackMsg.clear();
     SparkPresetControl::getInstance().resetStatus();
@@ -363,6 +370,9 @@ void SparkDataControl::resetStatus() {
     looperStatusObservationRevision_ = 0;
     looperSettingsObservationRevision_ = 0;
     looperCommandObservationRevision_ = 0;
+    looperAckRevision_ = 0;
+    looperAckRevisionsByMessage_.clear();
+    looperMessageNumberUseCounts_.clear();
 }
 
 /////////////////////////////////////////////////////////
@@ -429,10 +439,28 @@ void SparkDataControl::checkForUpdates() {
 
     SparkPresetControl::getInstance().checkForUpdates(operationMode_);
 
+
     if (recordStartFlag) {
-        if (looperControl_.currentBar() != 0) {
-            sparkLooperCommand(SPK_LOOPER_CMD_REC);
-            recordStartFlag = false;
+        if (millis() - recordStartDeferredAtMs_ >= kDeferredLooperRecordTimeoutMs) {
+            // A count-in's multipart command never drained.  Cancel rather
+            // than interleave REC with its ACK-gated tail.
+            cancelPendingLooperRecord();
+            ++looperDeferredRecordFailureRevision_;
+            Serial.println("Spark Looper: deferred REC command timed out waiting for command tail");
+        } else if (looperControl_.currentBar() != 0) {
+            // REC must be the first command after COUNTIN's intermediate-ACK
+            // tail.  Do not call sparkLooperCommand (and therefore
+            // triggerCommand) until that tail is completely drained.
+            if (hasPendingCommandPackets()) {
+                // Keep the deferred flag armed; a later update will retry
+                // after the ACK-gated tail has drained.
+            } else if (!sparkLooperCommand(SPK_LOOPER_CMD_REC)) {
+                ++looperDeferredRecordFailureRevision_;
+                Serial.println("Spark Looper: deferred REC command failed");
+                cancelPendingLooperRecord();
+            } else {
+                cancelPendingLooperRecord();
+            }
         }
     }
 
@@ -622,21 +650,16 @@ bool SparkDataControl::getCurrentPreset(int num) {
 }
 
 bool SparkDataControl::triggerCommand(vector<CmdData> &msg) {
-    // Spark encodes zero as wire sequence one. A command built with zero is
-    // therefore sequence one, so advance directly to two and avoid reusing
-    // one for the following command.
     nextMessageNum = nextMessageNum == 0 ? 0x02 : static_cast<byte>(nextMessageNum + 1);
     if (msg.size() > 0) {
         currentCommand.assign(msg.begin(), msg.end());
     }
-    // sparkSsr.clearMessageBuffer();
     DEBUG_PRINTLN("Sending message via BT.");
     return sendNextRequest();
-    // sparkSsr.clearMessageBuffer();
 }
 
 bool SparkDataControl::sendNextRequest() {
-    if (currentCommand.size() > 0) {
+    if (!currentCommand.empty()) {
         CmdData request = currentCommand.front();
         ByteVector firstBlock = request.data;
         AckData currRequest;
@@ -647,9 +670,7 @@ bool SparkDataControl::sendNextRequest() {
 
         if (sendMessageToBT(firstBlock)) {
             pendingLooperAcks.push_back(currRequest);
-            if (currentCommand.size() > 0) {
-                currentCommand.pop_front();
-            }
+            currentCommand.pop_front();
             return true;
         }
     }
@@ -673,7 +694,16 @@ void SparkDataControl::handleSendingAck(const ByteVector &blk) {
 
         DEBUG_PRINTLN("Sending acknowledgment");
         if (operationMode_ == SPARK_MODE_APP) {
-            triggerCommand(ackMsg);
+            // ACK responses belong to the received protocol exchange, not to
+            // the outbound command FIFO. Sending directly also prevents an
+            // ACK from being delayed behind an unrelated multipart command.
+            for (const CmdData &ack : ackMsg) {
+                ByteVector block = ack.data;
+                if (!sendMessageToBT(block)) {
+                    Serial.println("Failed to send Spark acknowledgment");
+                    break;
+                }
+            }
         } else if (operationMode_ == SPARK_MODE_AMP) {
             bleControl->notifyClients(ackMsg);
         }
@@ -787,7 +817,9 @@ void SparkDataControl::handleAppModeResponse() {
         if (lastMessageType == MSG_TYPE_AMP_SERIAL) {
             DEBUG_PRINTLN("Last message was serial number.");
             // reading HW checksums for cache
+#if !defined(PANELAN_LVGL_UI_MODE)
             getAmpName();
+#endif
             printMessage = true;
         }
 
@@ -924,6 +956,7 @@ void SparkDataControl::handleAppModeResponse() {
             Serial.println("External tuner OFF received; returning to preset mode.");
             subMode_ = SUB_MODE_PRESET;
             SparkPresetControl::getInstance().updatePendingWithActive();
+            ++tunerOffObservationRevision_;
         }
 
         if (lastMessageType == MSG_TYPE_INPUT_VOLUME) {
@@ -954,7 +987,8 @@ void SparkDataControl::handleIncomingAck() {
     // confirm pending preset into active
     SparkPresetControl &presetControl = SparkPresetControl::getInstance();
 
-    AckData lastAck = sparkSsr.getLastAckAndEmpty();
+    const vector<AckData> acknowledgments = sparkSsr.getAcksAndEmpty();
+    for (const AckData &lastAck : acknowledgments) {
     if (lastAck.cmd == 0x05) { // 05 is intermediate ack, not last message
         DEBUG_PRINTLN("Received intermediate ACK");
         if (lastAck.subcmd == 0x01) {
@@ -989,19 +1023,31 @@ void SparkDataControl::handleIncomingAck() {
         }
         if (lastAck.subcmd == 0x75) {
             byte msgNum = lastAck.msgNum;
-            byte looperCommand;
+            ++looperAckRevision_;
+            bool foundAckRevision = false;
+            for (auto &entry : looperAckRevisionsByMessage_) {
+                if (entry.first == msgNum) {
+                    entry.second = looperAckRevision_;
+                    foundAckRevision = true;
+                    break;
+                }
+            }
+            if (!foundAckRevision) {
+                looperAckRevisionsByMessage_.push_back({msgNum, looperAckRevision_});
+            }
             for (auto it = pendingLooperAcks.begin(); it != pendingLooperAcks.end(); /*NOTE: no incrementation of the iterator here*/) {
                 byte itMsgNum = (*it).msgNum;
                 if (itMsgNum == msgNum) {
-                    looperCommand = (*it).detail;
                     it = pendingLooperAcks.erase(it); // erase returns the next iterator
                 } else {
                     ++it; // otherwise increment it by yourself
                 }
             }
-            updateLooperCommand(looperCommand);
-            Serial.println(looperControl_.getLooperStatus().c_str());
+            // A transport ACK proves only delivery. Do not mutate looper
+            // transport or local status here; incoming looper observations
+            // are the sole canonical source for those values.
         }
+    }
     }
 }
 
@@ -1116,6 +1162,41 @@ uint32_t SparkDataControl::looperSettingsObservationRevision() {
 
 uint32_t SparkDataControl::looperCommandObservationRevision() {
     return looperCommandObservationRevision_;
+}
+
+uint32_t SparkDataControl::looperAckRevision() {
+    return looperAckRevision_;
+}
+
+uint32_t SparkDataControl::looperAckRevisionForMessage(uint8_t messageNumber) {
+    for (const auto &entry : looperAckRevisionsByMessage_) {
+        if (entry.first == messageNumber) return entry.second;
+    }
+    return 0;
+}
+
+bool SparkDataControl::looperMessageNumberReused(uint8_t messageNumber) {
+    for (const auto &entry : looperMessageNumberUseCounts_) {
+        if (entry.first == messageNumber) return entry.second > 1;
+    }
+    return false;
+}
+
+uint32_t SparkDataControl::looperDeferredRecordFailureRevision() {
+    return looperDeferredRecordFailureRevision_;
+}
+
+uint32_t SparkDataControl::tunerOffObservationRevision() {
+    return tunerOffObservationRevision_;
+}
+
+bool SparkDataControl::hasPendingCommandPackets() {
+    return !currentCommand.empty();
+}
+
+void SparkDataControl::cancelPendingLooperRecord() {
+    recordStartFlag = false;
+    recordStartDeferredAtMs_ = 0;
 }
 
 void SparkDataControl::recordBleDisconnect() { ++bleDisconnectCount_; }
@@ -1267,12 +1348,28 @@ void SparkDataControl::resetLastKeyboardButtonPressed() {
 // 0a = DELETE (done)
 Looper commands end */
 
-bool SparkDataControl::sparkLooperCommand(LooperCommand command) {
+bool SparkDataControl::sparkLooperCommand(LooperCommand command, uint8_t *messageNumber) {
 
     currentMsg = sparkMsg.sparkLooperCommand(nextMessageNum, command);
     DEBUG_PRINTF("Spark Looper: %02x\n", command);
 
-    return triggerCommand(currentMsg);
+    const uint8_t issuedMessageNumber = nextMessageNum == 0 ? 0x01 : nextMessageNum;
+    const bool sent = triggerCommand(currentMsg);
+    if (sent) {
+        bool foundUseCount = false;
+        for (auto &entry : looperMessageNumberUseCounts_) {
+            if (entry.first == issuedMessageNumber) {
+                if (entry.second < 0xFF) ++entry.second;
+                foundUseCount = true;
+                break;
+            }
+        }
+        if (!foundUseCount) looperMessageNumberUseCounts_.push_back({issuedMessageNumber, 1});
+        if (messageNumber != nullptr) {
+            *messageNumber = issuedMessageNumber;
+        }
+    }
+    return sent;
 }
 
 void SparkDataControl::tapTempoButton() {
@@ -1306,6 +1403,14 @@ bool SparkDataControl::switchTuner(bool on) {
     DEBUG_PRINTF("Switching Tuner %s\n", on ? "on" : "off");
     currentMsg = sparkMsg.switchTuner(nextMessageNum, on);
     return triggerCommand(currentMsg);
+}
+
+bool SparkDataControl::exitTuner() {
+    // Do not make this conditional on subMode_: it can be stale after a lost
+    // notification while the amp is still muting for tuner.
+    ignoreTunerOutputUntilMs_ = millis() + 2000;
+    const bool sent = switchTuner(false);
+    return sent;
 }
 
 bool SparkDataControl::updateLooperSettings() {
@@ -1380,18 +1485,16 @@ bool SparkDataControl::sparkLooperStopAll() {
     return stopReturn && recStopReturn;
 }
 
-bool SparkDataControl::sparkLooperStopPlaying() {
-    // looperControl_.isPlaying() = false;
-    bool retValue = sparkLooperCommand(SPK_LOOPER_CMD_STOP);
-    if (retValue) {
-        looperControl_.stop();
-        looperControl_.reset();
-        sparkLooperGetStatus();
-    }
-    return retValue;
+bool SparkDataControl::sparkLooperStopPlaying(uint8_t *messageNumber) {
+    cancelPendingLooperRecord();
+    // STOP's final ACK proves delivery, not transport. In particular, do not
+    // stop/reset local transport bookkeeping or issue an immediate status
+    // query that can make the UI claim a state Spark has not observed.
+    return sparkLooperCommand(SPK_LOOPER_CMD_STOP, messageNumber);
 }
 
 bool SparkDataControl::sparkLooperPlay() {
+    cancelPendingLooperRecord();
     // The local playback flag can outlive the last trustworthy Spark
     // observation. It may avoid restarting our timer, never suppress an
     // explicit native PLAY request or claim that request was sent.
@@ -1404,15 +1507,21 @@ bool SparkDataControl::sparkLooperPlay() {
 bool SparkDataControl::sparkLooperRec() {
     bool countIn = looperControl_.looperSetting().click;
     if (countIn) {
-        sparkLooperCommand(SPK_LOOPER_CMD_COUNTIN);
+        // Do not leave a deferred REC armed if COUNTIN could not be sent.
+        if (!sparkLooperCommand(SPK_LOOPER_CMD_COUNTIN)) {
+            cancelPendingLooperRecord();
+            return false;
+        }
         looperControl_.setCurrentBar(0);
     }
     looperControl_.start();
     recordStartFlag = true;
+    recordStartDeferredAtMs_ = millis();
     return true;
 }
 
 bool SparkDataControl::sparkLooperDub() {
+    cancelPendingLooperRecord();
     bool retValue = sparkLooperCommand(SPK_LOOPER_CMD_DUB);
     // looperControl_.reset();
     looperControl_.start();
@@ -1422,6 +1531,7 @@ bool SparkDataControl::sparkLooperDub() {
 }
 
 bool SparkDataControl::sparkLooperRetry() {
+    cancelPendingLooperRecord();
     sparkLooperCommand(SPK_LOOPER_CMD_RETRY);
     looperControl_.reset();
     return sparkLooperRec();
@@ -1429,6 +1539,7 @@ bool SparkDataControl::sparkLooperRetry() {
 // TODO: Get Looper status on startup and set flags accordingly
 
 bool SparkDataControl::sparkLooperStopRec() {
+    cancelPendingLooperRecord();
     bool isRecAvailable = looperControl_.isRecAvailable();
     bool retVal = false;
     if (isRecAvailable) {
@@ -1465,6 +1576,7 @@ bool SparkDataControl::sparkLooperStopRecAndPlay() {
 }
 
 bool SparkDataControl::sparkLooperDeleteAll() {
+    cancelPendingLooperRecord();
     return sparkLooperCommand(SPK_LOOPER_CMD_DELETE);
 }
 

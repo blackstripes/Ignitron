@@ -902,13 +902,16 @@ tuple<bool, byte, byte> SparkStreamReader::needsAck(const ByteVector &blk) {
     return tuple<bool, byte, byte>(false, 0, 0);
 }
 
+vector<AckData> SparkStreamReader::getAcksAndEmpty() {
+    vector<AckData> acknowledgments = statusObject.acknowledgments();
+    statusObject.resetAcknowledgments();
+    return acknowledgments;
+}
+
 AckData SparkStreamReader::getLastAckAndEmpty() {
     AckData lastAck;
-    vector<AckData> acknowledgments = statusObject.acknowledgments();
-    if (acknowledgments.size() > 0) {
-        lastAck = acknowledgments.back();
-        statusObject.resetAcknowledgments();
-    }
+    vector<AckData> acknowledgments = getAcksAndEmpty();
+    if (!acknowledgments.empty()) lastAck = acknowledgments.back();
     return lastAck;
 }
 

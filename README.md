@@ -66,7 +66,21 @@ The current controller uses LVGL for polished Home/Preset, FX, Tuner, and
 Device screens. It shows connected Spark identity/serial, supports confirmed
 preset and FX actions, and has been hardware-tested with Spark 2 native tuner
 entry/exit, live note/cents display, and native mute behavior. Spark 2 internal
-looper control remains a capability-gated work in progress.
+looper control remains capability-gated. Looper transport and preset/FX changes
+are observation-confirmed: an acknowledged command is not a state change. Tuner
+exit normally requires a Spark `TUNER_OFF` observation; because Spark 2 may
+accept OFF without emitting one, a bounded grace period with no reasserted tuner
+activity releases only the local exit intent and is logged as a local release,
+not a confirmation. A pending count-in recording waits for the count-in command
+tail to drain before sending REC and is cancelled by timeout, stop, play, dub,
+clear, disconnect, or a failed looper action, so it cannot later start a ghost
+recording.
+
+Spark 2 STOP is the narrow exception for action delivery: when its matching
+final `0x04/0x75` ACK arrives without a looper observation, the controller
+settles the touch action as delivered, logs `LooperAcknowledged`, and marks the
+transport unknown while retaining the observed loop count. It never infers a
+stopped transport from that ACK. REC, DUB, and CLEAR remain observation-only.
 
 Build the controller firmware with:
 
@@ -94,8 +108,9 @@ log clear confirm   # erase both persistent segments (explicit confirmation)
 ```
 
 The log captures boot/init, BLE lifecycle and transport failures, ingress
-drops/resets, controller synchronization phases, and confirmed/failed preset
-and FX actions. It deliberately does not record every BLE packet.
+drops/resets, controller synchronization phases, navigation, and sent,
+confirmed, or failed preset, FX, looper, and tuner actions. It deliberately
+does not record every BLE packet.
 
 For a display-and-touch-only smoke test, use `panelan-display-bringup` instead.
 The full hardware notes, USB/flashing advice, and planned multi-device pairing

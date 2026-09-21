@@ -192,6 +192,12 @@ void loop() {
 #endif
 #endif
         if (!sparkConnected) {
+#ifdef PANELAN_LVGL_UI_MODE
+            // The headless connection path returns before the normal action
+            // pass below. Give ControllerActions this pass so durable tuner
+            // exit intent and other in-flight metadata are cleared on loss.
+            controllerActions.process(*spark_dc);
+#endif
             serialCLI->update();
             delay(10);
             return;

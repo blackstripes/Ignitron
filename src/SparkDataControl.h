@@ -17,6 +17,7 @@
 
 #include <Arduino.h>
 #include <atomic>
+#include <deque>
 #include <freertos/semphr.h>
 #include <queue>
 #include <stdexcept>
@@ -66,6 +67,22 @@ public:
     static uint32_t looperStatusObservationRevision();
     static uint32_t looperSettingsObservationRevision();
     static uint32_t looperCommandObservationRevision();
+    // Final 0x04/0x75 delivery ACK generations. The per-message accessor
+    // excludes unrelated message numbers; reuse must additionally be checked.
+    static uint32_t looperAckRevision();
+    static uint32_t looperAckRevisionForMessage(uint8_t messageNumber);
+    // A reused one-byte wire sequence cannot safely correlate a delayed ACK.
+    static bool looperMessageNumberReused(uint8_t messageNumber);
+    // Advances only when the deferred post-count-in REC write fails.
+    static uint32_t looperDeferredRecordFailureRevision();
+    // Advances only for an incoming Spark TUNER_OFF observation.
+    static uint32_t tunerOffObservationRevision();
+    // True while the active command or a queued command group has packets
+    // awaiting dispatch. Callers that require an empty command boundary can
+    // defer their first write until the FIFO has drained.
+    static bool hasPendingCommandPackets();
+    // Cancels a locally scheduled post-count-in REC. It never sends a command.
+    static void cancelPendingLooperRecord();
     // Compact, monotonic diagnostics counters. These are intentionally
     // payload-free so they are safe to inspect on a live serial connection.
     static void recordBleDisconnect();
@@ -159,12 +176,14 @@ public:
 
     // Functions for Spark AMP (Server mode)
     // void receiveSparkWrite(const ByteVector& blk);
-    static void switchSubMode(SubMode subMode);
+    static void switchSubMode(SubMode subMode, bool sendTunerCommand = true);
     void toggleBTMode();
 
-    bool sparkLooperCommand(LooperCommand command);
+    // Returns the wire message number assigned to this looper command on a
+    // successful first write, allowing callers to correlate its final ACK.
+    bool sparkLooperCommand(LooperCommand command, uint8_t *messageNumber = nullptr);
     bool sparkLooperStopAll();
-    bool sparkLooperStopPlaying();
+    bool sparkLooperStopPlaying(uint8_t *messageNumber = nullptr);
     bool sparkLooperPlay();
 
     bool sparkLooperRec();
@@ -187,6 +206,9 @@ public:
     void tapTempoButton();
 
     static bool switchTuner(bool on);
+    // Send the native tuner-off command even if our local submode is already
+    // stale. This is the only controller exit path.
+    static bool exitTuner();
 
     static bool processAction();
     const SparkStreamReader &getSSR() const { return sparkSsr; }
@@ -229,6 +251,8 @@ private:
     static int tapEntrySize;
     static CircularBuffer tapEntries;
     static bool recordStartFlag;
+    static uint32_t recordStartDeferredAtMs_;
+    static constexpr uint32_t kDeferredLooperRecordTimeoutMs = 5000;
 
     static bool ampNameReceived_;
     const unsigned int updateAmpBatteryInterval = 60000; // Update battery status every minute
@@ -276,6 +300,11 @@ private:
     static uint32_t looperStatusObservationRevision_;
     static uint32_t looperSettingsObservationRevision_;
     static uint32_t looperCommandObservationRevision_;
+    static uint32_t looperAckRevision_;
+    static vector<pair<uint8_t, uint32_t>> looperAckRevisionsByMessage_;
+    static vector<pair<uint8_t, uint8_t>> looperMessageNumberUseCounts_;
+    static uint32_t looperDeferredRecordFailureRevision_;
+    static uint32_t tunerOffObservationRevision_;
     static uint32_t ignoreTunerOutputUntilMs_;
     static atomic_uint32_t bleDisconnectCount_;
     static atomic_uint32_t bleReconnectCount_;

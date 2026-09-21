@@ -11,7 +11,13 @@ enum class PersistentEvent : uint8_t {
     IngressDropBusy, IngressDropFull, IngressInvalidated,
     SyncPhase,
     PresetSend, PresetConfirmed, PresetFailed,
-    FxSend, FxConfirmed, FxFailed
+    FxSend, FxConfirmed, FxFailed,
+    LooperSend, LooperConfirmed, LooperFailed,
+    TunerSend, TunerConfirmed, TunerFailed, TunerLocallyReleased,
+    Navigation,
+    // Delivery-only outcome for a Spark 2 STOP final ACK. This is distinct
+    // from LooperConfirmed, which requires a Spark looper observation.
+    LooperAcknowledged
 };
 
 class PersistentEventLog {

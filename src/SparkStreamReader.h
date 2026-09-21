@@ -104,6 +104,9 @@ public:
 
     tuple<boolean, byte, byte> needsAck(const ByteVector &block);
     MessageProcessStatus processBlock(ByteVector &block);
+    // Drains every ACK decoded from the current incoming block in wire order.
+    vector<AckData> getAcksAndEmpty();
+    // Compatibility accessor for legacy single-ACK callers.
     AckData getLastAckAndEmpty();
     void clearMessageBuffer();
     // Discard all incremental framing state after a lost transport fragment

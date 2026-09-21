@@ -104,6 +104,9 @@ public:
     void failFxToggleRequest(uint8_t slot);
     void beginLooperRequest();
     void confirmLooperRequest();
+    // STOP ACK fallback: delivery is known, but no Spark observation has
+    // established the resulting transport. Preserve the observed loop count.
+    void acknowledgeLooperStopRequest();
     void failLooperRequest();
     void armLooperClear();
     void disarmLooperClear();

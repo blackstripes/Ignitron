@@ -72,6 +72,18 @@ ACK without sufficiently correlating the response to the initiating command.
 with background requests. The new state model must not reuse this behavior as
 the definition of confirmation.
 
+### Command-boundary transport FIFO
+
+Outgoing Spark command packets are serialized as complete command groups. The
+active group is never overwritten; later groups enter a bounded FIFO of at most
+16 waiting groups. Intermediate ACKs advance packets only in the active group.
+After its final packet is successfully written, the next group is promoted and
+its first packet is written without waiting for the prior group's final ACK.
+Protocol ACK responses are sent directly and never enter this FIFO. Resetting
+the transport clears both the active group and FIFO. A caller may use
+`hasPendingCommandPackets()` to require a drained boundary; it includes both
+active and queued groups.
+
 For every command, model these stages separately:
 
 ```text

@@ -281,6 +281,15 @@ void ControllerState::failFxToggleRequest(uint8_t slot) {
 
 void ControllerState::beginLooperRequest() { ControllerSnapshot next = snapshot_; next.looperPending = true; next.looperActionFailed = false; publishIfChanged(next); }
 void ControllerState::confirmLooperRequest() { ControllerSnapshot next = snapshot_; next.looperPending = false; next.looperActionFailed = false; publishIfChanged(next); }
+void ControllerState::acknowledgeLooperStopRequest() {
+    ControllerSnapshot next = snapshot_;
+    next.looperPending = false;
+    next.looperActionFailed = false;
+    // Never synthesize Stopped from an ACK. Only an incoming looper command
+    // observation may establish a canonical transport state.
+    next.looperTransport = ControllerLooperTransport::Unknown;
+    publishIfChanged(next);
+}
 void ControllerState::failLooperRequest() { ControllerSnapshot next = snapshot_; next.looperPending = false; next.looperActionFailed = true; publishIfChanged(next); }
 void ControllerState::armLooperClear() { ControllerSnapshot next = snapshot_; next.looperClearArmed = true; publishIfChanged(next); }
 void ControllerState::disarmLooperClear() { ControllerSnapshot next = snapshot_; next.looperClearArmed = false; publishIfChanged(next); }

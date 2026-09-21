@@ -97,12 +97,16 @@ void SparkSerialCLI::execute(String command) {
             Serial.println("Requested amp identity. Run 'status' after the response arrives.");
         }
     } else if (verb == "refresh") {
+#if defined(PANELAN_SC05X_MODE)
+        Serial.println("Refresh is disabled in the PanelLan controller profile; controller operations own Spark transport.");
+#else
         if (!SparkDataControl::isAmpConnected()) {
             Serial.println("Spark amp is not connected.");
         } else {
             sparkDC_->getCurrentPresetFromSpark();
             Serial.println("Requested current preset.");
         }
+#endif
     } else if (verb == "screenshot") {
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
         panelLanDisplay.writeScreenshot(Serial);
@@ -138,17 +142,25 @@ void SparkSerialCLI::printHelp() {
     Serial.println("  report                  Print compact counters since boot (alias: diagnostics)");
     Serial.println("  log status|dump|clear confirm");
     Serial.println("  amp                     Request amp identity");
+#if defined(PANELAN_SC05X_MODE)
+    Serial.println("  refresh                 Disabled in PanelLan controller profile");
+#else
     Serial.println("  refresh                 Request current preset");
+#endif
     Serial.println("  screenshot              Stream a PPM screenshot over USB serial");
     Serial.println("  touch <x> <y>           Inject one LVGL touch press/release (development)");
     Serial.println("  preset <1-8>             (model dependent)");
     Serial.println("  bank up|down");
     Serial.println("  fx <gate|comp|drive|mod|delay|reverb> <toggle|on|off>");
     Serial.println("  tuner on|off");
+#if !defined(PANELAN_SC05X_MODE)
     Serial.println("  tuner probe on|off      Native tuner diagnostic; observe serial events/audio");
+#endif
     Serial.println("  tap");
     Serial.println("  loop rec|dub|recdub|play|stop|playstop|undo|redo|undoredo|clear");
+#if !defined(PANELAN_SC05X_MODE)
     Serial.println("  loop status|config");
+#endif
     Serial.println("  help");
 }
 
@@ -169,6 +181,7 @@ void SparkSerialCLI::printStatus() {
     Serial.printf("Bank: %d  Preset: %d\n", presetControl.activeBank(), presetControl.activePresetNum());
     Serial.printf("Preset name: %s\n", preset.name.empty() ? "(unknown)" : preset.name.c_str());
     Serial.printf("Looper loops: %d\n", status.numberOfLoops());
+    if (controllerActions_) controllerActions_->printState(Serial);
 
     if (sparkDC_->subMode() == SUB_MODE_TUNER) {
         Serial.printf("Tuner: %s  %+d cents\n", status.noteString().c_str(), status.noteOffsetCents());
@@ -309,18 +322,26 @@ void SparkSerialCLI::handleTuner(const String &args) {
         return;
     }
 
-    if (args == "on") {
-        sparkDC_->switchSubMode(SUB_MODE_TUNER);
-        Serial.println("Tuner enabled.");
-    } else if (args == "off") {
-        sparkDC_->switchSubMode(SUB_MODE_PRESET);
-        Serial.println("Tuner disabled.");
+    if (args == "on" || args == "off") {
+        if (!controllerActions_) {
+            Serial.println("Tuner controller actions are unavailable.");
+            return;
+        }
+        const bool enabled = args == "on";
+        Serial.println(controllerActions_->requestTuner(enabled) ?
+                           (enabled ? "Tuner entry requested." : "Tuner exit requested.") :
+                           "Tuner request rejected; inspect 'status' and wait for synchronization.");
     } else {
         Serial.println("Usage: tuner on|off");
     }
 }
 
 void SparkSerialCLI::handleTunerProbe(const String &args) {
+#if defined(PANELAN_SC05X_MODE)
+    (void)args;
+    Serial.println("Tuner probe is disabled in the PanelLan controller profile.");
+    return;
+#else
     if (args != "on" && args != "off") {
         Serial.println("Usage: tuner probe on|off");
         return;
@@ -339,6 +360,7 @@ void SparkSerialCLI::handleTunerProbe(const String &args) {
     } else {
         Serial.println("Native tuner diagnostic command failed to send.");
     }
+#endif
 }
 
 void SparkSerialCLI::handleLooper(const String &args) {
@@ -347,35 +369,32 @@ void SparkSerialCLI::handleLooper(const String &args) {
         return;
     }
 
+    if (args == "status" || args == "config") {
+#if defined(PANELAN_SC05X_MODE)
+        Serial.println("Looper probes are disabled in the PanelLan controller profile.");
+        return;
+#else
+        const bool ok = args == "status" ? sparkDC_->sparkLooperGetStatus() : sparkDC_->sparkLooperGetConfig();
+        Serial.println(ok ? "Looper probe sent." : "Looper probe failed.");
+        return;
+#endif
+    }
+    if (!controllerActions_) {
+        Serial.println("Looper controller actions are unavailable.");
+        return;
+    }
     bool ok = false;
-    if (args == "rec")
-        ok = sparkDC_->sparkLooperRec();
-    else if (args == "dub")
-        ok = sparkDC_->sparkLooperDub();
-    else if (args == "recdub")
-        ok = sparkDC_->sparkLooperRecDub();
-    else if (args == "play")
-        ok = sparkDC_->sparkLooperPlay();
-    else if (args == "stop")
-        ok = sparkDC_->sparkLooperStopPlaying();
-    else if (args == "playstop")
-        ok = sparkDC_->sparkLooperPlayStop();
-    else if (args == "undo")
-        ok = sparkDC_->sparkLooperUndo();
-    else if (args == "redo")
-        ok = sparkDC_->sparkLooperRedo();
-    else if (args == "undoredo")
-        ok = sparkDC_->sparkLooperUndoRedo();
-    else if (args == "clear" || args == "delete")
-        ok = sparkDC_->sparkLooperDeleteAll();
-    else if (args == "status")
-        ok = sparkDC_->sparkLooperGetStatus();
-    else if (args == "config")
-        ok = sparkDC_->sparkLooperGetConfig();
+    if (args == "rec" || args == "dub" || args == "recdub") ok = controllerActions_->requestLooperRecordDub();
+    else if (args == "play") ok = controllerActions_->requestLooperPlay();
+    else if (args == "stop") ok = controllerActions_->requestLooperStop();
+    else if (args == "playstop") ok = controllerActions_->requestLooperPlayStop();
+    else if (args == "undo" || args == "redo" || args == "undoredo") ok = controllerActions_->requestLooperUndoRedo();
+    else if (args == "clear" || args == "delete") ok = controllerActions_->requestLooperClear();
     else {
         Serial.println("Usage: loop rec|dub|recdub|play|stop|playstop|undo|redo|undoredo|clear|status|config");
         return;
     }
 
-    Serial.println(ok ? "Looper command sent." : "Looper command failed.");
+    Serial.println(ok ? "Looper action requested; inspect 'status' for observation result." :
+                        "Looper action rejected; inspect 'status' and wait for synchronization.");
 }
