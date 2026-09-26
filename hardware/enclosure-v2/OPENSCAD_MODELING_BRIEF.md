@@ -1,5 +1,7 @@
 # Ignitron Enclosure v2 — OpenCode Modeling Brief
 
+> **Current prototype basis:** The user-supplied `IPS_160x80_SPI_ST7735S_Display_0_96.stp` replaces the earlier OLED model. The six rear-mounted 160×80 TFTs use the STEP PCB (30 × 24 mm), 25 × 19 mm hole pattern, rear screen-housing relief and a separate pocket for front-facing header pins. The JPG and image-only PDF show the pin orientation but provide no dimensioned drawing. STEP dimensions are model-derived rather than physically validated; see [MEASUREMENTS_NEEDED.md](MEASUREMENTS_NEEDED.md). The original questions below are preserved as historical design requirements, not claims of verified fit.
+
 Reference image: `ignitron-enclosure-v2-concept.png`
 
 ## Goal
