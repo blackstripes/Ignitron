@@ -1,6 +1,7 @@
 /*
   Ignitron enclosure v2 -- panel-on-rear-case fit architecture (millimetres).
-  render_mode: assembly, top (control panel), bottom (rear case), layout,
+  Reinforced-top variant. render_mode: assembly, top (reinforced panel),
+  bottom (rear case), layout,
   fit_mini, or fit_main. Values marked PROVISIONAL require physical fitting.
 */
 
@@ -17,6 +18,11 @@ fit = 0.35;                   // normal printed clearance; not used on supplied 
 panel_angle = atan((rear_h-front_h)/case_d);
 panel_d = case_d / cos(panel_angle); // true length in its own sloped plane
 panel_edge_overhang = panel_t*abs(tan(panel_angle))+0.2; // material for vertical front/rear edge trimming
+
+// --- Underside reinforcement (PROVISIONAL; see README) ----------------------
+rib_width = 3;
+rib_depth = 4;
+rib_overlap = 0.25;           // overlaps panel to ensure fused ribs
 
 // --- Panel-to-case hardware --------------------------------------------------
 m3_clear_d = 3.4;
@@ -52,10 +58,10 @@ mini_pos = [[-80,35],[-42,35],[-4,35],[-80,-27],[-42,-27],[-4,-27]];
 // --- Main 2.8in display -------------------------------------------------------
 // Supplied figures remain intentionally distinct and not independently verified.
 main_module_w = 65; main_module_h = 50; main_module_t = 7;
-main_pocket_w = 76.75; main_pocket_h = 53.15; // base top version; reinforced variant/test use +0.5mm height
-main_pocket_radius = 1;                      // rounded outer recess only
+main_pocket_w = 76.75; main_pocket_h = 53.65; // +0.5mm after full-top print measured undersize
+main_pocket_radius = 1.5;                    // approved reinforced/test outer recess radius
 main_open_w = 68.0; main_open_h = 48;         // square through-opening
-main_recess_depth = 1.2;                      // required constant, panel-normal depth
+main_recess_depth = 1.45;                     // 0.25 mm deeper after test-piece fit
 main_right_land = 2.5;                        // left land = 6.25; offset = +1.875
 main_open_dx = (main_pocket_w-main_open_w)/2-main_right_land;
 main_pos = [61,35];
@@ -123,7 +129,7 @@ module main_panel_cuts() {
 
 // This part is deliberately just a planar slab in a sloped plane: no skirt,
 // perimeter wall, shell, or display bosses are part of the control panel.
-module enclosure_top() {
+module enclosure_top_unreinforced() {
   difference() {
     // Sloped slab clipped by a vertical footprint. This makes all four outer
     // perimeter faces vertical and flush with the rear-case walls.
@@ -136,6 +142,74 @@ module enclosure_top() {
     for (p=mini_pos) mini_panel_cuts(p);
     main_panel_cuts();
     for (p=boss_xy) panel_hole(p,m3_clear_d);
+  }
+}
+
+// Rounded constant-width paths; endpoints and elbows have no sharp stress corners.
+module rib_path(a,b) {
+  hull() {
+    translate(a) circle(d=rib_width);
+    translate(b) circle(d=rib_width);
+  }
+}
+
+module rounded_rib_ring(cx,cy,w,h,r=5) {
+  translate([cx,cy]) difference() {
+    offset(r=r) square([w-2*r,h-2*r],center=true);
+    offset(r=r-rib_width)
+      square([w-2*r,h-2*r],center=true);
+  }
+}
+
+module reinforcement_lattice() {
+  // All XY dimensions are in the sloped panel plane. The three paired mini
+  // PCB/switch columns share their side ribs, rather than a second grid.
+  // Inner sides are >=1.5 mm beyond the 30x24 PCBs; inner top/bottom
+  // edges clear the +Y headers and 13 mm switch nut envelopes (nominally
+  // about 0.8 mm at the upper header, 1 mm at the lower PCB edge).
+  panel_plane() translate([0,0,-panel_t-rib_depth])
+    linear_extrude(height=rib_depth+rib_overlap)
+      union() {
+        for (x=[-80,-42,-4]) {
+          rounded_rib_ring(x,23,39,56);   // y=-5..51; upper PCB + switch
+          if (x != -4) rounded_rib_ring(x,-38,39,54); // y=-65..-11
+        }
+        // Bottom of the third lower ring would hit the centre front M3 column.
+        // Keep its sides and top, and omit only the boss-facing bottom span.
+        difference() {
+          rounded_rib_ring(-4,-38,39,54);
+          translate([0,-65]) square([20,12],center=true);
+        }
+        // Central cross-corridor joins both banks and the main-display frame.
+        rib_path([-80,-7],[19.5,-7]);
+        for (x=[-80,-42,-4]) {
+          rib_path([x,-7],[x,-4]);
+          rib_path([x,-12],[x,-7]);
+        }
+        // Three-sided main seat frame: inset from the inside of the case wall,
+        // and open at top right to miss the rear-right M3 column. Inner edges
+        // lie >=1 mm outside the 76.75 x 53.65 R1.5 pocket.
+        rib_path([19.5,4.2],[19.5,65.8]);
+        rib_path([19.5,65.8],[89,65.8]);
+        rib_path([19.5,4.2],[102,4.2]);
+        rib_path([102,4.2],[102,59.5]);
+        rib_path([19.5,-7],[19.5,4.2]);
+        // Isolated MODE/TUNER nuts: 1.5 mm air gap to the 13 mm envelope.
+        // Stems connect both circular collars directly to the main frame.
+        for (x=[42,80]) {
+          translate([x,-48]) difference() {
+            circle(r=17.5);
+            circle(r=14.5);
+          }
+          rib_path([x,-31],[x,4.2]);
+        }
+      }
+}
+
+module enclosure_top() {
+  union() {
+    enclosure_top_unreinforced();
+    reinforcement_lattice();
   }
 }
 
@@ -223,14 +297,12 @@ module fit_test_mini(bezel_w=mini_bezel_w,bezel_h=mini_bezel_h,
   }
 }
 
-module fit_test_main(pocket_w=main_pocket_w,open_w=main_open_w,
-                     pocket_h=main_pocket_h+0.5,pocket_r=1.5,
-                     pocket_depth=main_recess_depth+0.25) {
+module fit_test_main(pocket_w=main_pocket_w,open_w=main_open_w,pocket_r=main_pocket_radius) {
   difference() {
-    translate([-(pocket_w+18)/2,-(pocket_h+18)/2,0]) cube([pocket_w+18,pocket_h+18,panel_t]);
-    translate([0,0,panel_t-pocket_depth])
-      linear_extrude(height=pocket_depth+0.02)
-        main_pocket_profile(pocket_w,pocket_r,pocket_h);
+    translate([-(pocket_w+18)/2,-(main_pocket_h+18)/2,0]) cube([pocket_w+18,main_pocket_h+18,panel_t]);
+    translate([0,0,panel_t-main_recess_depth])
+      linear_extrude(height=main_recess_depth+0.02)
+        main_pocket_profile(pocket_w,pocket_r);
     translate([main_open_dx,0,panel_t/2]) cube([open_w,main_open_h,panel_t+2],center=true);
   }
 }

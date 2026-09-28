@@ -1,5 +1,5 @@
-// Single-display section of the production top panel. Only the two rear
-// inset depths differ: both are 2 mm here; production parameters stay intact.
+// Single-display coupon: shared production cuts, including the +2 mm viewport
+// toward the flex side and 2 mm rear screen/header relief depths.
 use <ignitron-enclosure-v2.scad>;
 
-fit_test_mini(recess_depth=2.0, header_depth=2.0);
+fit_test_mini();
