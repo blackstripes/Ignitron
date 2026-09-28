@@ -4,6 +4,7 @@
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
 #include "PersistentEventLog.h"
+#include "controller/HardwarePresetNames.h"
 
 #include <Arduino.h>
 
@@ -63,6 +64,7 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
         next.sparkStateStale = true;
         next.identityKnown = false;
         next.fullPresetObservedForLink = false;
+        next.hardwarePresetNames.fill("");
         // Tuner mode is Spark-owned. A dropped link cannot leave the UI in a
         // falsely active/muted-looking tuner surface; retain at most the last
         // sample as context, but it is never fresh without the link.
@@ -116,9 +118,27 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     const Preset &activePreset = SparkPresetControl::getInstance().activePreset();
     next.presetName = activePreset.name;
     next.presetDescription = activePreset.description;
+    SparkPresetControl &presetControl = SparkPresetControl::getInstance();
+    // Keep validated slot names through a transient checksum cache miss while
+    // the serialized scheduler refetches the slot. Never carry them to a
+    // different amp (including a changed model with the same serial).
+    const bool identityChanged = next.ampSerial != snapshot_.ampSerial || next.ampName != snapshot_.ampName;
+    HardwarePresetNames::Names observedNames{};
+    // Files are per amp serial, but must not first be shown until the current
+    // amp's checksum response has validated them for this link.
+    const bool namesValidated = presetControl.hardwareChecksumsReady() && dataControl.ampNameReceived() &&
+                                !next.ampSerial.empty();
+    if (namesValidated) {
+        const int count = presetControl.numberOfHWBanks() * PRESETS_PER_BANK;
+        for (int i = 1; i <= count && i <= static_cast<int>(next.hardwarePresetNames.size()); ++i) {
+            if (!presetControl.isHWPresetMissing(i))
+                observedNames[i - 1] = presetControl.getPreset(0, i).name;
+        }
+    }
+    HardwarePresetNames::merge(next.hardwarePresetNames, true, identityChanged, namesValidated, observedNames);
     for (size_t i = 0; i < next.fxSlots.size(); ++i) {
         next.fxSlots[i].label = kFxLabels[i];
-        next.fxSlots[i].known = activePreset.pedals.size() > kPedalIndices[i];
+        next.fxSlots[i].known = fullPresetObservedForLink_ && activePreset.pedals.size() > kPedalIndices[i];
         next.fxSlots[i].modelName = next.fxSlots[i].known ? activePreset.pedals[kPedalIndices[i]].name : "";
         next.fxSlots[i].enabled = next.fxSlots[i].known && activePreset.pedals[kPedalIndices[i]].isOn;
     }
@@ -190,6 +210,18 @@ void ControllerState::expectStartupFullPreset(uint8_t messageNumber) {
     expectedStartupFullPresetMessageNumber_ = messageNumber;
 }
 
+void ControllerState::invalidatePresetData() {
+    fullPresetObservedForLink_ = false;
+    expectedStartupFullPresetMessageNumber_ = 0;
+    fullPresetObservationRevisionAtLink_ = SparkDataControl::fullPresetObservationRevision();
+    ControllerSnapshot next = snapshot_;
+    next.fullPresetObservedForLink = false;
+    next.sparkStateStale = true;
+    next.connectionPhase = ControllerConnectionPhase::Syncing;
+    for (ControllerFxSlot &slot : next.fxSlots) slot.known = false;
+    publishIfChanged(next);
+}
+
 void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
     if (snapshot_.connectionPhase != next.connectionPhase) persistentEventLog.record(PersistentEvent::SyncPhase, static_cast<uint16_t>(next.connectionPhase), true);
     if (snapshot_.connectionPhase == next.connectionPhase &&
@@ -199,6 +231,7 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
         snapshot_.ampName == next.ampName &&
         snapshot_.ampSerial == next.ampSerial &&
         snapshot_.presetName == next.presetName &&
+        snapshot_.hardwarePresetNames == next.hardwarePresetNames &&
         snapshot_.presetDescription == next.presetDescription &&
         snapshot_.fxChainIdentity == next.fxChainIdentity &&
         snapshot_.tunerActive == next.tunerActive &&
@@ -232,7 +265,8 @@ void ControllerState::beginHardwarePresetRequest(uint8_t preset) {
     publishIfChanged(next);
 }
 
-void ControllerState::confirmHardwarePresetRequest() {
+void ControllerState::confirmHardwarePresetRequest(uint8_t preset) {
+    if (snapshot_.pendingHardwarePreset != preset) return;
     ControllerSnapshot next = snapshot_;
     next.pendingHardwarePreset = 0;
     next.presetActionFailed = false;

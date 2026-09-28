@@ -1,24 +1,72 @@
 #include "controller/ControllerActions.h"
 
 #include "controller/ControllerState.h"
+#include "controller/PresetRequestGate.h"
+#include "controller/PresetAckMatch.h"
+#include "controller/PresetLinkReset.h"
+#include "controller/ProtocolObservations.h"
 #include "SparkDataControl.h"
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
 #include "PersistentEventLog.h"
 
+#ifdef PANELAN_PRESET_TRACE
+// One parseable line per milestone; id links a request to its outcome. No tone
+// identity or protocol payload is printed by this trace.
+#define PRESET_TRACE(fmt, ...) Serial.printf("PRESET_TRACE t=%lu " fmt "\n", static_cast<unsigned long>(millis()), ##__VA_ARGS__)
+#else
+#define PRESET_TRACE(...) do {} while (0)
+#endif
+
 bool ControllerActions::requestHardwarePreset(uint8_t preset) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     const uint8_t maxHardwarePreset =
         static_cast<uint8_t>(SparkPresetControl::getInstance().numberOfHWBanks() * PRESETS_PER_BANK);
-    if (preset < 1 || preset > maxHardwarePreset || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
-        snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || hasPendingFxOperation() ||
-        queuedTunerRequest_ || tunerRequestSent_ ||
-        preset == snapshot.confirmedHardwarePreset) {
+    const bool busy = presetSelectionMayProceedDuringSync(sentPreset_ != 0, presetTargets_.queued() != 0,
+                                                           awaitingPresetFullResponse_, startupFullPresetQueryIssued_,
+                                                           snapshot.fullPresetObservedForLink);
+    const char *rejection = preset < 1 || preset > maxHardwarePreset ? "range" :
+        hasPendingFxOperation() ? "fx" : queuedTunerRequest_ || tunerRequestSent_ ? "tuner" :
+        queuedLooperAction_ != LooperAction::None || sentLooperAction_ != LooperAction::None ? "looper" :
+        busy && (!SparkDataControl::isAmpConnected() || !snapshot.identityKnown) ? "phase" :
+        !busy && snapshot.connectionPhase != ControllerConnectionPhase::Ready ? "phase" :
+        !busy && snapshot.sparkStateStale ? "stale" :
+        !busy && preset == snapshot.confirmedHardwarePreset ? "already_current" : nullptr;
+    if (rejection != nullptr) {
+        PRESET_TRACE("event=reject target=%u confirmed=%u reason=%s phase=%u", preset,
+                     snapshot.confirmedHardwarePreset, rejection, static_cast<unsigned>(snapshot.connectionPhase));
         return false;
     }
-    queuedPreset_ = preset;
-    presetBeforeRequest_ = snapshot.confirmedHardwarePreset;
+    // Revoke the previous full response before it can update active Spark data.
+    // A newer selection makes that payload obsolete even if the wire reply is
+    // already in transit.
+    SparkDataControl::expectControllerFullPreset(0);
+    state_.expectStartupFullPreset(0);
+    if (awaitingPresetFullResponse_) awaitingPresetFullResponse_ = false;
+    // The old startup query is obsolete as well. If the new intent is already
+    // the reported slot, the synchronizer must issue a fresh full query.
+    startupFullPresetQueryIssued_ = false;
+#ifdef PANELAN_PRESET_TRACE
+    const uint32_t id = ++presetTraceNextId_;
+    presetTracePhase_ = static_cast<uint8_t>(snapshot.connectionPhase);
+    presetTraceFailedTarget_ = 0;
+    // Keep a timed-out refresh's message id for a late diagnostic response.
+#endif
+    PRESET_TRACE("event=accept id=%lu target=%u confirmed=%u", static_cast<unsigned long>(id),
+                 preset, snapshot.confirmedHardwarePreset);
+    const bool defer = sentPreset_ != 0;
+    presetTargets_.select(preset, defer);
+#ifdef PANELAN_PRESET_TRACE
+    if (defer) { presetTraceDeferredId_ = id; presetTraceDeferredAtMs_ = millis(); }
+    else { presetTraceId_ = id; presetTraceStartedAtMs_ = millis(); }
+#endif
+    if (!defer) {
+        presetBeforeRequest_ = snapshot.confirmedHardwarePreset;
+    }
+    // Pending is the latest requested destination, not a sent/confirmed value.
     state_.beginHardwarePresetRequest(preset);
+    state_.invalidatePresetData();
+    PRESET_TRACE("event=queued id=%lu target=%u elapsed=0", static_cast<unsigned long>(id), preset);
     return true;
 }
 
@@ -26,7 +74,7 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (slot >= snapshot.fxSlots.size() || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
-        queuedPreset_ != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
+        presetTargets_.queued() != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
         return false;
     }
 
@@ -49,7 +97,7 @@ bool ControllerActions::requestTuner(bool on) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (snapshot.tunerActive == on || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
-        queuedPreset_ != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
+        presetTargets_.queued() != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
         return false;
     }
     queuedTunerRequest_ = true;
@@ -69,7 +117,7 @@ bool ControllerActions::canRequestLooper() const {
     const ControllerSnapshot &snapshot = state_.snapshot();
     return snapshot.connectionPhase == ControllerConnectionPhase::Ready && !snapshot.sparkStateStale &&
            snapshot.looperCapability == ControllerLooperCapability::Verified && !snapshot.looperStale &&
-           !snapshot.looperPending && snapshot.pendingHardwarePreset == 0 && sentPreset_ == 0 && queuedPreset_ == 0 &&
+            !snapshot.looperPending && snapshot.pendingHardwarePreset == 0 && sentPreset_ == 0 && presetTargets_.queued() == 0 &&
            !hasPendingFxOperation() && !queuedTunerRequest_ && !tunerRequestSent_ &&
            queuedLooperAction_ == LooperAction::None && sentLooperAction_ == LooperAction::None;
 }
@@ -147,40 +195,118 @@ void ControllerActions::clearFxRequest() {
     fxFullPresetQueryIssued_ = false;
 }
 
+void ControllerActions::onAmpDisconnected() {
+    SparkDataControl::cancelHWPresetRead();
+    cacheScan_.reset();
+    cacheMetadataRequested_ = false;
+    cacheMetadataAtMs_ = 0;
+    currentPresetQueryIssued_ = false;
+    currentPresetQueryAtMs_ = 0;
+    startupFullPresetQueryIssued_ = false;
+    startupFullPresetQueryAtMs_ = 0;
+    startupFullPresetQueryMessageNumber_ = 0;
+    state_.expectStartupFullPreset(0);
+    if (presetTargets_.queued() != 0) {
+        PRESET_TRACE("event=fail id=%lu target=%u reason=disconnect_queued elapsed=%lu",
+                     static_cast<unsigned long>(presetTraceId_), presetTargets_.queued(),
+                     static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+#ifdef PANELAN_PRESET_TRACE
+        presetTraceFailedTarget_ = presetTargets_.queued();
+        presetTraceFailedId_ = presetTraceId_;
+#endif
+    }
+    resetPresetLinkPending(presetTargets_, presetTimeoutReconcile_);
+    reconciledPresetNumber_ = 0;
+    presetReconcileQueryAtMs_ = 0;
+    presetReconcileQueryAttempted_ = false;
+    SparkDataControl::expectControllerFullPreset(0);
+    if (sentPreset_ != 0) {
+        PRESET_TRACE("event=fail id=%lu target=%u reason=disconnect elapsed=%lu",
+                     static_cast<unsigned long>(presetTraceId_), sentPreset_,
+                     static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+#ifdef PANELAN_PRESET_TRACE
+        presetTraceFailedTarget_ = sentPreset_;
+        presetTraceFailedId_ = presetTraceId_;
+        presetTraceFailedFullMsg_ = awaitingPresetFullResponse_ ? presetFullQueryMessageNumber_ : 0;
+        presetTraceFailedFullRevision_ = SparkDataControl::fullPresetObservationRevision();
+        presetTraceFailedFullTarget_ = presetFullTarget_;
+        presetTraceFailedFullId_ = presetTraceId_;
+#endif
+        state_.failHardwarePresetRequest();
+        SparkDataControl::recordControllerPresetFailure();
+        persistentEventLog.record(PersistentEvent::PresetFailed, sentPreset_, true);
+    }
+    sentPreset_ = 0;
+    sentPresetMessageNumber_ = 0;
+    presetBeforeRequest_ = 0;
+    sentAtMs_ = 0;
+    sentAfterAckRevision_ = 0;
+    sentAfterNumberRevision_ = 0;
+    confirmationQueryMessageNumber_ = 0;
+    awaitingConfirmationQuery_ = false;
+    awaitingPresetFullResponse_ = false;
+    presetFullObservationRevisionBeforeQuery_ = 0;
+    presetFullQueryMessageNumber_ = 0;
+    presetFullTarget_ = 0;
+    queuedTunerRequest_ = false;
+    tunerRequestSent_ = false;
+    tunerEntryCancelRequested_ = false;
+    tunerRequestSentAtMs_ = 0;
+    queuedLooperAction_ = LooperAction::None;
+    sentLooperAction_ = LooperAction::None;
+    looperSentAtMs_ = 0;
+    looperSyncRequestedAtMs_ = 0;
+    looperCommandRevisionBeforeRequest_ = 0;
+    looperStatusRevisionBeforeRequest_ = 0;
+    state_.disarmLooperClear();
+    // State already marks the rendered FX stale. Preserve the existing failure
+    // event for an unconfirmed command, but never query the disconnected amp.
+    if (hasPendingFxOperation()) cancelFxRequest(state_, nullptr, false, "BLE disconnected");
+    fxSentAtMs_ = 0;
+}
+
 void ControllerActions::process(SparkDataControl &dataControl) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (!SparkDataControl::isAmpConnected()) {
-        currentPresetQueryIssued_ = false;
-        currentPresetQueryAtMs_ = 0;
-        startupFullPresetQueryIssued_ = false;
-        startupFullPresetQueryAtMs_ = 0;
-        startupFullPresetQueryMessageNumber_ = 0;
-        queuedPreset_ = 0;
-        if (sentPreset_ != 0) {
-            state_.failHardwarePresetRequest();
-            SparkDataControl::recordControllerPresetFailure();
-            persistentEventLog.record(PersistentEvent::PresetFailed, sentPreset_, true);
-            sentPreset_ = 0;
-            awaitingConfirmationQuery_ = false;
-            awaitingPresetFullResponse_ = false;
-            presetFullObservationRevisionBeforeQuery_ = 0;
-            presetFullQueryMessageNumber_ = 0;
-        }
-        queuedTunerRequest_ = false;
-        tunerRequestSent_ = false;
-        tunerEntryCancelRequested_ = false;
-        queuedLooperAction_ = LooperAction::None;
-        sentLooperAction_ = LooperAction::None;
-        looperSyncRequestedAtMs_ = 0;
-        // A BLE loss makes any unconfirmed effect command unknowable. The
-        // ControllerState has already made the rendered value stale; discard
-        // action metadata as well so it cannot be mistaken for a later link.
-        if (hasPendingFxOperation()) {
-            cancelFxRequest(state_, nullptr, false, "BLE disconnected");
-        }
+        onAmpDisconnected();
         return;
     }
-
+#ifdef PANELAN_PRESET_TRACE
+    // Snapshot changes are Spark observations, not locally inferred success.
+    // Retain the most recent failed target to label a later observation as late,
+    // never as a successful controller confirmation.
+    if (SparkDataControl::isAmpConnected() && snapshot.confirmedHardwarePreset != presetTraceObserved_) {
+        PRESET_TRACE("event=number id=%lu target=%u confirmed=%u", static_cast<unsigned long>(presetTraceId_),
+                      sentPreset_ ? sentPreset_ : presetTargets_.queued(), snapshot.confirmedHardwarePreset);
+        presetTraceObserved_ = snapshot.confirmedHardwarePreset;
+        if (presetTraceFailedTarget_ != 0 && snapshot.confirmedHardwarePreset == presetTraceFailedTarget_) {
+            PRESET_TRACE("event=late_number id=%lu target=%u confirmed=%u", static_cast<unsigned long>(presetTraceFailedId_),
+                         presetTraceFailedTarget_, snapshot.confirmedHardwarePreset);
+            presetTraceFailedTarget_ = 0;
+        }
+    }
+    if (presetTraceFailedFullMsg_ != 0 &&
+        SparkDataControl::fullPresetObservationRevision() != presetTraceFailedFullRevision_) {
+        presetTraceFailedFullRevision_ = SparkDataControl::fullPresetObservationRevision();
+        PRESET_TRACE("event=late_full_result id=%lu target=%u msg=%u match=%u confirmed=%u",
+                     static_cast<unsigned long>(presetTraceFailedFullId_), presetTraceFailedFullTarget_,
+                     SparkDataControl::fullPresetObservationMessageNumber(),
+                     SparkDataControl::fullPresetObservationMessageNumber() == presetTraceFailedFullMsg_,
+                     snapshot.confirmedHardwarePreset);
+        if (SparkDataControl::fullPresetObservationMessageNumber() == presetTraceFailedFullMsg_)
+            presetTraceFailedFullMsg_ = 0;
+    }
+    if (sentPreset_ != 0 || presetTargets_.queued() != 0) {
+        const uint8_t phase = static_cast<uint8_t>(snapshot.connectionPhase);
+        if (phase != presetTracePhase_) {
+            PRESET_TRACE("event=phase id=%lu target=%u phase=%u confirmed=%u elapsed=%lu",
+                          static_cast<unsigned long>(presetTraceId_), sentPreset_ ? sentPreset_ : presetTargets_.queued(),
+                         phase, snapshot.confirmedHardwarePreset,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+            presetTracePhase_ = phase;
+        }
+    }
+#endif
     if (snapshot.looperClearArmed && queuedLooperAction_ == LooperAction::None &&
         millis() - looperSentAtMs_ >= kLooperClearArmMs) {
         state_.disarmLooperClear();
@@ -319,10 +445,41 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         return;
     }
 
+    if (presetTimeoutReconcile_.needed()) {
+        if (presetTimeoutReconcile_.queryOutstanding() &&
+            millis() - presetReconcileQueryAtMs_ >= kPresetTimeoutMs)
+            presetTimeoutReconcile_.require(); // Expired replies cannot release the gate.
+        uint8_t number = 0, cmd = 0, subcmd = 0, msg = 0;
+        while (SparkDataControl::nextHardwareNumber(presetTimeoutReconcile_.cursor(), number, cmd, subcmd, msg)) {
+            if (presetTimeoutReconcile_.observe(number, cmd, subcmd, msg, snapshot.confirmedHardwarePreset)) {
+                presetBeforeRequest_ = number;
+                reconciledPresetNumber_ = number;
+                PRESET_TRACE("event=reconciled target=%u confirmed=%u msg=%u", presetTargets_.queued(), number, msg);
+                return; // Dispatch only on the next tick, from the reconciled snapshot.
+            }
+        }
+        if (!presetTimeoutReconcile_.queryOutstanding() &&
+            (!presetReconcileQueryAttempted_ || millis() - presetReconcileQueryAtMs_ >= kPresetTimeoutMs)) {
+            // Snapshot and unsolicited number updates are not reconciliation.
+            // Capture the receive revision before the query is sent, and revoke
+            // the old query on retry even when sending fails.
+            presetTimeoutReconcile_.require();
+            const uint32_t beforeSend = SparkDataControl::hardwareNumberRevision();
+            uint8_t queryMessage = 0;
+            const bool sent = dataControl.getCurrentPresetNum(&queryMessage);
+            presetReconcileQueryAtMs_ = millis();
+            presetReconcileQueryAttempted_ = true;
+            if (sent) presetTimeoutReconcile_.startQuery(queryMessage, beforeSend);
+            PRESET_TRACE("event=reconcile_query target=%u sent=%u msg=%u", presetTargets_.queued(), sent,
+                         sent ? queryMessage : 0);
+        }
+        return;
+    }
+
     // The legacy startup flow can fetch a complete current preset but not its
     // hardware-preset number. The controller cannot safely enable a preset
     // action until that separate Spark-owned value has been observed.
-    if (!hasPendingFxOperation() && snapshot.connectionPhase == ControllerConnectionPhase::Syncing &&
+    if (sentPreset_ == 0 && presetTargets_.queued() == 0 && !awaitingPresetFullResponse_ && !hasPendingFxOperation() && snapshot.connectionPhase == ControllerConnectionPhase::Syncing &&
         snapshot.confirmedHardwarePreset == 0 &&
         (!currentPresetQueryIssued_ || millis() - currentPresetQueryAtMs_ >= kPresetTimeoutMs)) {
         Serial.println("Controller: requesting current hardware preset");
@@ -333,16 +490,21 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         return;
     }
 
-    if (!hasPendingFxOperation() && snapshot.connectionPhase == ControllerConnectionPhase::Syncing &&
+    if (sentPreset_ == 0 && presetTargets_.queued() == 0 && !awaitingPresetFullResponse_ && !hasPendingFxOperation() &&
+        snapshot.connectionPhase == ControllerConnectionPhase::Syncing &&
         snapshot.confirmedHardwarePreset != 0 && !snapshot.fullPresetObservedForLink) {
         // PanelLan owns the startup full-preset request, avoiding races with
         // legacy cache restoration and giving the current link one authority.
         if (!startupFullPresetQueryIssued_ ||
             millis() - startupFullPresetQueryAtMs_ >= kPresetTimeoutMs) {
+            // On retry, revoke the old reply even if the new send fails.
+            state_.expectStartupFullPreset(0);
+            SparkDataControl::expectControllerFullPreset(0);
             startupFullPresetQueryIssued_ = dataControl.getCurrentPresetFromSpark(&startupFullPresetQueryMessageNumber_);
             startupFullPresetQueryAtMs_ = millis();
             if (startupFullPresetQueryIssued_) {
                 state_.expectStartupFullPreset(startupFullPresetQueryMessageNumber_);
+                SparkDataControl::expectControllerFullPreset(startupFullPresetQueryMessageNumber_);
             }
             Serial.printf("Controller: requesting startup full preset (%s)\n",
                           startupFullPresetQueryIssued_ ? "sent" : "send failed");
@@ -351,72 +513,195 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     }
 
     if (sentPreset_ != 0) {
-        if (snapshot.connectionPhase != ControllerConnectionPhase::Ready) {
-            state_.failHardwarePresetRequest();
-            SparkDataControl::recordControllerPresetFailure();
+        // A temporary unknown preset number moves the snapshot to Syncing even
+        // while BLE is connected. Keep verifying the sent action; only link
+        // loss (above), conflict, send failure or timeout can fail it.
+        bool matchedQuery = false;
+        bool observedTarget = false;
+        uint8_t number = 0, cmd = 0, subcmd = 0, msg = 0;
+        while (SparkDataControl::nextHardwareNumber(sentAfterNumberRevision_, number, cmd, subcmd, msg)) {
+            if (matchesHardwareNumberReply(confirmationQueryMessageNumber_, cmd, subcmd, msg) &&
+                number == sentPreset_) matchedQuery = true;
+            if (number == sentPreset_) observedTarget = true;
+        }
+        if (matchedQuery && snapshot.confirmedHardwarePreset == sentPreset_) {
+            // Only a response to this command's post-send verification query
+            // can confirm. A late 03/10 or unsolicited 03/38 still updates
+            // the snapshot but cannot resolve the action.
+            PRESET_TRACE("event=number_confirm id=%lu target=%u confirmed=%u elapsed=%lu",
+                         static_cast<unsigned long>(presetTraceId_), sentPreset_, snapshot.confirmedHardwarePreset,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+            state_.confirmHardwarePresetRequest(sentPreset_);
+            SparkDataControl::recordControllerPresetConfirm();
+            persistentEventLog.record(PersistentEvent::PresetConfirmed, sentPreset_, true);
+            state_.invalidatePresetData();
+            if (presetTargets_.deferred() != 0) {
+                presetTargets_.promote();
+#ifdef PANELAN_PRESET_TRACE
+                presetTraceId_ = presetTraceDeferredId_;
+                presetTraceStartedAtMs_ = presetTraceDeferredAtMs_;
+#endif
+                presetBeforeRequest_ = snapshot.confirmedHardwarePreset;
+                if (presetTargets_.queued() == snapshot.confirmedHardwarePreset) {
+                    // Latest intent is already Spark's observed number. The
+                    // startup synchronizer will fetch its full payload.
+                    PRESET_TRACE("event=satisfied id=%lu target=%u confirmed=%u elapsed=%lu",
+                                 static_cast<unsigned long>(presetTraceId_), presetTargets_.queued(),
+                                 snapshot.confirmedHardwarePreset,
+                                 static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+                    presetTargets_.takeQueued();
+                } else state_.beginHardwarePresetRequest(presetTargets_.queued());
+                sentPreset_ = 0;
+                sentPresetMessageNumber_ = 0;
+                awaitingConfirmationQuery_ = false;
+                confirmationQueryMessageNumber_ = 0;
+                return;
+            }
+            presetFullTarget_ = sentPreset_;
+            presetFullObservationRevisionBeforeQuery_ = SparkDataControl::fullPresetObservationRevision();
+            awaitingPresetFullResponse_ = dataControl.getCurrentPresetFromSpark(&presetFullQueryMessageNumber_);
+            PRESET_TRACE("event=full_query id=%lu target=%u sent=%u msg=%u elapsed=%lu",
+                         static_cast<unsigned long>(presetTraceId_), sentPreset_, awaitingPresetFullResponse_,
+                         awaitingPresetFullResponse_ ? presetFullQueryMessageNumber_ : 0,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+            if (awaitingPresetFullResponse_) {
+                state_.expectStartupFullPreset(presetFullQueryMessageNumber_);
+                SparkDataControl::expectControllerFullPreset(presetFullQueryMessageNumber_);
+#ifdef PANELAN_PRESET_TRACE
+                presetTraceFullRevision_ = presetFullObservationRevisionBeforeQuery_;
+#endif
+                sentAtMs_ = millis();
+            } else {
+                PRESET_TRACE("event=full_query_send_failed id=%lu target=%u elapsed=%lu",
+                             static_cast<unsigned long>(presetTraceId_), sentPreset_,
+                             static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+            }
+            Serial.printf("Controller: preset %u number confirmed; refreshing full preset\n", sentPreset_);
             sentPreset_ = 0;
-        } else if (!awaitingConfirmationQuery_ &&
-                   SparkDataControl::finalAckRevision() != sentAfterAckRevision_) {
-            const AckData ack = SparkDataControl::lastFinalAck();
-            sentAfterAckRevision_ = SparkDataControl::finalAckRevision();
-            if (ack.subcmd == 0x38) {
+            sentPresetMessageNumber_ = 0;
+            awaitingConfirmationQuery_ = false;
+            confirmationQueryMessageNumber_ = 0;
+        } else if (snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetBeforeRequest_ &&
+                   snapshot.confirmedHardwarePreset != sentPreset_) {
+            PRESET_TRACE("event=fail id=%lu target=%u reason=conflict_number confirmed=%u elapsed=%lu",
+                         static_cast<unsigned long>(presetTraceId_), sentPreset_, snapshot.confirmedHardwarePreset,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+#ifdef PANELAN_PRESET_TRACE
+            presetTraceFailedTarget_ = sentPreset_;
+            presetTraceFailedId_ = presetTraceId_;
+#endif
+            // A deferred request still owns the pending display. Its promotion
+            // below will begin the next command without clearing that intent.
+            if (presetTargets_.deferred() == 0) state_.failHardwarePresetRequest();
+            SparkDataControl::recordControllerPresetFailure();
+            state_.invalidatePresetData();
+            Serial.printf("Controller: preset conflict (Spark reports %u)\n", snapshot.confirmedHardwarePreset);
+            sentPreset_ = 0;
+            sentPresetMessageNumber_ = 0;
+            if (presetTargets_.deferred() != 0) {
+                presetTargets_.promote();
+#ifdef PANELAN_PRESET_TRACE
+                presetTraceId_ = presetTraceDeferredId_;
+                presetTraceStartedAtMs_ = presetTraceDeferredAtMs_;
+#endif
+                presetBeforeRequest_ = snapshot.confirmedHardwarePreset;
+                state_.beginHardwarePresetRequest(presetTargets_.queued());
+            }
+        } else {
+            AckData ack{};
+            bool matchingAck = false;
+            while (SparkDataControl::nextFinalAck(sentAfterAckRevision_, ack)) {
+            PRESET_TRACE("event=ack id=%lu target=%u subtype=%u msg=%u elapsed=%lu",
+                         static_cast<unsigned long>(presetTraceId_), sentPreset_, ack.subcmd, ack.msgNum,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+                if (matchesHardwarePresetAck(sentPresetMessageNumber_, ack.subcmd, ack.msgNum)) matchingAck = true;
+            }
+            if (!awaitingConfirmationQuery_ && (matchingAck || observedTarget)) {
                 // Spark NEO Core accepts a hardware-preset command without
                 // necessarily broadcasting a new preset number. ACK is only
                 // a transport milestone; request the authoritative value.
                 Serial.println("Controller: preset ACK received; verifying Spark state");
-                dataControl.getCurrentPresetNum();
-                awaitingConfirmationQuery_ = true;
-                sentAtMs_ = millis();
+                const bool querySent = dataControl.getCurrentPresetNum(&confirmationQueryMessageNumber_);
+                PRESET_TRACE("event=number_query id=%lu target=%u sent=%u elapsed=%lu",
+                             static_cast<unsigned long>(presetTraceId_), sentPreset_, querySent,
+                             static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+                awaitingConfirmationQuery_ = querySent;
+                if (querySent) sentAtMs_ = millis();
             }
-        } else if (awaitingConfirmationQuery_ && !awaitingPresetFullResponse_ &&
-                   snapshot.confirmedHardwarePreset == sentPreset_) {
-            // The preset number can arrive before its full Spark-owned preset.
-            // Keep FX unavailable until that authoritative response replaces
-            // any cached model chain.
-            presetFullObservationRevisionBeforeQuery_ = SparkDataControl::fullPresetObservationRevision();
-            awaitingPresetFullResponse_ = dataControl.getCurrentPresetFromSpark(&presetFullQueryMessageNumber_);
-            if (awaitingPresetFullResponse_) {
-                sentAtMs_ = millis();
-                Serial.printf("Controller: preset %u number confirmed; syncing full preset\n", sentPreset_);
-            } else {
-                Serial.println("Controller: full preset sync request failed");
-                state_.failHardwarePresetRequest();
-                SparkDataControl::recordControllerPresetFailure();
-                sentPreset_ = 0;
-            }
-        } else if (awaitingPresetFullResponse_ && snapshot.confirmedHardwarePreset != 0 &&
-                   snapshot.confirmedHardwarePreset != sentPreset_) {
-            // A physical/external preset change remains a conflict while the
-            // full-preset verification query is in flight.
-            state_.failHardwarePresetRequest();
-            SparkDataControl::recordControllerPresetFailure();
-            Serial.printf("Controller: preset conflict (Spark reports %u)\n", snapshot.confirmedHardwarePreset);
-            sentPreset_ = 0;
-            awaitingPresetFullResponse_ = false;
-        } else if (awaitingPresetFullResponse_ &&
-                   SparkDataControl::fullPresetObservationRevision() != presetFullObservationRevisionBeforeQuery_ &&
-                   SparkDataControl::fullPresetObservationMessageNumber() == presetFullQueryMessageNumber_) {
-            Serial.printf("Controller: preset %u confirmed by Spark\n", sentPreset_);
-            state_.confirmHardwarePresetRequest();
-            SparkDataControl::recordControllerPresetConfirm();
-            persistentEventLog.record(PersistentEvent::PresetConfirmed, sentPreset_, true);
-            sentPreset_ = 0;
-            awaitingPresetFullResponse_ = false;
-        } else if (awaitingConfirmationQuery_ && !awaitingPresetFullResponse_ && snapshot.confirmedHardwarePreset != 0 &&
-                   snapshot.confirmedHardwarePreset != presetBeforeRequest_) {
-            // A reported preset change other than our intended target wins.
-            // It is an external/conflicting action, never a local success.
-            state_.failHardwarePresetRequest();
-            SparkDataControl::recordControllerPresetFailure();
-            Serial.printf("Controller: preset conflict (Spark reports %u)\n", snapshot.confirmedHardwarePreset);
-            sentPreset_ = 0;
-        } else if (millis() - sentAtMs_ >= kPresetTimeoutMs) {
+            if (millis() - sentAtMs_ >= kPresetTimeoutMs) {
+            PRESET_TRACE("event=fail id=%lu target=%u reason=number_timeout elapsed=%lu",
+                         static_cast<unsigned long>(presetTraceId_), sentPreset_,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+#ifdef PANELAN_PRESET_TRACE
+            presetTraceFailedTarget_ = sentPreset_;
+            presetTraceFailedId_ = presetTraceId_;
+#endif
             Serial.println("Controller: preset confirmation timed out; resyncing");
-            state_.failHardwarePresetRequest();
+            if (presetTargets_.deferred() == 0) state_.failHardwarePresetRequest();
             SparkDataControl::recordControllerPresetFailure();
-            dataControl.getCurrentPresetFromSpark();
+            SparkDataControl::expectControllerFullPreset(0);
             sentPreset_ = 0;
+            sentPresetMessageNumber_ = 0;
+            awaitingConfirmationQuery_ = false;
+            confirmationQueryMessageNumber_ = 0;
+            if (presetTargets_.deferred() != 0) {
+                presetTargets_.promote();
+#ifdef PANELAN_PRESET_TRACE
+                presetTraceId_ = presetTraceDeferredId_;
+                presetTraceStartedAtMs_ = presetTraceDeferredAtMs_;
+#endif
+                presetTimeoutReconcile_.require();
+                reconciledPresetNumber_ = 0;
+                presetReconcileQueryAttempted_ = false;
+                PRESET_TRACE("event=reconcile_wait target=%u", presetTargets_.queued());
+            } else {
+                dataControl.getCurrentPresetNum();
+            }
+            }
+        }
+        return;
+    }
+
+    if (awaitingPresetFullResponse_) {
+#ifdef PANELAN_PRESET_TRACE
+        if (SparkDataControl::fullPresetObservationRevision() != presetTraceFullRevision_) {
+            presetTraceFullRevision_ = SparkDataControl::fullPresetObservationRevision();
+            PRESET_TRACE("event=full_result id=%lu target=%u msg=%u match=%u confirmed=%u elapsed=%lu",
+                         static_cast<unsigned long>(presetTraceId_), presetFullTarget_,
+                         SparkDataControl::fullPresetObservationMessageNumber(),
+                         SparkDataControl::fullPresetObservationMessageNumber() == presetFullQueryMessageNumber_,
+                         snapshot.confirmedHardwarePreset,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+        }
+#endif
+        if (SparkDataControl::fullPresetObservationRevision() != presetFullObservationRevisionBeforeQuery_ &&
+            SparkDataControl::fullPresetObservationMessageNumber() == presetFullQueryMessageNumber_ &&
+            snapshot.confirmedHardwarePreset == presetFullTarget_) {
+            PRESET_TRACE("event=full_refresh id=%lu target=%u msg=%u elapsed=%lu",
+                         static_cast<unsigned long>(presetTraceId_), presetFullTarget_, presetFullQueryMessageNumber_,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
             awaitingPresetFullResponse_ = false;
+            SparkDataControl::expectControllerFullPreset(0);
+        } else if (millis() - sentAtMs_ >= kPresetTimeoutMs ||
+                   (snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetFullTarget_)) {
+            const bool conflict = snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetFullTarget_;
+            PRESET_TRACE("event=%s id=%lu target=%u msg=%u elapsed=%lu",
+                         conflict ? "full_data_conflict" : "full_data_timeout",
+                         static_cast<unsigned long>(presetTraceId_), presetFullTarget_, presetFullQueryMessageNumber_,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+            if (conflict) state_.invalidatePresetData();
+#ifdef PANELAN_PRESET_TRACE
+            presetTraceFailedFullMsg_ = presetFullQueryMessageNumber_;
+            presetTraceFailedFullTarget_ = presetFullTarget_;
+            presetTraceFailedFullRevision_ = SparkDataControl::fullPresetObservationRevision();
+            presetTraceFailedId_ = presetTraceId_;
+            presetTraceFailedFullId_ = presetTraceId_;
+#endif
+            awaitingPresetFullResponse_ = false;
+            // Both gates must be revoked before startup sync can issue a new
+            // query. A delayed reply to this obsolete message is not evidence.
+            SparkDataControl::expectControllerFullPreset(0);
+            state_.expectStartupFullPreset(0);
         }
         return;
     }
@@ -462,15 +747,18 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         } else if (fullPresetObservedAfterSend && fx.known && fx.modelName == sentFxModelName_ &&
                    fx.enabled != sentFxDesiredEnabled_) {
             cancelFxRequest(state_, &dataControl, true, "full preset reported conflicting FX state");
-        } else if (!fxFullPresetQueryIssued_ &&
-                   SparkDataControl::finalAckRevision() != fxSentAfterAckRevision_) {
-            const AckData ack = SparkDataControl::lastFinalAck();
-            fxSentAfterAckRevision_ = SparkDataControl::finalAckRevision();
-            if (ack.subcmd == 0x15 && ack.msgNum == sentFxMessageNumber_) {
+        } else {
+            AckData ack{};
+            bool matchingAck = false;
+            while (SparkDataControl::nextFinalAck(fxSentAfterAckRevision_, ack))
+                if (ack.subcmd == 0x15 && ack.msgNum == sentFxMessageNumber_) matchingAck = true;
+            if (!fxFullPresetQueryIssued_ && matchingAck) {
                 // NEO Core can ACK an effect change without a separate
                 // FX_ONOFF event. The ACK starts a query; it never confirms.
-                fxFullPresetQueryIssued_ = dataControl.getCurrentPresetFromSpark();
+                uint8_t fxQueryMessage = 0;
+                fxFullPresetQueryIssued_ = dataControl.getCurrentPresetFromSpark(&fxQueryMessage);
                 if (fxFullPresetQueryIssued_) {
+                    SparkDataControl::expectControllerFullPreset(fxQueryMessage);
                     // The full-preset query is a second protocol round trip.
                     // Its confirmation window starts when that query is sent,
                     // rather than when the original FX command was sent.
@@ -478,17 +766,18 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 }
                 Serial.printf("Controller: FX %u ACK received; querying full preset (%s)\n", sentFxSlot_,
                               fxFullPresetQueryIssued_ ? "sent" : "send failed");
+            } else if (millis() - fxSentAtMs_ >= kFxTimeoutMs) {
+                cancelFxRequest(state_, &dataControl, true, "confirmation timed out");
             }
-        } else if (millis() - fxSentAtMs_ >= kFxTimeoutMs) {
-            cancelFxRequest(state_, &dataControl, true, "confirmation timed out");
         }
         return;
     }
 
-    if (queuedPreset_ == 0) {
+    if (presetTargets_.queued() == 0) {
         // Preset and FX operations are serialized. An effect request captures
         // the exact Spark model/chain at tap time and cannot be retargeted.
         if (queuedFxSlot_ == kNoFxSlot) {
+            processHardwareNameCache(dataControl);
             return;
         }
 
@@ -533,20 +822,74 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         }
         return;
     }
-    const uint8_t preset = queuedPreset_;
-    queuedPreset_ = 0;
-    if (dataControl.changeHWPreset(preset)) {
+    const uint8_t preset = presetTargets_.takeQueued();
+    const bool satisfiedByReconciliation = reconciledPresetNumber_ == preset;
+    const bool mustSendAfterReconciliation = reconciledPresetNumber_ != 0 && !satisfiedByReconciliation;
+    reconciledPresetNumber_ = 0;
+    if (preset == snapshot.confirmedHardwarePreset && !mustSendAfterReconciliation) {
+        // An external HW report may have arrived while this intent was queued.
+        // It is not evidence that a command we haven't sent was confirmed.
+        PRESET_TRACE("event=satisfied id=%lu target=%u confirmed=%u elapsed=%lu",
+                     static_cast<unsigned long>(presetTraceId_), preset, snapshot.confirmedHardwarePreset,
+                     static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+        state_.confirmHardwarePresetRequest(preset);
+        return;
+    }
+    uint8_t messageNumber = 0;
+    if (dataControl.changeHWPreset(preset, &messageNumber)) {
+        PRESET_TRACE("event=sent id=%lu target=%u elapsed=%lu", static_cast<unsigned long>(presetTraceId_),
+                     preset, static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
         Serial.printf("Controller: sending preset %u\n", preset);
         sentPreset_ = preset;
+        sentPresetMessageNumber_ = messageNumber;
         sentAtMs_ = millis();
         sentAfterAckRevision_ = SparkDataControl::finalAckRevision();
+        sentAfterNumberRevision_ = SparkDataControl::hardwareNumberRevision();
+        confirmationQueryMessageNumber_ = 0;
         awaitingConfirmationQuery_ = false;
         awaitingPresetFullResponse_ = false;
         SparkDataControl::recordControllerPresetSend();
         persistentEventLog.record(PersistentEvent::PresetSend, preset);
     } else {
+        PRESET_TRACE("event=fail id=%lu target=%u reason=send elapsed=%lu", static_cast<unsigned long>(presetTraceId_),
+                     preset, static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+#ifdef PANELAN_PRESET_TRACE
+        presetTraceFailedTarget_ = preset;
+        presetTraceFailedId_ = presetTraceId_;
+#endif
         state_.failHardwarePresetRequest();
         SparkDataControl::recordControllerPresetFailure();
         persistentEventLog.record(PersistentEvent::PresetFailed, preset, true);
     }
+}
+
+void ControllerActions::processHardwareNameCache(SparkDataControl &dataControl) {
+    const ControllerSnapshot &snapshot = state_.snapshot();
+    SparkPresetControl &presets = SparkPresetControl::getInstance();
+    if (cacheGeneration_ != presets.hardwareCacheGeneration()) {
+        dataControl.cancelHWPresetRead();
+        cacheGeneration_ = presets.hardwareCacheGeneration();
+        cacheScan_.reset();
+    }
+    if (snapshot.connectionPhase != ControllerConnectionPhase::Ready || snapshot.sparkStateStale ||
+        awaitingPresetFullResponse_)
+        return;
+
+    // Startup metadata queries were one-shot. A lost serial/checksum response
+    // must not leave a Ready controller with permanently nameless minis.
+    if (snapshot.ampSerial.empty() || !presets.hardwareChecksumsReady()) {
+        if (!cacheMetadataRequested_ || uint32_t(millis() - cacheMetadataAtMs_) >= 5000) {
+            if (snapshot.ampSerial.empty()) dataControl.getSerialNumber();
+            else dataControl.getHWChecksums();
+            cacheMetadataRequested_ = true;
+            cacheMetadataAtMs_ = millis();
+        }
+        return;
+    }
+    cacheMetadataRequested_ = false;
+    const uint8_t count = static_cast<uint8_t>(presets.numberOfHWBanks() * PRESETS_PER_BANK);
+    cacheScan_.tick(millis(), count,
+        [&](uint8_t slot) { return presets.isHWPresetMissing(slot); },
+        [&](uint8_t slot) { return dataControl.readHWPreset(slot); },
+        [&]() { dataControl.cancelHWPresetRead(); });
 }

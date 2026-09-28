@@ -46,6 +46,17 @@ packet tail after a local Spark 2 tuner exit.
 Spark 2 tuner, and the hardware-verified Spark 2 looper path. Looper transport
 is confirmed only by incoming Spark command/status observations; tap tempo has
 not yet been migrated and must not introduce a competing source of truth.
+Hardware preset labels are per-slot names from the checksum-validated cache,
+not the active preset name. Once observed, a slot keeps its last-known label
+while that same amp's cache slot is temporarily invalidated and refetched; a
+fresh cache name replaces it. Disconnect or amp identity change clears labels.
+For rapid preset selections, `pendingHardwarePreset` displays the latest accepted
+intent (including a deferred, unsent target), not the command currently on the
+wire. Confirming an earlier command must not clear a newer pending target; link
+loss or an unrecoverable command timeout clears it. Full-preset responses are
+accepted only for the currently expected query message. A timed-out or
+conflicting refresh revokes both the protocol acceptance gate and the startup
+readiness expectation before another query can be issued.
 
 ## Recommended top-level model
 
@@ -216,6 +227,17 @@ Track:
 Spark response/current preset is authoritative.
 
 A user tap on preset 3 creates a pending request for preset 3. It does not immediately make preset 3 authoritative.
+While BLE stays connected, a temporarily unknown preset number (and resulting
+Syncing phase) does not fail an in-flight request. A Spark-reported matching
+hardware number after the send confirms selection and clears pending, even if
+the follow-up full-preset response never arrives. ACK alone never confirms.
+Before number confirmation, disconnect, a conflicting number, command send
+failure or bounded number timeout fail the action. After number confirmation,
+the full-preset query is a separate refresh: its send failure or timeout cannot
+turn a confirmed selection into RETRY. Until a matching full response arrives,
+the controller remains Syncing/stale, FX slots are not known/actionable and
+startup synchronization retries the full query. Cached name/chain must not be
+interpreted as fresh data for the new preset.
 
 ### Pending presentation
 

@@ -19,6 +19,9 @@ Confirmed on physical hardware:
 - landscape 320x240 UI coordinates
 - PanelLan/LovyanGFX display/touch support works
 - `panelan-lvgl-controller` builds and flashes
+- mini display #1 (top-left) is integrated in the default controller target
+  using hardware SPI2 and has been visually tested on the stable wall supply;
+  it changes from `P1` on the Preset view to `GATE` on the FX view
 - direct BLE connection to Spark NEO Core works
 - touchscreen hardware-preset and confirmed FX switching works
 - Spark 2 identity/serial, external tuner observation, display entry/exit,
@@ -62,6 +65,12 @@ Do not:
 - run separate full LVGL stacks on the six future mini TFTs
 
 The future six ST7735S switch displays should use a lightweight renderer fed by the same canonical ControllerState.
+
+The user has explicitly frozen the current 2.8-inch touchscreen UI until all
+six mini displays are working. After that hardware gate, use
+`~/Desktop/Ignitron/miniUI.png`, `miniUI2.png`, and `miniUI3.png` to guide the
+mini-display UI. Treat any 2.8-inch UI redesign as a separate later milestone;
+do not modify it during six-panel bring-up.
 
 See [docs/LVGL_ARCHITECTURE.md](docs/LVGL_ARCHITECTURE.md) for the detailed port plan.
 
@@ -181,8 +190,11 @@ on Spark 2 hardware.
    to delay and looper tempo.
 5. Exercise Spark-app interoperability, reconnect/resync, and rapid-command
    collision cases.
-6. Only then bring up one mini TFT, shared SPI/MCP23017 inputs, and eventually
-   the physical footswitch surface.
+6. Then validate shared SPI and independent chip-select for all six mini TFTs
+   (mini #1 is already integrated), followed by MCP23017 inputs and physical
+   footswitches. Keep the existing 2.8-inch UI unchanged until all six minis
+   are working; then build their UI from the three user concepts in
+   `~/Desktop/Ignitron/` (`miniUI.png`, `miniUI2.png`, `miniUI3.png`).
 
 ## UI implementation rules
 
@@ -213,7 +225,7 @@ controller target without a focused hardware checkpoint.
 
 ## Hardware not to implement yet
 
-Do not add these until looper/state interoperability is stable:
+Do not expand these until looper/state interoperability is stable:
 
 - six ST7735S mini displays
 - MCP23017 switch expansion
@@ -222,6 +234,9 @@ Do not add these until looper/state interoperability is stable:
 - enclosure-specific assumptions
 
 Those come after the main UI/state architecture is stable.
+
+Regardless of sequencing, preserve the user's explicit UI gate: do not redesign
+the current 2.8-inch UI until all six mini displays are working.
 
 ## Review workflow recommendation
 

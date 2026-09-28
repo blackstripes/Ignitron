@@ -6,6 +6,7 @@
  */
 
 #include "SparkStreamReader.h"
+#include "SparkPresetChecksum.h"
 
 SparkStreamReader::SparkStreamReader() : message{}, unstructuredData{}, msgData{}, msgPos(0) {
 }
@@ -330,7 +331,13 @@ void SparkStreamReader::readPreset() {
     }
     sb.addPython("],");
     sb.addNewline();
-    byte chksum = readByte();
+    byte chksum = 0;
+    if (!parseValid_ || !readSparkPresetChecksum(msgData.data(), msgData.size(), msgPos, chksum)) {
+        statusObject.resetLastMessageType();
+        Serial.println("Discarding preset: invalid payload checksum or unsupported/truncated tail");
+        return;
+    }
+    msgPos = msgData.size();
     currentPreset.checksum = chksum;
     sb.addStr("Checksum", SparkHelper::intToHex(chksum));
     sb.addNewline();

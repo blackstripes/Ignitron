@@ -394,8 +394,11 @@ kept for context. The active sequence is the looper-first plan in
 
 ### Milestone 6 — six mini displays + switch expander
 
-- Bring up one ST7735S mini display first.
-- Then prove shared SPI with multiple displays.
+- Mini display #1 (top-left) is now hardware-tested in the integrated controller
+  using the SPI2 renderer; it follows the touchscreen Preset (`P1`) and FX
+  (`GATE`) views. The GPIO bit-bang renderer remains an explicit fallback.
+- Next, validate shared hardware SPI with all six ST7735S displays and provide
+  each panel an independent chip-select, likely through the planned MCP23017.
 - Add MCP23017 switch inputs and display selection.
 - Current tentative native pins are IO10=MOSI, IO11=SCLK, IO12/13=I2C, IO14=shared DC, IO21=spare.
 - Only after the electrical approach is stable should all six displays be connected.
@@ -453,6 +456,19 @@ The current Codex start instructions are maintained in the repository root [CODE
 
 
 ## UI / UX design target
+
+### User sequencing constraint
+
+- Keep the current 2.8-inch touchscreen UI visually/functionally frozen while
+  bringing up the six mini displays. Do not redesign or update the main-panel
+  UI until all six mini displays are connected and working.
+- Mini #1's hardware-SPI card may take visual cues from the user-provided
+  `~/Desktop/Ignitron/miniUI.png`, `miniUI2.png`, and `miniUI3.png` now;
+  the full six-panel concept, physical mode/utility mappings, and remaining
+  five mini UIs stay staged until the six-display hardware gate.
+- Treat a future 2.8-inch UI refresh as a separate later milestone, after the
+  six-display hardware gate; do not let that redesign block the current mini
+  bring-up.
 
 The detailed implementation target for the touchscreen and future mini displays is maintained in [UI_DESIGN.md](UI_DESIGN.md).
 

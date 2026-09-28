@@ -69,7 +69,7 @@ public:
     int &numberOfHWBanks() { return numberOfHWBanks_; }
     const int numberOfHWPresets() const { return numberOfHWPresets_; }
 
-    void validateChecksums(vector<byte> checksums);
+    bool validateChecksums(vector<byte> checksums);
     Preset getPreset(int bank, int preset);
     pair<int, int> getBankPresetNumFromUUID(string uuid);
     const int getNumberOfBanks() const;
@@ -80,7 +80,7 @@ public:
     PresetDeleteResult deletePreset(int bnk, int pre);
 
     void insertHWPreset(int number, const Preset &preset);
-    string processFilename(string filename, const Preset &preset, bool overwrite = false);
+    string processFilename(string filename, const Preset &preset, bool overwrite = false, bool logPayload = true);
     Preset readPresetFromFile(string filename);
     bool isHWPresetMissing(int num);
 };

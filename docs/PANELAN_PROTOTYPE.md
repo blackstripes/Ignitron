@@ -1,9 +1,8 @@
 # PanelLan touchscreen controller prototype
 
-This document records the known-good starting point for the custom Ignitron
-foot controller. It is intentionally limited to the built-in PanelLan display,
-touch input, and direct Spark BLE control. External footswitches and the six
-small displays are a later hardware milestone.
+This document records the starting point for the custom Ignitron foot controller.
+The normal LVGL target now includes one visually verified external mini display;
+footswitches and the remaining five minis are still deferred.
 
 ## Hardware identified and tested
 
@@ -30,6 +29,96 @@ pio run -e panelan-lvgl-controller
 pio run -e panelan-lvgl-controller -t upload
 ```
 
+For opt-in preset timing diagnostics on the same SPI mini backend, build
+`pio run -e panelan-lvgl-controller-preset-trace` and flash that environment
+when ready. Open a 115200-baud serial session and send `preset N` (one command
+at a time); no automatic cycling is installed. Filter lines beginning with
+`PRESET_TRACE`: `t` is `millis()` (wraps), `id` links accepted requests to
+`queued`, `sent`, `phase`, `ack`, `number`, `number_query`, `full_query`,
+`full_result`, `number_confirm`, `full_refresh`, `full_data_timeout`,
+`full_data_conflict`, `full_query_send_failed` or `fail`. `elapsed` is milliseconds since acceptance;
+phase values are Scanning=0, Reconnecting=1, Identifying=2, Syncing=3,
+Ready=4. `reject` includes target/confirmed/reason without an id; `late_number`
+labels a target observed after failure, **not** a controller confirmation.
+ Full results carry response `msg` and query `match` (0/1). Only a 03/10 reply
+ with the message number of the verification query issued after the switch
+ confirms it; a matching full response refreshes
+name/FX separately. A full-data timeout is not a switch failure. Number
+observations are snapshot changes, not a complete record of every wire packet.
+In controller mode a 0x38 ACK is only a transport milestone: its wire message
+ number must match the outstanding switch before it starts a number query, and
+ it never applies or saves a preset. Legacy profiles retain ACK bookkeeping.
+ Unsolicited 03/38 broadcasts (and older 03/10 replies) still update Spark's
+ reported slot/snapshot; when they report the target they may trigger a fresh
+ verification query, but cannot themselves confirm a sent command. Final ACK
+ events are retained through a controller tick, even if unrelated ACKs arrive
+ afterward. The wire uses a finite message-number space: if an old reply is
+ delayed across reuse of the same number, the protocol provides no further
+ identity to distinguish it from the new query's reply. Link/time bounds and
+ monotonic sequence allocation reduce, but cannot eliminate, that ambiguity.
+The normal environment emits no `PRESET_TRACE` lines.
+
+Rapid selections use one latest-wins deferred target. While a command is sent,
+new taps replace that target; the next command is dispatched after the current
+Spark number confirmation, without waiting for its full-preset refresh. Only
+the final confirmed selection triggers a full-preset query. A newer tap revokes
+an outstanding refresh; mismatched/late full replies cannot publish active FX
+or name data. FX, tuner and looper still require Ready and do not interleave
+with preset writes. If the sent command times out without a number, the
+ deferred selection remains pending. The controller queries the authoritative
+ hardware number after timeout, retaining the newest accepted target; only a
+ matching 03/10 reply to that exact post-timeout query (consistent with the
+ refreshed snapshot) releases the next switch. Late replies to older queries,
+ broadcasts, and ACKs cannot release it. A silent amp causes bounded query
+ retries while the intent remains pending; link loss fails it. The timed-out
+ switch is never confirmed by the reconciliation reply. Trace builds emit
+ `reconcile_wait`, `reconcile_query`, and `reconciled` milestones.
+
+If the latest deferred target already matches Spark's reported slot, no extra
+switch command is sent. Startup sync fetches the full preset; taps during that
+Syncing refresh remain eligible as new latest-wins selections. The previous
+startup full-query gate is revoked before dispatch, and a selection already at
+the reported slot triggers a fresh sync query rather than trusting the old reply.
+
+For an **operator-driven** serial stress run, flash the opt-in trace firmware
+first, connect the Spark amp, and provide serial access to the actual USB CDC
+port (opening it may reset the board):
+
+```sh
+python3 tools/stress_panelan_presets.py --port /dev/your-device --sequence 2,3,4,2,3,2 --interval 0.15
+```
+
+The stdlib-only script does not flash or auto-detect hardware. It prints each
+trace line and per-request acceptance-to-number-confirmation latency, sent and
+failed status, rejects, and final confirmed target; `none` means it was not
+confirmed within `--settle` seconds or a later `event=number` observation
+reports another slot. A `satisfied` deferred selection or an `already_current`
+rejection can count without a send, subject to the same last-observed-number
+check. Start only when the link is Ready. The
+host-only queue test is `g++ -std=c++17 -Isrc tools/test_preset_target_queue.cpp
+-o /tmp/test_preset_target_queue && /tmp/test_preset_target_queue`. It covers
+the deferred-target-equals-confirmed transition and the startup-query busy
+gate; wire reply ordering still needs the hardware run.
+
+On BLE loss, the headless loop clears controller actions before its early return:
+sent/queued/deferred presets, timeout reconciliation and query gates are revoked
+without sending any Spark commands. An in-flight sent preset retains its failure
+event; an unsent selection is discarded without a send failure. FX cancellation
+retains its failure event. The host-only reset regression is
+`g++ -std=c++17 -Isrc tools/test_preset_link_reset.cpp -o /tmp/test_preset_link_reset && /tmp/test_preset_link_reset`.
+
+Hardware regression gap (no host harness for the BLE/protocol/controller loop):
+with a ready link, inject/tap P3 after another preset. Verify `sent`, Spark
+ACK and `number_confirm` on reported number 3 clear pending without RETRY;
+withhold the matching msg12 full-preset response for >5s and verify
+`full_data_timeout` (not `fail`), Syncing/stale name and unavailable FX, then
+a retry query. Deliver a matching full response and verify FX becomes known.
+Separately test no number (bounded `number_timeout` and RETRY), wrong number
+(`conflict_number` and RETRY), send failure, disconnect before number, and a
+late full response after a newer request (must not clear its pending state).
+Build checks alone cannot validate these hardware sequences; do not infer that
+the missing full response has been fixed at the protocol layer.
+
 It is configured for the ESP32-S3, 8 MB flash, QSPI PSRAM, and USB CDC. The
 current development board is exposed on macOS as `/dev/cu.usbmodem1101`; update
 the `upload_port` / `monitor_port` in `platformio.ini` if macOS assigns a
@@ -40,6 +129,26 @@ For an isolated hardware check that excludes the Spark stack:
 ```sh
 pio run -e panelan-display-bringup -t upload
 ```
+
+For a **separate, single external 0.96-inch ST7735S** test (not the built-in
+PanelLan LCD or controller firmware), build `panelan-mini-tft-bringup` and, when
+ready to flash, choose the actual USB device explicitly:
+
+```sh
+pio run -e panelan-mini-tft-bringup
+pio run -e panelan-mini-tft-bringup -t upload --upload-port /dev/your-device
+```
+
+Power the module externally from **3.3 V** with common GND; connect IO10 to
+SDA/MOSI, IO11 to SCL/SCK, IO12 to RES, IO13 to CS, and IO14 to DC. No MISO is
+used. Connect BLK to external 3.3 V (the standalone test displayed colors only
+after this connection); firmware never drives the backlight. Serial at
+115200 reports the selected settings and completion of the draw commands, but
+cannot confirm pixels without readback. Look for six RGB/yellow/magenta/cyan
+bars, full borders, and `ST7735S OK` text. The tested 80x160 portrait profile
+uses ST7735S RAM offset (26,1) and rotation 0; other module variants may need
+different offsets, color inversion/order, or rotation if the border is clipped,
+colors are wrong, or the image is oriented differently.
 
 Use a known-good USB data cable. Opening a serial monitor can reset the board
 on this USB CDC setup, so the touchscreen is the preferred control surface for
@@ -57,9 +166,225 @@ normal Spark testing.
   freshness. Multi-device selection is still pending.
 - On a Spark reboot, the BLE client refreshes GATT services and subscribes
   again before it considers the connection usable.
+- The normal `panelan-lvgl-controller` initializes **mini #1 (top-left)** on
+  IO10=MOSI, IO11=SCK, IO12=RES, IO13=CS, IO14=DC (no MISO). BLK remains
+  externally tied to regulated 3.3 V for maximum backlight, with common ground.
+  The 2.8-inch panel backlight is set to brightness 255 (maximum); user
+  brightness adjustment is deferred. The default renderer
+  uses hardware SPI2 (LovyanGFX, mode 0, 10 MHz), not LVGL. The wall-powered
+  `panelan-lvgl-controller-spi-mini` build was visually verified with the main
+  touchscreen: the mini shows `P1` on Preset and changes to `GATE` on FX.
+  That same SPI backend is now the default `panelan-lvgl-controller` build.
+- This mini currently labels **touchscreen context**, not an actual footswitch
+  or a completed performance mode. The preset card shows the dominant preset
+  name from the checksum-validated per-amp hardware-slot cache, even when P2
+  is active (for example P1 `CLEAN` remains `CLEAN` after selecting P2
+   `CRUNCH`). It shows `UNKNOWN` while slot 1's name is unknown, never the active
+   preset's name or a misleading `P1`. The GPIO fallback follows the same rule.
+   The controller
+  loop asynchronously fetches missing slots one at a time after identity,
+  checksums, current number and full-preset startup sync are ready. A slot gets
+   at most three queries per scan (five seconds between attempts); a completed
+   scan waits 30 seconds before revisiting missing slots. Every final timeout
+   releases the outstanding transport request before moving on. Missing startup
+   serial/checksum metadata is retried on the idle path at five-second intervals.
+   User actions take priority and pause further cache sends. A
+  checksum invalidation restarts the bounded scan. Normal request numbers skip
+  reserved 0xEE; only a matching outstanding 0xEE slot read on the same amp
+  serial and link can populate the cache. Timeout/retry replaces the outstanding
+  slot identity (the protocol cannot distinguish two retries of the same slot).
+  Disconnect resets this scan;
+  cached files are scoped by amp serial and validated against amp checksums on
+  each link. A matching cache response never switches the active preset or
+  confirms a user action. Names appear through snapshot revisions as they
+   arrive; there may be a delay or `UNKNOWN` if the amp never replies. Last-known
+   nonempty names survive cache misses within the same amp identity/link, but
+   disconnect or identity changes clear them. Pending,
+  failed, stale/unknown, selected and nonselected states use amber dots, red
+  exclamation, amber dash, filled gold waveform strip and muted outline/dash,
+  respectively. A failure on another preset does not claim P1 was targeted.
+  FX shows `GATE` with a large green `ON` or blue-grey `OFF` filled strip when
+  confirmed; pending/failed/unknown use amber dots, red exclamation or amber
+  dash without asserting ON/OFF. Looper is labeled `UNWIRED` (no switch action),
+  tuner shows a large note and cents only with a fresh active sample (otherwise
+  a muted or amber `TUNER`/dash), and Device uses link colors/short labels or
+  dots/dash while unconfirmed. No sync/retry/current text appears on the mini.
+  Its 160x80 artwork is based on directly viewing all three local concepts:
+  `/home/pzwolinski/Desktop/Ignitron/miniUI.png`,
+  `/home/pzwolinski/Desktop/Ignitron/miniUI2.png`, and
+   `/home/pzwolinski/Desktop/Ignitron/miniUI3.png`. The first two guide the
+   preset/FX name, waveform and status strip; the third illustrates utility
+   concepts only, not implemented controls.
+  The near-black card has a bright two-pixel colored outline and a wide lower
+   strip; state is expressed by fill/color and marks rather than small diagnostic
+   copy. Names use measured built-in proportional 18pt/12pt bold fonts with
+   ellipsis as needed; unsupported non-ASCII characters become `?`. Other pages
+   remain honest context cards, not the utility actions pictured in miniUI3.
+   Cards draw directly to `PanelLanMiniSPI` over SPI2 using the validated
+   primitives; the 160x80 sprite/`pushSprite` path was removed after it produced
+   diagonal artifacts. The direct-drawn artwork has now been visually checked:
+   the diagonal streaks and left-edge rainbow column are gone. Cache keys cover
+   the preset name, label, status, colors, icon/layout, and touchscreen view. No
+   new assets or graphics libraries are required.
+   No pedal input or looper control is assigned to it. Main-panel touch/page
+   switching and mini updates have been verified together. Spark BLE
+   responsiveness with the revised mini artwork active has not yet been
+   specifically retested.
+  This is **only mini #1's hardware-SPI renderer**, not a change to the frozen
+  2.8-inch LVGL touchscreen UI or an implementation of the six-display layout.
+  **Keep the 2.8-inch visuals and behavior frozen until all six mini displays
+  work.** Only mini #1 is physically present; bringing up the other five is a
+  separate task, not part of this artwork pass.
 
 The original OLED, LEDs, and footswitch source files are excluded from this
 target because their legacy GPIO initialization overlaps the PanelLan LCD bus.
+
+### Mini coexistence and transport profiles
+
+The explicit SPI profile is an alias of the default integrated LVGL/controller
+build (state-fed mini #1, not the standalone test):
+
+```sh
+pio run -e panelan-lvgl-controller-spi-mini
+```
+
+Use the IO10-14 wiring above and regulated external 3.3 V for VCC and BLK,
+common ground, and the stable 5 V wall supply for the PanelLan board; do not
+connect two USB power sources simultaneously. Both SPI controller targets exclude
+the GPIO renderer and raw trace commands. They use the standalone LovyanGFX ST7735S
+SPI2_HOST mode-0 10 MHz profile (80x160 glass, portrait offset 26,1, rotated
+90° CW to 160x80 logical landscape; the integrated mini starts at landscape
+X offset 0 to avoid its observed left-edge RAM column). After mini init it
+immediately sends six solid
+color bars, borders and `MINI` using LGFX primitives, holds that image for at
+least five seconds, then draws dark state-driven cards with slot/FX cues and a
+  full-width status strip over SPI only when visible content changes (including the
+displayed preset name). There is no utility-mode card or bank/TAP/scene/mute
+action: those physical functions and performance modes are not implemented.
+No pixel readback exists: the wall-powered integrated SPI profile was visually
+verified on Preset and FX with the main touchscreen before this artwork update.
+A successful build or serial draw
+message alone does **not** establish that SPI pixels are visible on other setups.
+The standalone `panelan-mini-tft-bringup` and GPIO fallback remain separate;
+do not use trace raw GPIO commands with an SPI controller target.
+
+The earlier integrated LovyanGFX SPI2 mini renderer stayed black. The trace-only
+GPIO raw full-RAM rainbow then rendered visibly with the wall supply, and the
+direct-GPIO state renderer was visually verified on Preset and FX. The newer
+integrated SPI profile is now also visually verified under wall power; the exact
+reason the earlier SPI2 attempt failed remains unknown. With PC USB
+power VCC/BLK measured 1.26 V; with the 5 V 1 A wall supply both measured 3.3 V.
+Use the wall supply for hardware testing and do not connect both USB power
+sources simultaneously.
+
+Source trace against installed LovyanGFX **1.2.30** and PanelLan:
+
+- `PanelLan/src/board/sc05_x/sc05x{.cpp,_pin.h}` assigns the main screen to
+  `Bus_Parallel8` (LCD_CAM), touch to I2C1 on 8/9, and exposes IO10-14 externally.
+  There is no main-screen SPI2 owner or pin overlap in that profile.
+- `PanelLanLVGLUI::flushDisplay()` ends its transaction before marking LVGL
+  ready. Main and mini rendering run sequentially on the Arduino task. The
+  default mini path uses hardware SPI2; the GPIO fallback and trace profiles
+  bitbang and never configure the SPI mini bus.
+- Setup initializes main/LVGL objects, controller/filesystem/BLE, then mini and
+  its first frame. BLE scanning already runs asynchronously during mini setup.
+  Loop services the event log, checks BLE, refreshes state, updates main then
+  mini. Disconnected operation returns after CLI + 10 ms delay; connected
+  operation also processes messages/actions and updates both screens again.
+  BLE connection establishment can block (30-second connect timeout), delaying
+  redraws, but does not itself explain disappearance of an already drawn frame.
+- GPIO init asserts RES low 20 ms then high 150 ms, replays the installed
+  ST7735S command lists (including their delays), disables inversion, selects
+  16-bit pixels and rotation-0 BGR in the fallback profile. BLK is never driven
+  by firmware.
+
+For the explicit diagnostic recovery fallback, build:
+
+```sh
+pio run -e panelan-lvgl-controller-gpio-mini
+```
+
+This profile exclusively compiles the direct GPIO mode-0 bitbang renderer, not
+the SPI renderer. It writes the 80x160 window at RAM offset (26,1), four rows
+per loop iteration, using a small uppercase 5x7 font and the same
+`ControllerSnapshot` as the touchscreen. A full frame is 25,600 pixel bytes
+plus 440 window-command bytes over 40 chunks; at >=1 us SCK high per bit,
+wire time is >=208 ms (estimated ~0.3–0.6 s total, not hardware measured).
+State changes restart after a complete frame; unchanged content refreshes
+after two seconds. The finished multi-mini design still calls for shared SPI
+with per-panel chip select as described in [PROJECT_PLAN.md](PROJECT_PLAN.md).
+
+For optional coexistence diagnostics, build:
+
+```sh
+pio run -e panelan-mini-coexistence-trace
+```
+
+This inherits the **GPIO fallback** and boots with live state rendering.
+Trace commands can pause service or draw reference bars; the trace profile is
+not required for normal operation and must not be mixed with the SPI backend.
+
+At 115200 baud issue one command at a time, then inspect/photograph the mini:
+
+| Command | Persistent effect |
+| --- | --- |
+| `mini status` | JSON state + forced GPIO snapshot, without changing the display |
+| `mini main` | Service only main LVGL/touch; leave the mini untouched |
+| `mini pause` | Stop main/application service again; leave mini untouched |
+| `mini run` | Normal controller loop while holding the current mini card |
+| `mini raw-frame` | GPIO-clock full-RAM bars **without reset/sleep-out/display-on** |
+| `mini raw-reset` | GPIO reset + ST7735S initialization, then full-RAM bars |
+| `mini dynamic` | Resume state-driven mini rendering and the full controller loop |
+
+Raw commands hold the mini card until `mini dynamic`; use `mini main` to
+service only the main UI and `mini pause` to pause it again. Do not use this
+trace image for timing-sensitive controller operation.
+
+The raw path drives only IO10-14, MSB first, mode 0, at least 1 us per half
+clock (the GPIO fallback uses >=1 us high only). It bypasses SPI peripheral/mutex/DMA, LGFX graphics/text/primitives and
+cached windows. It explicitly writes RGB565, rotation 0 and **all 132x162 RAM**
+as six bright horizontal bands, avoiding dependence on the glass offset. The
+reset variant reuses the installed ST7735S initialization table values/delays,
+but transmits them independently; CS stays low throughout commands/pixels and
+returns high at completion. BLK is never driven.
+
+Every accepted operation reports JSON mode, selected transport and service
+state. Raw writes also report attempted byte count and FNV-1a of the byte stream;
+`raw-frame` must report **42783 bytes / 3581832715 hash**. These are software
+evidence, not a bus analyzer or pixel readback. The portable generator is tested
+by `tools/test_panelan_mini_reference.cpp` for initialization delays/sentinel,
+window commands, byte order and every one of the 21384 pixels.
+
+`MINI TRACE` prints IO10-14 mux/routing/configuration, output enables and
+RES/CS/DC output latches initially and whenever sampled state changes. Samples
+bracket main/mini updates and follow event-log service and BLE checks. These
+are register observations, not wire-level measurements; unchanged samples do
+not rule out short reset pulses, bad SPI traffic, power or backlight problems.
+
+Still verify Spark BLE responsiveness/reconnection with mini redraws active,
+and confirm orientation/readability in the enclosure. The mini is write-only;
+serial byte counts cannot confirm visible pixels.
+
+### Preset-change trace
+
+For slow or apparently failed preset switches, build and flash the opt-in
+`panelan-lvgl-controller-preset-trace` environment. It leaves the renderer and
+2.8-inch UI unchanged, and emits numeric `PRESET_TRACE t=<ms> event=<name>`
+milestones for accepted/rejected requests, send, ACK, transient connection
+phase, observed hardware-preset number, full-preset verification, and final
+confirmation/failure (including elapsed time and request ID). It logs no preset
+names, amp serials, or raw BLE payloads. Drive it with the existing serial
+`preset <n>` CLI command; this exercises the same `ControllerActions` path as a
+touch selection. The serial `touch x y` injection can separately exercise the
+touchscreen callback. Keep one serial session open during a cycle because
+opening the USB serial monitor can reset this board. The first bench-powered
+CLI cycle through presets 2→3→4→1 confirmed each change in under 1.1 seconds. A
+subsequent touch-injected cycle through presets 4→1→2→3 produced Spark-number
+confirmations within 0.3–0.5 seconds, with no switch-failure event. Preset 4's
+full-preset refresh timed out at five seconds; a later payload arrived on the
+startup-sync retry. That is a data-refresh delay, not a failed selection; FX
+remains stale until the matching full preset is restored. Initial taps during
+startup Syncing were correctly rejected before send.
 
 ## Deferred multi-device connection design
 
@@ -85,10 +410,10 @@ Spark devices until the remembered-device and confirmation UI is implemented.
 ## Deferred pedal hardware
 
 The enclosure direction is an HX Stomp XL-style layout with up to eight
-footswitches and six small per-switch displays. Do not assign expansion GPIO,
-wire footswitches, or add the mini displays until the single-screen controller
-and device-selection workflow are stable. The board's exposed IO and proposed
-expansion approach remain documented in [PROJECT_PLAN.md](PROJECT_PLAN.md).
+footswitches and six small per-switch displays. Beyond the first directly
+wired mini, switch inputs, additional mini CS lines, and performance-mode
+mapping remain unimplemented. The proposed expansion approach remains in
+[PROJECT_PLAN.md](PROJECT_PLAN.md).
 
 
 ## Behavioral spec references

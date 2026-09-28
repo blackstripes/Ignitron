@@ -7,6 +7,7 @@
 
 #include "SparkDataControl.h"
 #include "PersistentEventLog.h"
+#include "SparkMessageSequence.h"
 
 SparkBTControl *SparkDataControl::bleControl = nullptr;
 SparkStreamReader SparkDataControl::sparkSsr;
@@ -25,9 +26,12 @@ deque<CmdData> SparkDataControl::currentCommand;
 deque<AckData> SparkDataControl::pendingLooperAcks;
 uint32_t SparkDataControl::finalAckRevision_ = 0;
 AckData SparkDataControl::lastFinalAck_;
+ProtocolObservations<AckData> SparkDataControl::finalAckEvents_;
+ProtocolObservations<SparkDataControl::HardwareNumberEvent> SparkDataControl::hardwareNumberEvents_;
 vector<pair<string, uint32_t>> SparkDataControl::fxModelObservationRevisions_;
 uint32_t SparkDataControl::fullPresetObservationRevision_ = 0;
 uint8_t SparkDataControl::fullPresetObservationMessageNumber_ = 0;
+uint8_t SparkDataControl::controllerFullPresetMessageNumber_ = 0;
 uint32_t SparkDataControl::looperStatusObservationRevision_ = 0;
 uint32_t SparkDataControl::looperSettingsObservationRevision_ = 0;
 uint32_t SparkDataControl::looperCommandObservationRevision_ = 0;
@@ -75,6 +79,11 @@ BatteryLevel SparkDataControl::batteryLevel_ = BATTERY_LEVEL_0;
 
 bool SparkDataControl::isInitBoot_ = true;
 byte SparkDataControl::specialMsgNum = 0xEE;
+uint8_t SparkDataControl::pendingHWPresetSlot_ = 0;
+string SparkDataControl::pendingHWPresetSerial_;
+uint32_t SparkDataControl::linkGeneration_ = 0;
+uint32_t SparkDataControl::pendingHWPresetLink_ = 0;
+uint32_t SparkDataControl::pendingHWPresetChecksums_ = 0;
 
 SparkDataControl::SparkDataControl() {
     // init();
@@ -346,6 +355,8 @@ void SparkDataControl::resetStatus() {
     operationMode_ = SPARK_MODE_APP;
     subMode_ = SUB_MODE_PRESET;
     nextMessageNum = 0x01;
+    ++linkGeneration_;
+    cancelHWPresetRead();
     customPresetNumberChangePending = false;
     sparkAmpType = AMP_TYPE_40;
     sparkAmpName = "Spark 40";
@@ -532,10 +543,13 @@ bool SparkDataControl::switchPreset(int pre, bool isInitial) {
     return SparkPresetControl::getInstance().switchPreset(pre, isInitial);
 }
 
-bool SparkDataControl::changeHWPreset(int preset) {
+bool SparkDataControl::changeHWPreset(int preset, uint8_t *messageNumber) {
 
-    currentMsg = sparkMsg.changeHardwarePreset(nextMessageNum, preset);
-    return triggerCommand(currentMsg);
+    const uint8_t issuedMessageNumber = nextMessageNum == 0 ? 0x01 : nextMessageNum;
+    currentMsg = sparkMsg.changeHardwarePreset(issuedMessageNumber, preset);
+    const bool sent = triggerCommand(currentMsg);
+    if (sent && messageNumber) *messageNumber = issuedMessageNumber;
+    return sent;
 }
 
 bool SparkDataControl::changePreset(Preset preset) {
@@ -583,11 +597,14 @@ bool SparkDataControl::getAmpName() {
     return triggerCommand(currentMsg);
 }
 
-bool SparkDataControl::getCurrentPresetNum() {
+bool SparkDataControl::getCurrentPresetNum(uint8_t *messageNumber) {
+    const uint8_t issuedMessageNumber = nextMessageNum == 0 ? 0x01 : nextMessageNum;
     currentMsg = sparkMsg.getCurrentPresetNum(nextMessageNum);
     DEBUG_PRINTLN("Getting current preset num from Spark");
 
-    return triggerCommand(currentMsg);
+    const bool sent = triggerCommand(currentMsg);
+    if (sent && messageNumber) *messageNumber = issuedMessageNumber;
+    return sent;
 }
 
 bool SparkDataControl::getSerialNumber() {
@@ -625,7 +642,7 @@ bool SparkDataControl::triggerCommand(vector<CmdData> &msg) {
     // Spark encodes zero as wire sequence one. A command built with zero is
     // therefore sequence one, so advance directly to two and avoid reusing
     // one for the following command.
-    nextMessageNum = nextMessageNum == 0 ? 0x02 : static_cast<byte>(nextMessageNum + 1);
+    nextMessageNum = nextNormalSparkMessageNumber(nextMessageNum);
     if (msg.size() > 0) {
         currentCommand.assign(msg.begin(), msg.end());
     }
@@ -786,6 +803,11 @@ void SparkDataControl::handleAppModeResponse() {
 
         if (lastMessageType == MSG_TYPE_AMP_SERIAL) {
             DEBUG_PRINTLN("Last message was serial number.");
+            // The initial model response may have loaded files before the
+            // serial was known. Invalidate that cache immediately, rather than
+            // briefly exposing another identity's data while re-querying name.
+            cancelHWPresetRead();
+            SparkPresetControl::getInstance().setAmpParameters(sparkAmpName);
             // reading HW checksums for cache
             getAmpName();
             printMessage = true;
@@ -795,6 +817,8 @@ void SparkDataControl::handleAppModeResponse() {
             printMessage = true;
             SparkPresetControl &presetControl = SparkPresetControl::getInstance();
             presetControl.validateChecksums(statusObject.hwChecksums());
+            if (pendingHWPresetSlot_ && pendingHWPresetChecksums_ != presetControl.hardwareCacheGeneration())
+                cancelHWPresetRead();
 #if defined(PANELAN_LVGL_UI_MODE)
             // The PanelLan controller requests the current full preset after
             // it has observed the hardware-preset number. Do not replay a
@@ -812,6 +836,13 @@ void SparkDataControl::handleAppModeResponse() {
             DEBUG_PRINTLN("Received HW Preset response");
 
             int sparkPresetNumber = statusObject.currentPresetNumber();
+            const auto &receivedMessage = sparkSsr.lastMessage().back();
+            // Record the wire identity before any later response overwrites
+            // SparkStatus. Store broadcasts too, for verification triggers.
+            if (receivedMessage.cmd == 0x03 &&
+                (receivedMessage.subcmd == 0x10 || receivedMessage.subcmd == 0x38))
+                hardwareNumberEvents_.record({static_cast<uint8_t>(sparkPresetNumber),
+                    receivedMessage.cmd, receivedMessage.subcmd, lastMessageNumber});
 
             // only change active presetNumber if new number is between 1 and max HW presets,
             // otherwise it is a custom preset number and can be ignored
@@ -828,17 +859,56 @@ void SparkDataControl::handleAppModeResponse() {
 
         if (lastMessageType == MSG_TYPE_PRESET) {
             DEBUG_PRINTLN("Last message was a preset change.");
-            printMessage = true;
             // This preset number is between 0 and 3!
             bool isSpecial = lastMessageNumber == specialMsgNum;
-            SparkPresetControl::getInstance().updateFromSparkResponsePreset(isSpecial);
-            recordCompletedFullPreset();
-            if (!isSpecial) {
+            // Cache fetches are neither active observations nor raw payload
+            // diagnostics. Reject stale/mismatched replies before persisting.
+            const Preset &received = statusObject.currentPreset();
+            const auto hwChecksums = statusObject.hwChecksums();
+            const int slot = received.presetNumber;
+            SparkPresetControl &presets = SparkPresetControl::getInstance();
+            const bool validCacheResponse = isSpecial && pendingHWPresetSlot_ != 0 &&
+                isAmpConnected() && pendingHWPresetLink_ == linkGeneration_ &&
+                !pendingHWPresetSerial_.empty() && pendingHWPresetSerial_ == statusObject.ampSerialNumber() &&
+                pendingHWPresetChecksums_ == presets.hardwareCacheGeneration() &&
+                presets.hardwareChecksumsReady() && slot == pendingHWPresetSlot_ - 1 &&
+                slot < SparkPresetControl::getInstance().numberOfHWBanks() * PRESETS_PER_BANK &&
+                slot < static_cast<int>(hwChecksums.size()) && received.checksum == hwChecksums[slot];
+            if (validCacheResponse) {
+                Serial.printf("HW name cache: accepted slot %d checksum=%02x name=%s\n",
+                              slot + 1, received.checksum, received.name.c_str());
+                cancelHWPresetRead();
+                presets.updateFromSparkResponsePreset(true);
+            } else if (!isSpecial
+#if defined(PANELAN_LVGL_UI_MODE)
+                       && controllerFullPresetMessageNumber_ != 0 &&
+                       lastMessageNumber == controllerFullPresetMessageNumber_
+#endif
+                       ) {
+                presets.updateFromSparkResponsePreset(false);
+            } else {
+                Serial.printf("HW name cache/full preset: rejected slot=%d pending=%u ready=%u checksum=%02x expected=%02x\n",
+                              slot + 1, pendingHWPresetSlot_, presets.hardwareChecksumsReady(),
+                              received.checksum,
+                              slot >= 0 && slot < static_cast<int>(hwChecksums.size()) ? hwChecksums[slot] : 0);
+            }
+            const bool acceptedActive = !isSpecial
+#if defined(PANELAN_LVGL_UI_MODE)
+                && controllerFullPresetMessageNumber_ != 0 && lastMessageNumber == controllerFullPresetMessageNumber_
+#endif
+                ;
+            if (!acceptedActive) statusObject.resetPresetUpdateFlag();
+            if (acceptedActive) {
+                printMessage = true;
+                recordCompletedFullPreset();
                 // This advances only after the full response has become the
                 // active Spark-owned preset. Cached-background responses,
                 // ACKs, and local pending mutations never advance it.
                 fullPresetObservationMessageNumber_ = lastMessageNumber;
                 ++fullPresetObservationRevision_;
+#if defined(PANELAN_LVGL_UI_MODE)
+                controllerFullPresetMessageNumber_ = 0;
+#endif
             }
         }
 
@@ -965,6 +1035,7 @@ void SparkDataControl::handleIncomingAck() {
     if (lastAck.cmd == 0x04) {
         lastFinalAck_ = lastAck;
         ++finalAckRevision_;
+        finalAckEvents_.record(lastAck);
         DEBUG_PRINTLN("Received final ACK");
         if (lastAck.subcmd == 0x01) {
             // only execute preset number change on last ack for preset change
@@ -977,10 +1048,12 @@ void SparkDataControl::handleIncomingAck() {
         }
         if (lastAck.subcmd == 0x38) {
             DEBUG_PRINTLN("Received ACK for 0x38 command");
-            // getCurrentPresetFromSpark();
-
+#if !defined(PANELAN_LVGL_UI_MODE)
+            // Controller mode must never apply/persist a potentially stale ACK.
+            // HW number and correlated full-preset replies own active state.
             presetControl.updateFromSparkResponseACK();
             presetControl.writeCurrentPresetToFile();
+#endif
             Serial.println("OK");
         }
         if (lastAck.subcmd == 0x15) {
@@ -1005,12 +1078,27 @@ void SparkDataControl::handleIncomingAck() {
     }
 }
 
-void SparkDataControl::readHWPreset(int num) {
+void SparkDataControl::cancelHWPresetRead() {
+    pendingHWPresetSlot_ = 0;
+    pendingHWPresetSerial_.clear();
+}
+
+bool SparkDataControl::readHWPreset(int num) {
 
     // in case HW presets are missing from the cache, they can be requested
+    SparkPresetControl &presets = SparkPresetControl::getInstance();
+    if (pendingHWPresetSlot_ || !isAmpConnected() || !presets.hardwareChecksumsReady() ||
+        statusObject.ampSerialNumber().empty() || num < 1 ||
+        num > presets.numberOfHWBanks() * PRESETS_PER_BANK) return false;
     Serial.printf("Reading missing HW preset %d\n", num);
+    pendingHWPresetSlot_ = num;
+    pendingHWPresetSerial_ = statusObject.ampSerialNumber();
+    pendingHWPresetLink_ = linkGeneration_;
+    pendingHWPresetChecksums_ = presets.hardwareCacheGeneration();
     currentMsg = sparkMsg.getCurrentPreset(specialMsgNum, num);
-    triggerCommand(currentMsg);
+    if (triggerCommand(currentMsg)) return true;
+    cancelHWPresetRead();
+    return false;
 }
 
 /////////////////////////////////////////////////////////
@@ -1089,6 +1177,25 @@ AckData SparkDataControl::lastFinalAck() {
     return lastFinalAck_;
 }
 
+bool SparkDataControl::nextFinalAck(uint32_t &cursor, AckData &ack) {
+    return finalAckEvents_.next(cursor, ack);
+}
+
+uint32_t SparkDataControl::hardwareNumberRevision() {
+    return hardwareNumberEvents_.revision();
+}
+
+bool SparkDataControl::nextHardwareNumber(uint32_t &cursor, uint8_t &number, uint8_t &cmd,
+                                          uint8_t &subcmd, uint8_t &messageNumber) {
+    HardwareNumberEvent event{};
+    if (!hardwareNumberEvents_.next(cursor, event)) return false;
+    number = event.number;
+    cmd = event.cmd;
+    subcmd = event.subcmd;
+    messageNumber = event.messageNumber;
+    return true;
+}
+
 uint32_t SparkDataControl::fxModelObservationRevision(const string &fxName) {
     for (const auto &entry : fxModelObservationRevisions_) {
         if (entry.first == fxName) {
@@ -1104,6 +1211,10 @@ uint32_t SparkDataControl::fullPresetObservationRevision() {
 
 uint8_t SparkDataControl::fullPresetObservationMessageNumber() {
     return fullPresetObservationMessageNumber_;
+}
+
+void SparkDataControl::expectControllerFullPreset(uint8_t messageNumber) {
+    controllerFullPresetMessageNumber_ = messageNumber;
 }
 
 uint32_t SparkDataControl::looperStatusObservationRevision() {

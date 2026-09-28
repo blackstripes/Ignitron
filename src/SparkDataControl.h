@@ -29,6 +29,7 @@
 #include "SparkStreamReader.h"
 
 #include "SparkTypes.h"
+#include "controller/ProtocolObservations.h"
 
 using namespace std;
 using ByteVector = vector<byte>;
@@ -50,6 +51,10 @@ public:
     // It is dispatch metadata, not confirmation of amp-owned state.
     static uint32_t finalAckRevision();
     static AckData lastFinalAck();
+    static bool nextFinalAck(uint32_t &cursor, AckData &ack);
+    static uint32_t hardwareNumberRevision();
+    static bool nextHardwareNumber(uint32_t &cursor, uint8_t &number, uint8_t &cmd,
+                                   uint8_t &subcmd, uint8_t &messageNumber);
     // Monotonic, model-specific observation generation. This advances only
     // when an incoming FX_ONOFF message for the requested Spark model has
     // been applied to SparkPresetControl; it is not a command/ACK revision.
@@ -61,6 +66,8 @@ public:
     // Protocol message number paired with the most recently applied,
     // non-background full-preset observation.
     static uint8_t fullPresetObservationMessageNumber();
+    // PanelLan active-preset refresh barrier; zero revokes older replies.
+    static void expectControllerFullPreset(uint8_t messageNumber);
     // Incoming Spark looper observations only. These never advance for an
     // outgoing command or its transport ACK.
     static uint32_t looperStatusObservationRevision();
@@ -96,17 +103,18 @@ public:
     void checkForUpdates();
 
     static bool getAmpName();
-    static bool getCurrentPresetNum();
+    static bool getCurrentPresetNum(uint8_t *messageNumber = nullptr);
     static bool getSerialNumber();
     static bool getFirmwareVersion();
     static bool getHWChecksums();
     bool getCurrentPreset(int num);
     static bool getCurrentPresetFromSpark(uint8_t *messageNumber = nullptr);
-    static void readHWPreset(int num);
+    static bool readHWPreset(int num);
+    static void cancelHWPresetRead();
 
     // Switch to a selected preset of the current bank
     bool switchPreset(int pre, bool isInitial);
-    bool changeHWPreset(int preset);
+    bool changeHWPreset(int preset, uint8_t *messageNumber = nullptr);
     bool changePreset(Preset preset);
 
     // Switch effect on/off
@@ -260,6 +268,11 @@ private:
     // keep track which HW presets have been read so far
     static bool isInitBoot_;
     static byte specialMsgNum;
+    static uint8_t pendingHWPresetSlot_;
+    static string pendingHWPresetSerial_;
+    static uint32_t linkGeneration_;
+    static uint32_t pendingHWPresetLink_;
+    static uint32_t pendingHWPresetChecksums_;
 
     static byte nextMessageNum;
     static queue<ByteVector> msgQueue;
@@ -270,9 +283,13 @@ private:
     static deque<AckData> pendingLooperAcks;
     static uint32_t finalAckRevision_;
     static AckData lastFinalAck_;
+    struct HardwareNumberEvent { uint8_t number, cmd, subcmd, messageNumber; };
+    static ProtocolObservations<AckData> finalAckEvents_;
+    static ProtocolObservations<HardwareNumberEvent> hardwareNumberEvents_;
     static vector<pair<string, uint32_t>> fxModelObservationRevisions_;
     static uint32_t fullPresetObservationRevision_;
     static uint8_t fullPresetObservationMessageNumber_;
+    static uint8_t controllerFullPresetMessageNumber_;
     static uint32_t looperStatusObservationRevision_;
     static uint32_t looperSettingsObservationRevision_;
     static uint32_t looperCommandObservationRevision_;

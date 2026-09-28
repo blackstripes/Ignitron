@@ -49,6 +49,10 @@ struct ControllerSnapshot {
     std::string ampName;
     std::string ampSerial;
     std::string presetName;
+    // Slot 1 is index 0. Empty means unknown; validated names remain last-known
+    // during same-amp cache refetch, not across disconnects or identity changes.
+    // Never substitute the active preset's name for an unrelated hardware slot.
+    std::array<std::string, 8> hardwarePresetNames;
     std::string presetDescription;
     // Identifies the currently observed signal chain. It is deliberately
     // derived from Spark-owned preset data and is used to cancel a pending FX
@@ -96,8 +100,13 @@ public:
     // The startup synchronizer owns the authoritative full-preset request;
     // only its matching response may make this link actionable.
     void expectStartupFullPreset(uint8_t messageNumber);
+    // A new hardware number invalidates the old chain until a matching full
+    // preset response (or a subsequent startup-sync retry) is observed.
+    void invalidatePresetData();
     void beginHardwarePresetRequest(uint8_t preset);
-    void confirmHardwarePresetRequest();
+    // Only clear the presentation if it still represents this command; a
+    // newer deferred intent may already own the pending slot.
+    void confirmHardwarePresetRequest(uint8_t preset);
     void failHardwarePresetRequest();
     void beginFxToggleRequest(uint8_t slot, bool desiredEnabled);
     void confirmFxToggleRequest(uint8_t slot);

@@ -2,6 +2,9 @@
 
 #include <cstdint>
 #include <string>
+#include "HardwarePresetScan.h"
+#include "PresetTargetQueue.h"
+#include "PresetTimeoutReconcile.h"
 
 class ControllerState;
 class SparkDataControl;
@@ -32,6 +35,9 @@ public:
     bool requestLooperClear();
     // Leaving the page or choosing another action cancels destructive intent.
     void cancelLooperClear();
+    // Call on every disconnected headless tick (before its early return).
+    // Idempotent; never sends a Spark command.
+    void onAmpDisconnected();
     void process(SparkDataControl &dataControl);
 
 private:
@@ -42,15 +48,40 @@ private:
     static constexpr uint32_t kLooperClearArmMs = 3000;
     static constexpr uint8_t kNoFxSlot = 0xFF;
     ControllerState &state_;
-    uint8_t queuedPreset_ = 0;
+    PresetTargetQueue presetTargets_;
+    PresetTimeoutReconcile presetTimeoutReconcile_;
+    uint32_t presetReconcileQueryAtMs_ = 0;
+    bool presetReconcileQueryAttempted_ = false;
+    uint8_t reconciledPresetNumber_ = 0;
     uint8_t sentPreset_ = 0;
+    uint8_t sentPresetMessageNumber_ = 0;
     uint8_t presetBeforeRequest_ = 0;
     uint32_t sentAtMs_ = 0;
     uint32_t sentAfterAckRevision_ = 0;
+    uint32_t sentAfterNumberRevision_ = 0;
+    uint8_t confirmationQueryMessageNumber_ = 0;
     bool awaitingConfirmationQuery_ = false;
+    // Refresh-only after number confirmation; never owns preset action status.
     bool awaitingPresetFullResponse_ = false;
     uint32_t presetFullObservationRevisionBeforeQuery_ = 0;
     uint8_t presetFullQueryMessageNumber_ = 0;
+    uint8_t presetFullTarget_ = 0;
+#ifdef PANELAN_PRESET_TRACE
+    uint32_t presetTraceId_ = 0;
+    uint32_t presetTraceNextId_ = 0;
+    uint32_t presetTraceDeferredId_ = 0;
+    uint32_t presetTraceDeferredAtMs_ = 0;
+    uint32_t presetTraceStartedAtMs_ = 0;
+    uint32_t presetTraceFullRevision_ = 0;
+    uint8_t presetTraceObserved_ = 0;
+    uint8_t presetTraceFailedTarget_ = 0;
+    uint32_t presetTraceFailedId_ = 0;
+    uint8_t presetTraceFailedFullMsg_ = 0;
+    uint8_t presetTraceFailedFullTarget_ = 0;
+    uint32_t presetTraceFailedFullId_ = 0;
+    uint32_t presetTraceFailedFullRevision_ = 0;
+    uint8_t presetTracePhase_ = 0;
+#endif
     bool currentPresetQueryIssued_ = false;
     uint32_t currentPresetQueryAtMs_ = 0;
     // This is independent of preset-action verification. It establishes the
@@ -58,6 +89,10 @@ private:
     bool startupFullPresetQueryIssued_ = false;
     uint32_t startupFullPresetQueryAtMs_ = 0;
     uint8_t startupFullPresetQueryMessageNumber_ = 0;
+    HardwarePresetScan cacheScan_;
+    bool cacheMetadataRequested_ = false;
+    uint32_t cacheMetadataAtMs_ = 0;
+    uint32_t cacheGeneration_ = 0;
 
     uint8_t queuedFxSlot_ = kNoFxSlot;
     uint8_t sentFxSlot_ = kNoFxSlot;
@@ -92,6 +127,7 @@ private:
     void cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh,
                          const char *reason);
     void clearFxRequest();
+    void processHardwareNameCache(SparkDataControl &dataControl);
     bool canRequestLooper() const;
     bool queueLooperAction(LooperAction action);
 };

@@ -21,6 +21,7 @@
 #ifdef PANELAN_SC05X_MODE
 #ifdef PANELAN_LVGL_UI_MODE
 #include "PanelLanLVGLUI.h"
+#include "PanelLanMiniDisplay.h"
 #else
 #include "PanelLanDisplay.h"
 #endif
@@ -52,6 +53,7 @@ SparkPresetControl &presetControl = SparkPresetControl::getInstance();
 #ifdef PANELAN_SC05X_MODE
 #ifdef PANELAN_LVGL_UI_MODE
 PanelLanLVGLUI panelLanDisplay;
+PanelLanMiniDisplay panelLanMiniDisplay;
 #else
 PanelLanDisplay panelLanDisplay;
 #endif
@@ -59,6 +61,24 @@ PanelLanDisplay panelLanDisplay;
 ControllerState controllerState;
 ControllerActions controllerActions(controllerState);
 #endif
+#endif
+
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
+void updatePanelLanScreens() {
+    const ControllerSnapshot &snapshot = controllerState.snapshot();
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+    PanelLanMiniDisplay::traceHardware("before main update");
+#endif
+    // LVGL flushes synchronously inside update(); then service the selected mini backend.
+    panelLanDisplay.update(snapshot);
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+    PanelLanMiniDisplay::traceHardware("after main update (flush/touch)");
+#endif
+    panelLanMiniDisplay.update(snapshot, panelLanDisplay.activeView());
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+    PanelLanMiniDisplay::traceHardware("after mini update");
+#endif
+}
 #endif
 
 unsigned long lastInitialPresetTimestamp = 0;
@@ -165,14 +185,37 @@ void setup() {
     spark_led.setDataControl(&spark_dc);
 #endif
 
+#ifdef PANELAN_LVGL_UI_MODE
+    // Initialize the selected external mini backend after board/controller setup.
+    // IO10-14 are dedicated expansion pins, not main LCD/touch pins.
+    Serial.println("Initializing top-left ST7735S mini display");
+    panelLanMiniDisplay.begin();
+    // The trace target also starts with live state rendering.
+    panelLanMiniDisplay.update(controllerState.snapshot(), panelLanDisplay.activeView());
+#endif
+
     Serial.println("Initialization done.");
     persistentEventLog.record(PersistentEvent::InitComplete, static_cast<uint16_t>(operationMode), true);
 }
 
 void loop() {
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+    if (!panelLanMiniDisplay.diagnosticRunController()) {
+        serialCLI->update();
+        if (panelLanMiniDisplay.diagnosticServiceMain()) {
+            panelLanDisplay.update(controllerState.snapshot());
+            PanelLanMiniDisplay::traceHardware("main-only service");
+        }
+        delay(10);
+        return;
+    }
+#endif
 
     // The sole regular flash-write context. BLE callbacks only append RAM records.
     persistentEventLog.service();
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+    PanelLanMiniDisplay::traceHardware("after event log service");
+#endif
 
     // Methods to call only in APP mode
     if (operationMode == SPARK_MODE_APP) {
@@ -181,10 +224,13 @@ void loop() {
         // firmware stays in a blocking loop here because its buttons/display are
         // its only user interface.
         const bool sparkConnected = spark_dc->checkBLEConnection();
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+        PanelLanMiniDisplay::traceHardware("after BLE connection check");
+#endif
 #ifdef PANELAN_SC05X_MODE
 #ifdef PANELAN_LVGL_UI_MODE
         controllerState.refreshFromSpark(*spark_dc);
-        panelLanDisplay.update(controllerState.snapshot());
+        updatePanelLanScreens();
 #else
         SparkStatus &status = SparkStatus::getInstance();
         panelLanDisplay.setSparkIdentity(status.ampName().c_str(), status.ampSerialNumber().c_str());
@@ -192,6 +238,11 @@ void loop() {
 #endif
 #endif
         if (!sparkConnected) {
+#ifdef PANELAN_LVGL_UI_MODE
+            // process() below is unreachable on this path. Discard all action
+            // work before a later link can dispatch or confirm it.
+            controllerActions.onAmpDisconnected();
+#endif
             serialCLI->update();
             delay(10);
             return;
@@ -227,7 +278,7 @@ void loop() {
 #ifdef PANELAN_SC05X_MODE
 #ifdef PANELAN_LVGL_UI_MODE
     controllerState.refreshFromSpark(*spark_dc);
-    panelLanDisplay.update(controllerState.snapshot());
+    updatePanelLanScreens();
 #else
     panelLanDisplay.update(true);
 #endif

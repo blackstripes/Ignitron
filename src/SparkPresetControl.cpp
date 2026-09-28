@@ -89,6 +89,8 @@ void SparkPresetControl::getMissingHWPresets() {
 
 void SparkPresetControl::resetStatus() {
 
+    hardwareChecksumsReady_ = false;
+    validatedHWChecksums_.clear();
     presetBuilder.initHWPresets();
     presetBuilder.numberOfHWBanks() = 1;
     activePresetNum_ = pendingPresetNum_ = 1;
@@ -131,6 +133,8 @@ void SparkPresetControl::updateActiveWithPendingPreset() {
 }
 
 void SparkPresetControl::setAmpParameters(string ampName) {
+    hardwareChecksumsReady_ = false;
+    validatedHWChecksums_.clear();
     if (ampName == AMP_NAME_SPARK_2) {
         presetBuilder.numberOfHWBanks() = 2;
     } else {
@@ -226,7 +230,10 @@ void SparkPresetControl::checkForMissingPresets(void *args) {
 }
 
 void SparkPresetControl::validateChecksums(vector<byte> checksums) {
-    presetBuilder.validateChecksums(checksums);
+    hardwareChecksumsReady_ = checksums.size() >= static_cast<size_t>(numberOfHWBanks() * PRESETS_PER_BANK);
+    const bool changed = !validatedHWChecksums_.empty() && validatedHWChecksums_ != checksums;
+    if (hardwareChecksumsReady_) validatedHWChecksums_ = checksums;
+    if (presetBuilder.validateChecksums(checksums) || changed) ++hardwareCacheGeneration_;
 }
 
 void SparkPresetControl::updatePendingPreset(int bnk) {
@@ -388,19 +395,7 @@ void SparkPresetControl::updateFromSparkResponsePreset(bool isSpecial) {
         DEBUG_PRINTF("Storing preset %d into cache.\n", presetNumber + 1);
         presetBuilder.insertHWPreset(presetNumber, receivedPreset);
         statusObject.resetPresetUpdateFlag();
-        // TODO: Check if everything works without backward searching presets in non-special mode
-        string uuid = activePreset_.uuid;
-        pair<int, int> bankPreset = presetBuilder.getBankPresetNumFromUUID(uuid);
-        int checkPresetNum = std::get<1>(bankPreset);
-        if (checkPresetNum != 0) {
-            activeBank_ = std::get<0>(bankPreset);
-            activePresetNum_ = ((checkPresetNum - 1) % PRESETS_PER_BANK) + 1;
-            if (activeBank_ == 0) {
-                activeHWBank_ = (checkPresetNum - 1) / PRESETS_PER_BANK;
-            }
-        } else {
-            Serial.println("Preset not found, not changing.");
-        }
+        // A background read must not remap the active selection by UUID.
     }
 }
 

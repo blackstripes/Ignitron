@@ -11,6 +11,10 @@
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
 #include "PanelLanLVGLUI.h"
 extern PanelLanLVGLUI panelLanDisplay;
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+#include "PanelLanMiniDisplay.h"
+extern PanelLanMiniDisplay panelLanMiniDisplay;
+#endif
 #endif
 
 SparkSerialCLI::SparkSerialCLI(SparkDataControl *dataControl, ControllerActions *controllerActions)
@@ -64,6 +68,12 @@ void SparkSerialCLI::execute(String command) {
     String args = firstSpace < 0 ? "" : command.substring(firstSpace + 1);
     args.trim();
 
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+    if (verb == "mini") {
+        panelLanMiniDisplay.diagnosticCommand(args);
+        return;
+    }
+#endif
     if (verb == "help" || verb == "?") {
         printHelp();
     } else if (verb == "status") {
@@ -134,6 +144,9 @@ void SparkSerialCLI::execute(String command) {
 
 void SparkSerialCLI::printHelp() {
     Serial.println("Commands:");
+#ifdef PANELAN_MINI_COEXISTENCE_TRACE
+    Serial.println("  mini status|pause|main|run|raw-frame|raw-reset|dynamic");
+#endif
     Serial.println("  status");
     Serial.println("  report                  Print compact counters since boot (alias: diagnostics)");
     Serial.println("  log status|dump|clear confirm");

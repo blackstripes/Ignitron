@@ -35,6 +35,9 @@ public:
     const int &activeHWBank() const { return activeHWBank_; }
     const int &pendingHWBank() const { return pendingHWBank_; }
     const int numberOfHWBanks() const { return presetBuilder.numberOfHWbanks(); }
+    bool hardwareChecksumsReady() const { return hardwareChecksumsReady_; }
+    uint32_t hardwareCacheGeneration() const { return hardwareCacheGeneration_; }
+    bool isHWPresetMissing(int num) { return presetBuilder.isHWPresetMissing(num); }
     const int numberOfBanks() const { return presetBuilder.getNumberOfBanks(); }
     const Preset &appReceivedPreset() const { return appReceivedPreset_; }
 
@@ -93,6 +96,9 @@ private:
     int activePresetNum_ = 0;
     int pendingPresetNum_ = 0;
     bool allHWPresetsAvailable_ = false;
+    bool hardwareChecksumsReady_ = false;
+    uint32_t hardwareCacheGeneration_ = 0;
+    vector<byte> validatedHWChecksums_;
     const string lastPresetFileNamePrefix = "/LastPreset";
 
     // HW variables

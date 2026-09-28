@@ -16,8 +16,12 @@ class ControllerActions;
 // added to this UI.
 class PanelLanLVGLUI {
 public:
+    // Read-only touchscreen context for external presentation surfaces. This
+    // is not a footswitch/performance-mode selection.
+    enum class View : uint8_t { Preset, Fx, Looper, Tuner, Device };
     void begin();
     void update(const ControllerSnapshot &snapshot);
+    View activeView() const { return static_cast<View>(activeScreen_); }
     void setActions(ControllerActions *actions) { actions_ = actions; }
     bool writeScreenshot(Stream &output);
     void injectTouch(uint16_t x, uint16_t y);

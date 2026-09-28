@@ -465,15 +465,17 @@ void SparkPresetBuilder::insertHWPreset(int number, const Preset &preset) {
     }
     hwPresets.at(number) = preset;
     string filename = "HW" + to_string(number + 1) + "_" + SparkStatus::getInstance().ampSerialNumber();
-    processFilename(filename, preset, true);
+    processFilename(filename, preset, true, false);
     string uuid = preset.uuid;
     updatePresetListUUID(0, number + 1, uuid);
 }
 
-string SparkPresetBuilder::processFilename(string filename, const Preset &preset, bool overwrite) {
+string SparkPresetBuilder::processFilename(string filename, const Preset &preset, bool overwrite, bool logPayload) {
 
-    Serial.println("Saving preset:");
-    Serial.println(preset.json.c_str());
+    if (logPayload) {
+        Serial.println("Saving preset:");
+        Serial.println(preset.json.c_str());
+    }
     string presetNameWithPath;
     // remove any blanks from the name for a new filename
 
@@ -491,7 +493,7 @@ string SparkPresetBuilder::processFilename(string filename, const Preset &preset
     int counter = 0;
 
     presetFileName = "/" + presetFileName;
-    Serial.printf("Store preset with filename %s\n", presetFileName.c_str());
+    if (logPayload) Serial.printf("Store preset with filename %s\n", presetFileName.c_str());
     File presetFile = LittleFS.open(presetFileName.c_str());
 
     if (!overwrite) {
@@ -546,14 +548,15 @@ void SparkPresetBuilder::resetHWPresets() {
     }
 }
 
-void SparkPresetBuilder::validateChecksums(vector<byte> checksums) {
+bool SparkPresetBuilder::validateChecksums(vector<byte> checksums) {
 
     if (hwPresets.size() < numberOfHWPresets_ || checksums.size() < numberOfHWPresets_) {
         Serial.printf("ERROR: Vector HW Presets (size: %d) or Checksums (size: %d) not in the expected size (%d).\n", hwPresets.size(), checksums.size(), numberOfHWPresets_);
-        return;
+        return false;
     }
 
     bool success = true;
+    bool invalidated = false;
 
     // Compare checksums of stored HW presets with received checksums
     for (int presetNum = 0; presetNum < numberOfHWPresets_; presetNum++) {
@@ -562,6 +565,7 @@ void SparkPresetBuilder::validateChecksums(vector<byte> checksums) {
         if (presetChk != check) {
             Serial.printf("HW checksum for preset %d changed (Cache: %02x / Amp: %02x), invalidating cache.\n", presetNum + 1, presetChk, check);
             Preset emptyPreset;
+            invalidated = invalidated || !hwPresets.at(presetNum).isEmpty;
             hwPresets.at(presetNum) = emptyPreset;
             success = false;
         }
@@ -569,6 +573,7 @@ void SparkPresetBuilder::validateChecksums(vector<byte> checksums) {
     if (success) {
         Serial.println("Cached HW presets are valid.");
     }
+    return invalidated;
 }
 
 bool SparkPresetBuilder::isHWPresetMissing(int num) {

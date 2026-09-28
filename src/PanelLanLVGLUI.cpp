@@ -420,6 +420,7 @@ void PanelLanLVGLUI::injectTouch(uint16_t x, uint16_t y) {
 void PanelLanLVGLUI::begin() {
     uiInstance = this;
     tft_.begin();
+    tft_.setBrightness(255);
     tft_.setRotation(1);
     lv_init();
     lastLvglTickAt_ = millis();
