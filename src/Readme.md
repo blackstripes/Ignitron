@@ -58,6 +58,23 @@ A (rudimentary and incomplete) doxygen documentation has been created [here](htt
 ## Building the code
 After setting up the project in the IDE, the code should build with the standard tool chain.
 
+### PanelLan two-display hardware checkpoint
+`pio run -e panelan-lvgl-mini-bringup` builds the isolated LVGL 9.3 main
+display/touch checkpoint alongside a direct LovyanGFX mini test. It does not
+include the Spark/controller stack or alter the controller profiles. The main
+PanelLan SC05_X is initialized first (320x240 landscape, same UI/touch test as
+`panelan-lvgl-bringup`), then the external ST7735S is initialized once. Serial
+at 115200 logs immediately before and after each initialization. The mini
+shows `MINI OK` on alternating red/blue backgrounds, updated every second
+without reinitializing either display.
+
+Prototype mini wiring: SPI2 mode 0 at 10 MHz, MOSI GPIO10, SCLK GPIO11,
+no MISO, RESET GPIO12, DC GPIO13, CS GPIO14; 80x160 portrait at rotation 0,
+RAM offset (26,1). Power VCC and BLK externally at 3.3 V. This prototype-only
+driver swaps DC/CS relative to the existing standalone/controller mini driver;
+those existing builds are unchanged. Use a local port when uploading, e.g.
+`pio run -e panelan-lvgl-mini-bringup -t upload --upload-port /dev/your-device`.
+
 To compile, add the switch **`-D USE_NIMBLE`** to the compile options.
 
 **Note:** Ignitron will work as a bluetooth keyboard in Looper mode. This could lead to your mobile OS keyboard to disappear, which can ben annoying. In order to prevent this, in the file "BleKeyboard.cpp" (part of ESP-BLE-Keyboard library) change line\
@@ -105,4 +122,4 @@ Go to [src/Config_Definitions.h](Config_Definitions.h) and enable **one of** `#d
 ### Dedicated Preset LEDs
 
 Go to [src/Config_Definitions.h](Config_Definitions.h) and uncomment the line `#define DEDICATED_PRESET_LEDS`.
-This will enable the use of 4 new GPIO pins (0, 4, 12, 15) and related hardware LEDs and resistors as described in the hardware Readme. This also enables a different behavior in **Ignitron** as it will light up the corresponding FX LEDs for the active pedals when a preset is selected, instead of displaying the FX symbols in the OLED display (which is redundant in this config). The bottom line of the OLED display will also show the current mode that is active (Preset mode|Manual FX|Looper mode). 
+This will enable the use of 4 new GPIO pins (0, 4, 12, 15) and related hardware LEDs and resistors as described in the hardware Readme. This also enables a different behavior in **Ignitron** as it will light up the corresponding FX LEDs for the active pedals when a preset is selected, instead of displaying the FX symbols in the OLED display (which is redundant in this config). The bottom line of the OLED display will also show the current mode that is active (Preset mode|Manual FX|Looper mode).
