@@ -67,12 +67,18 @@ private:
     uint8_t presetFullQueryMessageNumber_ = 0;
     uint8_t presetFullTarget_ = 0;
 #ifdef PANELAN_PRESET_TRACE
+    // Set only after process() has seen a connected link; log its loss once.
+    bool presetTraceConnectionObserved_ = false;
     uint32_t presetTraceId_ = 0;
     uint32_t presetTraceNextId_ = 0;
     uint32_t presetTraceDeferredId_ = 0;
     uint32_t presetTraceDeferredAtMs_ = 0;
     uint32_t presetTraceStartedAtMs_ = 0;
     uint32_t presetTraceFullRevision_ = 0;
+    uint32_t presetTraceStartupRevision_ = 0;
+    uint32_t presetTraceStartupId_ = 0;
+    uint8_t presetTraceStartupTarget_ = 0;
+    uint8_t presetTraceSatisfiedTarget_ = 0;
     uint8_t presetTraceObserved_ = 0;
     uint8_t presetTraceFailedTarget_ = 0;
     uint32_t presetTraceFailedId_ = 0;

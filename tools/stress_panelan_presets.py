@@ -13,6 +13,7 @@ def record_trace(text, records, outcomes):
         return False
     fields = dict(re.findall(r"(\w+)=([^\s]+)", text))
     event = fields.get("event")
+    records.setdefault("_trace", []).append(fields)
     if event in ("accept", "reject"):
         outcomes.append(fields)
         if fields.get("id"):
@@ -61,6 +62,90 @@ def final_confirmed_target(targets, records, outcomes):
     return targets[-1]
 
 
+def final_synced_target(targets, records, outcomes):
+    """Require both the final Spark number and a valid full-preset refresh."""
+    if final_confirmed_target(targets, records, outcomes) is None:
+        return None
+    last = outcomes[-1]
+    target = str(targets[-1])
+    noop = last.get("event") == "reject"
+    trace = records.get("_trace", [])
+    # Accepted requests need their own refresh after their authoritative number.
+    # A no-op already has a number and can reuse an existing ready full preset.
+    marker = last
+    if not noop:
+        marker = next((event for event in reversed(trace) if event.get("id") == last.get("id") and
+                       event.get("event") in ("number_confirm", "satisfied")), None)
+        if marker is None:
+            return None
+    marker_index = next((i for i, event in enumerate(trace) if event is marker), -1)
+    ready = False
+    full_msg = None
+    startup_msg = None
+    startup_id = None
+    for index, event in enumerate(trace):
+        if event is marker:
+            continue
+        kind = event.get("event")
+        if not noop and index < marker_index:
+            continue
+        if kind == "disconnect" and index > marker_index:
+            # Link loss invalidates even a completed refresh. An old query or
+            # response cannot establish full readiness on the next link.
+            ready = False
+            full_msg = startup_msg = startup_id = None
+            continue
+        if kind == "number" and event.get("confirmed") != target:
+            # Returning to the slot does not make its old full preset current.
+            ready = False
+            full_msg = startup_msg = startup_id = None
+            continue
+        if kind == "startup_full_query" and event.get("id") == "0":
+            # Reconnect invalidates readiness even when the new query is for
+            # another slot. Only a query for this slot can restore it.
+            ready = False
+            full_msg = startup_msg = startup_id = None
+            if event.get("target") == target and event.get("sent") == "1":
+                startup_msg = event.get("msg")
+                startup_id = "0" if startup_msg is not None else None
+            continue
+        if event.get("target") != target:
+            continue
+        same_request = noop or event.get("id") == last.get("id")
+        # An id=0 result can restore readiness only when paired with the
+        # latest reconnect query for the final slot.
+        boundary = kind in ("startup_full_query", "startup_full_result", "startup_full_timeout") and event.get("id") == "0"
+        if kind == "fail" and index > marker_index and same_request:
+            return None
+        if not same_request and not boundary:
+            continue
+        if kind == "full_query":
+            startup_msg = None
+            startup_id = None
+            full_msg = event.get("msg") if event.get("sent") == "1" else None
+            ready = False
+        if kind == "startup_full_query":
+            full_msg = None
+            startup_msg = event.get("msg") if event.get("sent") == "1" else None
+            startup_id = event.get("id") if startup_msg is not None else None
+            ready = False
+        if kind in ("full_data_timeout", "full_data_conflict") and full_msg is not None and event.get("msg") == full_msg:
+            full_msg = None
+            ready = False
+        if kind == "startup_full_timeout" and startup_msg is not None and event.get("msg") == startup_msg:
+            startup_msg = None
+            startup_id = None
+            ready = False
+        if kind == "full_refresh" and full_msg is not None and event.get("msg") == full_msg:
+            ready = True
+        if (kind == "startup_full_result" and event.get("sent") == "1" and
+                event.get("match") == "1" and event.get("ready") == "1" and
+                startup_msg is not None and event.get("id") == startup_id and
+                event.get("msg") == startup_msg):
+            ready = True
+    return targets[-1] if ready else None
+
+
 def status_is_ready(lines):
     values = {}
     for line in lines:
@@ -79,7 +164,7 @@ def main():
     parser.add_argument("--port", required=True, help="trace-firmware USB serial device")
     parser.add_argument("--sequence", default="2,3,4,2,3,2", help="comma-separated HW slots")
     parser.add_argument("--interval", type=float, default=0.15, help="seconds between commands")
-    parser.add_argument("--settle", type=float, default=12, help="seconds to observe final confirmation")
+    parser.add_argument("--settle", type=float, default=12, help="seconds to observe final number and full refresh")
     parser.add_argument("--ready-timeout", type=float, default=30,
                         help="seconds to wait for BLE identity and current preset before testing")
     args = parser.parse_args()
@@ -161,7 +246,7 @@ def main():
         termios.tcsetattr(fd, termios.TCSANOW, original)
         os.close(fd)
     print(f"rejects={sum(o.get('event') == 'reject' for o in outcomes)} final_target={targets[-1]}")
-    final = final_confirmed_target(targets, records, outcomes)
+    final = final_synced_target(targets, records, outcomes)
     for id_, events in records.items():
         if id_.startswith("_"):
             continue
@@ -177,7 +262,7 @@ def main():
         else:
             latency = "-"
         print(f"id={id_} target={target} sent={bool(sent)} observed={bool(observed)} latency_ms={latency} failed={bool(events.get('fail'))}")
-    print(f"final_confirmed_target={final or 'none'}")
+    print(f"final_synced_target={final or 'none'}")
 
 
 if __name__ == "__main__":

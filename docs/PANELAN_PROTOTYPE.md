@@ -40,22 +40,33 @@ at a time); no automatic cycling is installed. Filter lines beginning with
 phase values are Scanning=0, Reconnecting=1, Identifying=2, Syncing=3,
 Ready=4. `reject` includes target/confirmed/reason without an id; `late_number`
 labels a target observed after failure, **not** a controller confirmation.
- Full results carry response `msg` and query `match` (0/1). Only a 03/10 reply
- with the message number of the verification query issued after the switch
- confirms it; a matching full response refreshes
+Full results carry response `msg` and query `match` (0/1). Only a 03/10 reply
+with the message number of the verification query issued after the switch
+confirms it; a matching full response refreshes
 name/FX separately. A full-data timeout is not a switch failure. Number
 observations are snapshot changes, not a complete record of every wire packet.
+Startup synchronization emits `startup_full_query` (including send status and
+retry), `startup_full_result` (response `msg`, query `match`, and link `ready`),
+and `startup_full_timeout` before retrying an unanswered query. These include
+the request id for an already-observed accepted target, or id=0 for ordinary
+startup sync; `target` is the reported slot at query time. Results are based
+on a full-preset observation revision captured before sending. No payload is logged.
+`event=disconnect` is a diagnostic-only, id-free link-loss marker emitted once
+when `onAmpDisconnected()` runs after a connected `process()` tick, whether
+called directly on a disconnected headless tick or from `process()`, even with
+no preset action pending. It is not emitted on every disconnected tick or
+before the first observed connection.
 In controller mode a 0x38 ACK is only a transport milestone: its wire message
- number must match the outstanding switch before it starts a number query, and
- it never applies or saves a preset. Legacy profiles retain ACK bookkeeping.
- Unsolicited 03/38 broadcasts (and older 03/10 replies) still update Spark's
- reported slot/snapshot; when they report the target they may trigger a fresh
- verification query, but cannot themselves confirm a sent command. Final ACK
- events are retained through a controller tick, even if unrelated ACKs arrive
- afterward. The wire uses a finite message-number space: if an old reply is
- delayed across reuse of the same number, the protocol provides no further
- identity to distinguish it from the new query's reply. Link/time bounds and
- monotonic sequence allocation reduce, but cannot eliminate, that ambiguity.
+number must match the outstanding switch before it starts a number query, and
+it never applies or saves a preset. Legacy profiles retain ACK bookkeeping.
+Unsolicited 03/38 broadcasts (and older 03/10 replies) still update Spark's
+reported slot/snapshot; when they report the target they may trigger a fresh
+verification query, but cannot themselves confirm a sent command. Final ACK
+events are retained through a controller tick, even if unrelated ACKs arrive
+afterward. The wire uses a finite message-number space: if an old reply is
+delayed across reuse of the same number, the protocol provides no further
+identity to distinguish it from the new query's reply. Link/time bounds and
+monotonic sequence allocation reduce, but cannot eliminate, that ambiguity.
 The normal environment emits no `PRESET_TRACE` lines.
 
 Rapid selections use one latest-wins deferred target. While a command is sent,
@@ -65,14 +76,14 @@ the final confirmed selection triggers a full-preset query. A newer tap revokes
 an outstanding refresh; mismatched/late full replies cannot publish active FX
 or name data. FX, tuner and looper still require Ready and do not interleave
 with preset writes. If the sent command times out without a number, the
- deferred selection remains pending. The controller queries the authoritative
- hardware number after timeout, retaining the newest accepted target; only a
- matching 03/10 reply to that exact post-timeout query (consistent with the
- refreshed snapshot) releases the next switch. Late replies to older queries,
- broadcasts, and ACKs cannot release it. A silent amp causes bounded query
- retries while the intent remains pending; link loss fails it. The timed-out
- switch is never confirmed by the reconciliation reply. Trace builds emit
- `reconcile_wait`, `reconcile_query`, and `reconciled` milestones.
+deferred selection remains pending. The controller queries the authoritative
+hardware number after timeout, retaining the newest accepted target; only a
+matching 03/10 reply to that exact post-timeout query (consistent with the
+refreshed snapshot) releases the next switch. Late replies to older queries,
+broadcasts, and ACKs cannot release it. A silent amp causes bounded query
+retries while the intent remains pending; link loss fails it. The timed-out
+switch is never confirmed by the reconciliation reply. Trace builds emit
+`reconcile_wait`, `reconcile_query`, and `reconciled` milestones.
 
 If the latest deferred target already matches Spark's reported slot, no extra
 switch command is sent. Startup sync fetches the full preset; taps during that
@@ -90,11 +101,25 @@ python3 tools/stress_panelan_presets.py --port /dev/your-device --sequence 2,3,4
 
 The stdlib-only script does not flash or auto-detect hardware. It prints each
 trace line and per-request acceptance-to-number-confirmation latency, sent and
-failed status, rejects, and final confirmed target; `none` means it was not
-confirmed within `--settle` seconds or a later `event=number` observation
-reports another slot. A `satisfied` deferred selection or an `already_current`
-rejection can count without a send, subject to the same last-observed-number
-check. Start only when the link is Ready. The
+failed status, rejects, and `final_synced_target`; `none` means the final
+accepted selection/no-op lacks authoritative number evidence and a matching
+full refresh (or ready, matching startup full result), or a later number reports
+another slot. A timed-out query does not count, but a subsequent query and
+matching response can recover. Any id=0 startup query revokes earlier
+readiness, even if it queries another slot; a sent, matching, ready id=0
+result restores it only for the latest preceding id=0 query for the final
+slot. A later number observation of another slot also revokes readiness and
+outstanding refresh correlation: returning to the final slot requires a new
+full query and matching full result. A `disconnect` after the final action's
+number/readiness marker also revokes full readiness and all outstanding query
+correlation, even after `full_refresh` and without a pending action. Only a
+subsequent current-link query paired with a matching ready full observation
+can restore the stress-run pass result. A `satisfied` deferred selection waits
+for its startup full result; an `already_current` rejection can reuse existing
+full readiness only when a startup result is paired with an observed query of
+the same message number (or a matching full query/refresh). The lower-level
+number-only helper is not the stress-run pass result. Start only when the link
+is Ready. The
 host-only queue test is `g++ -std=c++17 -Isrc tools/test_preset_target_queue.cpp
 -o /tmp/test_preset_target_queue && /tmp/test_preset_target_queue`. It covers
 the deferred-target-equals-confirmed transition and the startup-query busy

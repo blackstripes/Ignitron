@@ -50,6 +50,9 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
     const uint32_t id = ++presetTraceNextId_;
     presetTracePhase_ = static_cast<uint8_t>(snapshot.connectionPhase);
     presetTraceFailedTarget_ = 0;
+    presetTraceSatisfiedTarget_ = 0;
+    presetTraceStartupId_ = 0;
+    presetTraceStartupTarget_ = 0;
     // Keep a timed-out refresh's message id for a late diagnostic response.
 #endif
     PRESET_TRACE("event=accept id=%lu target=%u confirmed=%u", static_cast<unsigned long>(id),
@@ -196,6 +199,10 @@ void ControllerActions::clearFxRequest() {
 }
 
 void ControllerActions::onAmpDisconnected() {
+#ifdef PANELAN_PRESET_TRACE
+    if (presetTraceConnectionObserved_) PRESET_TRACE("event=disconnect");
+    presetTraceConnectionObserved_ = false;
+#endif
     SparkDataControl::cancelHWPresetRead();
     cacheScan_.reset();
     cacheMetadataRequested_ = false;
@@ -205,6 +212,11 @@ void ControllerActions::onAmpDisconnected() {
     startupFullPresetQueryIssued_ = false;
     startupFullPresetQueryAtMs_ = 0;
     startupFullPresetQueryMessageNumber_ = 0;
+#ifdef PANELAN_PRESET_TRACE
+    presetTraceStartupId_ = 0;
+    presetTraceStartupTarget_ = 0;
+    presetTraceSatisfiedTarget_ = 0;
+#endif
     state_.expectStartupFullPreset(0);
     if (presetTargets_.queued() != 0) {
         PRESET_TRACE("event=fail id=%lu target=%u reason=disconnect_queued elapsed=%lu",
@@ -272,9 +284,20 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         return;
     }
 #ifdef PANELAN_PRESET_TRACE
+    presetTraceConnectionObserved_ = true;
     // Snapshot changes are Spark observations, not locally inferred success.
     // Retain the most recent failed target to label a later observation as late,
     // never as a successful controller confirmation.
+    if (startupFullPresetQueryIssued_ &&
+        SparkDataControl::fullPresetObservationRevision() != presetTraceStartupRevision_) {
+        presetTraceStartupRevision_ = SparkDataControl::fullPresetObservationRevision();
+        const bool match = SparkDataControl::fullPresetObservationMessageNumber() == startupFullPresetQueryMessageNumber_;
+        PRESET_TRACE("event=startup_full_result id=%lu target=%u msg=%u sent=1 match=%u ready=%u",
+                     static_cast<unsigned long>(presetTraceStartupId_), presetTraceStartupTarget_,
+                     SparkDataControl::fullPresetObservationMessageNumber(), match,
+                     match && snapshot.fullPresetObservedForLink &&
+                         snapshot.confirmedHardwarePreset == presetTraceStartupTarget_);
+    }
     if (SparkDataControl::isAmpConnected() && snapshot.confirmedHardwarePreset != presetTraceObserved_) {
         PRESET_TRACE("event=number id=%lu target=%u confirmed=%u", static_cast<unsigned long>(presetTraceId_),
                       sentPreset_ ? sentPreset_ : presetTargets_.queued(), snapshot.confirmedHardwarePreset);
@@ -497,11 +520,26 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         // legacy cache restoration and giving the current link one authority.
         if (!startupFullPresetQueryIssued_ ||
             millis() - startupFullPresetQueryAtMs_ >= kPresetTimeoutMs) {
+#ifdef PANELAN_PRESET_TRACE
+            const bool retry = startupFullPresetQueryAtMs_ != 0;
+            if (startupFullPresetQueryIssued_)
+                PRESET_TRACE("event=startup_full_timeout id=%lu target=%u msg=%u sent=1 match=0 ready=0",
+                             static_cast<unsigned long>(presetTraceStartupId_), presetTraceStartupTarget_,
+                             startupFullPresetQueryMessageNumber_);
+            // Capture before sending, not after a possibly immediate observation.
+            presetTraceStartupRevision_ = SparkDataControl::fullPresetObservationRevision();
+            presetTraceStartupTarget_ = snapshot.confirmedHardwarePreset;
+            presetTraceStartupId_ = presetTraceSatisfiedTarget_ == snapshot.confirmedHardwarePreset ? presetTraceId_ : 0;
+#endif
             // On retry, revoke the old reply even if the new send fails.
             state_.expectStartupFullPreset(0);
             SparkDataControl::expectControllerFullPreset(0);
             startupFullPresetQueryIssued_ = dataControl.getCurrentPresetFromSpark(&startupFullPresetQueryMessageNumber_);
             startupFullPresetQueryAtMs_ = millis();
+            PRESET_TRACE("event=startup_full_query id=%lu target=%u msg=%u sent=%u match=0 ready=0 retry=%u",
+                         static_cast<unsigned long>(presetTraceStartupId_), snapshot.confirmedHardwarePreset,
+                         startupFullPresetQueryIssued_ ? startupFullPresetQueryMessageNumber_ : 0,
+                         startupFullPresetQueryIssued_, retry);
             if (startupFullPresetQueryIssued_) {
                 state_.expectStartupFullPreset(startupFullPresetQueryMessageNumber_);
                 SparkDataControl::expectControllerFullPreset(startupFullPresetQueryMessageNumber_);
@@ -549,6 +587,9 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                                  static_cast<unsigned long>(presetTraceId_), presetTargets_.queued(),
                                  snapshot.confirmedHardwarePreset,
                                  static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+#ifdef PANELAN_PRESET_TRACE
+                    presetTraceSatisfiedTarget_ = presetTargets_.queued();
+#endif
                     presetTargets_.takeQueued();
                 } else state_.beginHardwarePresetRequest(presetTargets_.queued());
                 sentPreset_ = 0;
@@ -832,6 +873,9 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         PRESET_TRACE("event=satisfied id=%lu target=%u confirmed=%u elapsed=%lu",
                      static_cast<unsigned long>(presetTraceId_), preset, snapshot.confirmedHardwarePreset,
                      static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+#ifdef PANELAN_PRESET_TRACE
+        presetTraceSatisfiedTarget_ = preset;
+#endif
         state_.confirmHardwarePresetRequest(preset);
         return;
     }
