@@ -315,9 +315,10 @@ On user toggle:
 5. confirm only when either a post-send incoming FX_ONOFF observation for that
    same model or a post-send authoritative full-preset response shows the
    requested state. A final transport ACK, controller render revision, or
-   pending-state mutation is not state confirmation. On NEO Core, a matching
-   final `0x15` ACK may trigger the full-preset query because the amp can omit
-   FX_ONOFF; it never confirms the tile by itself.
+    pending-state mutation is not state confirmation. On NEO Core, query the
+    full preset after a short grace period even if the final `0x15` ACK is
+    missing; ACK never confirms. An old-state full reply only conflicts if its
+    query was issued after the matching ACK; an earlier query is inconclusive.
 6. cancel/fail on disconnect, timeout, a conflicting fresh FX observation, or
    a full-preset response that proves the target model/chain changed. Do not
    cancel solely because the hardware-preset number temporarily becomes

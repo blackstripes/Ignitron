@@ -2,7 +2,6 @@
 
 #include "controller/ControllerState.h"
 #include "controller/PresetRequestGate.h"
-#include "controller/PresetAckMatch.h"
 #include "controller/PresetLinkReset.h"
 #include "controller/ProtocolObservations.h"
 #include "SparkDataControl.h"
@@ -23,7 +22,8 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
     const uint8_t maxHardwarePreset =
         static_cast<uint8_t>(SparkPresetControl::getInstance().numberOfHWBanks() * PRESETS_PER_BANK);
     const bool busy = presetSelectionMayProceedDuringSync(sentPreset_ != 0, presetTargets_.queued() != 0,
-                                                           awaitingPresetFullResponse_, startupFullPresetQueryIssued_,
+                                                           awaitingPresetFullResponse_ || fullPresetRetry_.attempted(),
+                                                           startupFullPresetQueryIssued_,
                                                            snapshot.fullPresetObservedForLink);
     const char *rejection = preset < 1 || preset > maxHardwarePreset ? "range" :
         hasPendingFxOperation() ? "fx" : queuedTunerRequest_ || tunerRequestSent_ ? "tuner" :
@@ -46,6 +46,7 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
     // The old startup query is obsolete as well. If the new intent is already
     // the reported slot, the synchronizer must issue a fresh full query.
     startupFullPresetQueryIssued_ = false;
+    fullPresetRetry_.reset();
 #ifdef PANELAN_PRESET_TRACE
     const uint32_t id = ++presetTraceNextId_;
     presetTracePhase_ = static_cast<uint8_t>(snapshot.connectionPhase);
@@ -86,6 +87,8 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
         return false;
     }
 
+    fxFullPresetRetry_.reset();
+    fxAckReceived_ = false;
     queuedFxSlot_ = slot;
     queuedFxDesiredEnabled_ = !fx.enabled;
     queuedFxModelName_ = fx.modelName;
@@ -179,7 +182,16 @@ void ControllerActions::cancelFxRequest(ControllerState &state, SparkDataControl
     }
     clearFxRequest();
     if (refresh && dataControl != nullptr) {
-        dataControl->getCurrentPresetFromSpark();
+        // The failed command leaves the observed FX state uncertain, even if
+        // its pending flag has been cleared. A raw query is not accepted by
+        // PanelLan's full-preset publication gate. Let startup sync register
+        // both expectations around its own query instead.
+        state.invalidatePresetData();
+        state.expectStartupFullPreset(0);
+        SparkDataControl::expectControllerFullPreset(0);
+        startupFullPresetQueryIssued_ = false;
+        startupFullPresetQueryMessageNumber_ = 0;
+        fullPresetRetry_.reset();
     }
 }
 
@@ -188,14 +200,18 @@ void ControllerActions::clearFxRequest() {
     sentFxSlot_ = kNoFxSlot;
     queuedFxDesiredEnabled_ = false;
     sentFxDesiredEnabled_ = false;
+    fxEnabledBeforeRequest_ = false;
     queuedFxModelName_.clear();
     sentFxModelName_.clear();
     fxChainIdentityBeforeRequest_.clear();
+    fxSentAtMs_ = 0;
     fxModelObservationRevisionBeforeRequest_ = 0;
     fxFullPresetObservationRevisionBeforeRequest_ = 0;
     fxSentAfterAckRevision_ = 0;
     sentFxMessageNumber_ = 0;
-    fxFullPresetQueryIssued_ = false;
+    fxAckReceived_ = false;
+    if (fxFullPresetRetry_.attempted()) SparkDataControl::expectControllerFullPreset(0);
+    fxFullPresetRetry_.reset();
 }
 
 void ControllerActions::onAmpDisconnected() {
@@ -210,7 +226,7 @@ void ControllerActions::onAmpDisconnected() {
     currentPresetQueryIssued_ = false;
     currentPresetQueryAtMs_ = 0;
     startupFullPresetQueryIssued_ = false;
-    startupFullPresetQueryAtMs_ = 0;
+    fullPresetRetry_.reset();
     startupFullPresetQueryMessageNumber_ = 0;
 #ifdef PANELAN_PRESET_TRACE
     presetTraceStartupId_ = 0;
@@ -249,15 +265,11 @@ void ControllerActions::onAmpDisconnected() {
         persistentEventLog.record(PersistentEvent::PresetFailed, sentPreset_, true);
     }
     sentPreset_ = 0;
-    sentPresetMessageNumber_ = 0;
     presetBeforeRequest_ = 0;
     sentAtMs_ = 0;
     sentAfterAckRevision_ = 0;
-    sentAfterNumberRevision_ = 0;
-    confirmationQueryMessageNumber_ = 0;
-    awaitingConfirmationQuery_ = false;
+    numberVerification_.reset();
     awaitingPresetFullResponse_ = false;
-    presetFullObservationRevisionBeforeQuery_ = 0;
     presetFullQueryMessageNumber_ = 0;
     presetFullTarget_ = 0;
     queuedTunerRequest_ = false;
@@ -274,6 +286,7 @@ void ControllerActions::onAmpDisconnected() {
     // State already marks the rendered FX stale. Preserve the existing failure
     // event for an unconfirmed command, but never query the disconnected amp.
     if (hasPendingFxOperation()) cancelFxRequest(state_, nullptr, false, "BLE disconnected");
+    fxFullPresetRetry_.reset();
     fxSentAtMs_ = 0;
 }
 
@@ -518,10 +531,9 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         snapshot.confirmedHardwarePreset != 0 && !snapshot.fullPresetObservedForLink) {
         // PanelLan owns the startup full-preset request, avoiding races with
         // legacy cache restoration and giving the current link one authority.
-        if (!startupFullPresetQueryIssued_ ||
-            millis() - startupFullPresetQueryAtMs_ >= kPresetTimeoutMs) {
+        if (fullPresetRetry_.due(millis())) {
 #ifdef PANELAN_PRESET_TRACE
-            const bool retry = startupFullPresetQueryAtMs_ != 0;
+            const bool retry = fullPresetRetry_.attempted();
             if (startupFullPresetQueryIssued_)
                 PRESET_TRACE("event=startup_full_timeout id=%lu target=%u msg=%u sent=1 match=0 ready=0",
                              static_cast<unsigned long>(presetTraceStartupId_), presetTraceStartupTarget_,
@@ -534,8 +546,10 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             // On retry, revoke the old reply even if the new send fails.
             state_.expectStartupFullPreset(0);
             SparkDataControl::expectControllerFullPreset(0);
+            const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
             startupFullPresetQueryIssued_ = dataControl.getCurrentPresetFromSpark(&startupFullPresetQueryMessageNumber_);
-            startupFullPresetQueryAtMs_ = millis();
+            fullPresetRetry_.attemptedAt(millis(), startupFullPresetQueryIssued_,
+                                         startupFullPresetQueryMessageNumber_, revisionBeforeSend);
             PRESET_TRACE("event=startup_full_query id=%lu target=%u msg=%u sent=%u match=0 ready=0 retry=%u",
                          static_cast<unsigned long>(presetTraceStartupId_), snapshot.confirmedHardwarePreset,
                          startupFullPresetQueryIssued_ ? startupFullPresetQueryMessageNumber_ : 0,
@@ -555,13 +569,10 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         // while BLE is connected. Keep verifying the sent action; only link
         // loss (above), conflict, send failure or timeout can fail it.
         bool matchedQuery = false;
-        bool observedTarget = false;
         uint8_t number = 0, cmd = 0, subcmd = 0, msg = 0;
-        while (SparkDataControl::nextHardwareNumber(sentAfterNumberRevision_, number, cmd, subcmd, msg)) {
-            if (matchesHardwareNumberReply(confirmationQueryMessageNumber_, cmd, subcmd, msg) &&
-                number == sentPreset_) matchedQuery = true;
-            if (number == sentPreset_) observedTarget = true;
-        }
+        while (SparkDataControl::nextHardwareNumber(numberVerification_.cursor(), number, cmd, subcmd, msg))
+            if (numberVerification_.observe(sentPreset_, number, cmd, subcmd, msg,
+                                            snapshot.confirmedHardwarePreset)) matchedQuery = true;
         if (matchedQuery && snapshot.confirmedHardwarePreset == sentPreset_) {
             // Only a response to this command's post-send verification query
             // can confirm. A late 03/10 or unsolicited 03/38 still updates
@@ -593,14 +604,14 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                     presetTargets_.takeQueued();
                 } else state_.beginHardwarePresetRequest(presetTargets_.queued());
                 sentPreset_ = 0;
-                sentPresetMessageNumber_ = 0;
-                awaitingConfirmationQuery_ = false;
-                confirmationQueryMessageNumber_ = 0;
+                numberVerification_.reset();
                 return;
             }
             presetFullTarget_ = sentPreset_;
-            presetFullObservationRevisionBeforeQuery_ = SparkDataControl::fullPresetObservationRevision();
+            const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
             awaitingPresetFullResponse_ = dataControl.getCurrentPresetFromSpark(&presetFullQueryMessageNumber_);
+            fullPresetRetry_.attemptedAt(millis(), awaitingPresetFullResponse_,
+                                         presetFullQueryMessageNumber_, revisionBeforeSend);
             PRESET_TRACE("event=full_query id=%lu target=%u sent=%u msg=%u elapsed=%lu",
                          static_cast<unsigned long>(presetTraceId_), sentPreset_, awaitingPresetFullResponse_,
                          awaitingPresetFullResponse_ ? presetFullQueryMessageNumber_ : 0,
@@ -609,9 +620,8 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 state_.expectStartupFullPreset(presetFullQueryMessageNumber_);
                 SparkDataControl::expectControllerFullPreset(presetFullQueryMessageNumber_);
 #ifdef PANELAN_PRESET_TRACE
-                presetTraceFullRevision_ = presetFullObservationRevisionBeforeQuery_;
+                presetTraceFullRevision_ = revisionBeforeSend;
 #endif
-                sentAtMs_ = millis();
             } else {
                 PRESET_TRACE("event=full_query_send_failed id=%lu target=%u elapsed=%lu",
                              static_cast<unsigned long>(presetTraceId_), sentPreset_,
@@ -619,9 +629,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             }
             Serial.printf("Controller: preset %u number confirmed; refreshing full preset\n", sentPreset_);
             sentPreset_ = 0;
-            sentPresetMessageNumber_ = 0;
-            awaitingConfirmationQuery_ = false;
-            confirmationQueryMessageNumber_ = 0;
+            numberVerification_.reset();
         } else if (snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetBeforeRequest_ &&
                    snapshot.confirmedHardwarePreset != sentPreset_) {
             PRESET_TRACE("event=fail id=%lu target=%u reason=conflict_number confirmed=%u elapsed=%lu",
@@ -638,7 +646,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             state_.invalidatePresetData();
             Serial.printf("Controller: preset conflict (Spark reports %u)\n", snapshot.confirmedHardwarePreset);
             sentPreset_ = 0;
-            sentPresetMessageNumber_ = 0;
+            numberVerification_.reset();
             if (presetTargets_.deferred() != 0) {
                 presetTargets_.promote();
 #ifdef PANELAN_PRESET_TRACE
@@ -650,26 +658,27 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             }
         } else {
             AckData ack{};
-            bool matchingAck = false;
             while (SparkDataControl::nextFinalAck(sentAfterAckRevision_, ack)) {
             PRESET_TRACE("event=ack id=%lu target=%u subtype=%u msg=%u elapsed=%lu",
                          static_cast<unsigned long>(presetTraceId_), sentPreset_, ack.subcmd, ack.msgNum,
                          static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
-                if (matchesHardwarePresetAck(sentPresetMessageNumber_, ack.subcmd, ack.msgNum)) matchingAck = true;
             }
-            if (!awaitingConfirmationQuery_ && (matchingAck || observedTarget)) {
+            // The command timeout is anchored to the switch, not extended by
+            // any query or reply. Poll even if Spark emits no ACK/broadcast.
+            if (numberVerification_.shouldQuery(millis())) {
                 // Spark NEO Core accepts a hardware-preset command without
-                // necessarily broadcasting a new preset number. ACK is only
-                // a transport milestone; request the authoritative value.
-                Serial.println("Controller: preset ACK received; verifying Spark state");
-                const bool querySent = dataControl.getCurrentPresetNum(&confirmationQueryMessageNumber_);
+                // necessarily sending an ACK or number broadcast. A query
+                // reply is the only confirmation of its actual slot.
+                Serial.println("Controller: verifying Spark preset number");
+                const uint32_t beforeQuery = SparkDataControl::hardwareNumberRevision();
+                uint8_t queryMessage = 0;
+                const bool querySent = dataControl.getCurrentPresetNum(&queryMessage);
                 PRESET_TRACE("event=number_query id=%lu target=%u sent=%u elapsed=%lu",
-                             static_cast<unsigned long>(presetTraceId_), sentPreset_, querySent,
-                             static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
-                awaitingConfirmationQuery_ = querySent;
-                if (querySent) sentAtMs_ = millis();
+                              static_cast<unsigned long>(presetTraceId_), sentPreset_, querySent,
+                              static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+                numberVerification_.attempted(querySent, queryMessage, beforeQuery, millis());
             }
-            if (millis() - sentAtMs_ >= kPresetTimeoutMs) {
+            if (numberVerification_.expired(millis())) {
             PRESET_TRACE("event=fail id=%lu target=%u reason=number_timeout elapsed=%lu",
                          static_cast<unsigned long>(presetTraceId_), sentPreset_,
                          static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
@@ -682,9 +691,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             SparkDataControl::recordControllerPresetFailure();
             SparkDataControl::expectControllerFullPreset(0);
             sentPreset_ = 0;
-            sentPresetMessageNumber_ = 0;
-            awaitingConfirmationQuery_ = false;
-            confirmationQueryMessageNumber_ = 0;
+            numberVerification_.reset();
             if (presetTargets_.deferred() != 0) {
                 presetTargets_.promote();
 #ifdef PANELAN_PRESET_TRACE
@@ -715,16 +722,17 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                          static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
         }
 #endif
-        if (SparkDataControl::fullPresetObservationRevision() != presetFullObservationRevisionBeforeQuery_ &&
-            SparkDataControl::fullPresetObservationMessageNumber() == presetFullQueryMessageNumber_ &&
+        if (fullPresetRetry_.matches(SparkDataControl::fullPresetObservationMessageNumber(),
+                                     SparkDataControl::fullPresetObservationRevision()) &&
             snapshot.confirmedHardwarePreset == presetFullTarget_) {
             PRESET_TRACE("event=full_refresh id=%lu target=%u msg=%u elapsed=%lu",
                          static_cast<unsigned long>(presetTraceId_), presetFullTarget_, presetFullQueryMessageNumber_,
                          static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
             awaitingPresetFullResponse_ = false;
+            fullPresetRetry_.reset();
             SparkDataControl::expectControllerFullPreset(0);
-        } else if (millis() - sentAtMs_ >= kPresetTimeoutMs ||
-                   (snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetFullTarget_)) {
+        } else if (fullPresetRetry_.due(millis()) ||
+                    (snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetFullTarget_)) {
             const bool conflict = snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetFullTarget_;
             PRESET_TRACE("event=%s id=%lu target=%u msg=%u elapsed=%lu",
                          conflict ? "full_data_conflict" : "full_data_timeout",
@@ -739,6 +747,8 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             presetTraceFailedFullId_ = presetTraceId_;
 #endif
             awaitingPresetFullResponse_ = false;
+            if (conflict) fullPresetRetry_.reset();
+            else fullPresetRetry_.revoke();
             // Both gates must be revoked before startup sync can issue a new
             // query. A delayed reply to this obsolete message is not evidence.
             SparkDataControl::expectControllerFullPreset(0);
@@ -752,10 +762,33 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             cancelFxRequest(state_, &dataControl, true, "invalid FX slot");
             return;
         }
+        // Bound the action from the original command, even if an ACK or a
+        // response arrives in the tick that crosses the deadline.
+        if (fxFullPresetRetry_.expired(millis(), fxSentAtMs_)) {
+            cancelFxRequest(state_, &dataControl, true, "confirmation timed out");
+            return;
+        }
 
         const ControllerFxSlot &fx = snapshot.fxSlots[sentFxSlot_];
+        // Drain ACK history before interpreting a full reply. An ACK received
+        // after a query was sent cannot make that earlier query authoritative.
+        AckData ack{};
+        while (SparkDataControl::nextFinalAck(fxSentAfterAckRevision_, ack))
+            if (ack.subcmd == 0x15 && ack.msgNum == sentFxMessageNumber_) fxAckReceived_ = true;
         const bool fullPresetObservedAfterSend =
             SparkDataControl::fullPresetObservationRevision() != fxFullPresetObservationRevisionBeforeRequest_;
+        const bool matchingFullPreset = fullPresetObservedAfterSend &&
+            fxFullPresetRetry_.matches(SparkDataControl::fullPresetObservationMessageNumber(),
+                                       SparkDataControl::fullPresetObservationRevision());
+#ifdef PANELAN_PRESET_TRACE
+        if (fullPresetObservedAfterSend)
+            PRESET_TRACE("event=fx_full_result slot=%u msg=%u match=%u ack=%u known=%u enabled=%u desired=%u chain=%u elapsed=%lu",
+                          sentFxSlot_, SparkDataControl::fullPresetObservationMessageNumber(), matchingFullPreset,
+                          matchingFullPreset && fxFullPresetRetry_.querySentAfterAck(),
+                         fx.known, fx.enabled, sentFxDesiredEnabled_,
+                         snapshot.fxChainIdentity == fxChainIdentityBeforeRequest_,
+                         static_cast<unsigned long>(millis() - fxSentAtMs_));
+#endif
         if (fullPresetObservedAfterSend &&
             (!fx.known || fx.modelName != sentFxModelName_ || snapshot.fxChainIdentity != fxChainIdentityBeforeRequest_)) {
             // Only an applied full-preset response can establish a target
@@ -778,37 +811,38 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         } else if (modelObservedAfterSend && fx.known && fx.modelName == sentFxModelName_ &&
                    fx.enabled != sentFxDesiredEnabled_) {
             cancelFxRequest(state_, &dataControl, true, "FX_ONOFF reported conflicting state");
-        } else if (fullPresetObservedAfterSend && fx.known && fx.modelName == sentFxModelName_ &&
-                   fx.enabled == sentFxDesiredEnabled_ && fx.enabled != fxEnabledBeforeRequest_) {
+        } else if (matchingFullPreset && fx.known && fx.modelName == sentFxModelName_ &&
+                    fx.enabled == sentFxDesiredEnabled_ && fx.enabled != fxEnabledBeforeRequest_) {
             Serial.printf("Controller: FX %u (%s) confirmed by full preset response\n", sentFxSlot_, sentFxModelName_.c_str());
             state_.confirmFxToggleRequest(sentFxSlot_);
             SparkDataControl::recordControllerFxConfirm();
             persistentEventLog.record(PersistentEvent::FxConfirmed, sentFxSlot_, true);
             clearFxRequest();
-        } else if (fullPresetObservedAfterSend && fx.known && fx.modelName == sentFxModelName_ &&
-                   fx.enabled != sentFxDesiredEnabled_) {
+        } else if (matchingFullPreset && fx.known && fx.modelName == sentFxModelName_ &&
+                     fx.enabled != sentFxDesiredEnabled_ && fxFullPresetRetry_.querySentAfterAck()) {
             cancelFxRequest(state_, &dataControl, true, "full preset reported conflicting FX state");
         } else {
-            AckData ack{};
-            bool matchingAck = false;
-            while (SparkDataControl::nextFinalAck(fxSentAfterAckRevision_, ack))
-                if (ack.subcmd == 0x15 && ack.msgNum == sentFxMessageNumber_) matchingAck = true;
-            if (!fxFullPresetQueryIssued_ && matchingAck) {
-                // NEO Core can ACK an effect change without a separate
-                // FX_ONOFF event. The ACK starts a query; it never confirms.
+            // Neither ACK nor a pre-ACK old-state full reply confirms or
+            // conflicts. Query after the grace period even without ACK, and
+            // wait a full response window before replacing fragmented replies.
+            if (fxFullPresetRetry_.due(millis(), fxSentAtMs_)) {
+                // NEO Core may omit both ACK and FX_ONOFF. Revoke the previous reply
+                // before every replacement, including a failed send.
+                SparkDataControl::expectControllerFullPreset(0);
+                const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
+                const bool firstQuery = !fxFullPresetRetry_.attempted();
                 uint8_t fxQueryMessage = 0;
-                fxFullPresetQueryIssued_ = dataControl.getCurrentPresetFromSpark(&fxQueryMessage);
-                if (fxFullPresetQueryIssued_) {
-                    SparkDataControl::expectControllerFullPreset(fxQueryMessage);
-                    // The full-preset query is a second protocol round trip.
-                    // Its confirmation window starts when that query is sent,
-                    // rather than when the original FX command was sent.
-                    fxSentAtMs_ = millis();
-                }
-                Serial.printf("Controller: FX %u ACK received; querying full preset (%s)\n", sentFxSlot_,
-                              fxFullPresetQueryIssued_ ? "sent" : "send failed");
-            } else if (millis() - fxSentAtMs_ >= kFxTimeoutMs) {
-                cancelFxRequest(state_, &dataControl, true, "confirmation timed out");
+                const bool sent = dataControl.getCurrentPresetFromSpark(&fxQueryMessage);
+                fxFullPresetRetry_.attemptedAt(millis(), sent, fxQueryMessage, revisionBeforeSend,
+                                               fxAckReceived_);
+                if (sent) SparkDataControl::expectControllerFullPreset(fxQueryMessage);
+#ifdef PANELAN_PRESET_TRACE
+                PRESET_TRACE("event=fx_full_query slot=%u msg=%u sent=%u first=%u ack=%u elapsed=%lu",
+                              sentFxSlot_, sent ? fxQueryMessage : 0, sent, firstQuery, fxAckReceived_,
+                             static_cast<unsigned long>(millis() - fxSentAtMs_));
+#endif
+                Serial.printf("Controller: FX %u verification full preset (%s)\n", sentFxSlot_,
+                              sent ? "sent" : "send failed");
             }
         }
         return;
@@ -841,6 +875,9 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         // incoming FX_ONOFF update for this exact model may confirm success.
         const uint32_t observationBeforeSend =
             SparkDataControl::fxModelObservationRevision(queuedFxModelName_);
+        // An ACK can be recorded inside switchEffectOnOff(). Retain the
+        // pre-send cursor so the next tick sees it, but not older ACKs.
+        const uint32_t ackRevisionBeforeSend = SparkDataControl::finalAckRevision();
         uint8_t messageNumber = 0;
         if (SparkDataControl::switchEffectOnOff(queuedFxModelName_, queuedFxDesiredEnabled_, &messageNumber)) {
             sentFxSlot_ = queuedFxSlot_;
@@ -851,9 +888,14 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             fxSentAtMs_ = millis();
             fxModelObservationRevisionBeforeRequest_ = observationBeforeSend;
             fxFullPresetObservationRevisionBeforeRequest_ = SparkDataControl::fullPresetObservationRevision();
-            fxSentAfterAckRevision_ = SparkDataControl::finalAckRevision();
+            fxSentAfterAckRevision_ = ackRevisionBeforeSend;
             sentFxMessageNumber_ = messageNumber;
-            fxFullPresetQueryIssued_ = false;
+            fxAckReceived_ = false;
+            fxFullPresetRetry_.reset();
+#ifdef PANELAN_PRESET_TRACE
+            PRESET_TRACE("event=fx_sent slot=%u msg=%u desired=%u", sentFxSlot_, messageNumber,
+                         sentFxDesiredEnabled_);
+#endif
             SparkDataControl::recordControllerFxSend();
             persistentEventLog.record(PersistentEvent::FxSend, sentFxSlot_);
             Serial.printf("Controller: sending FX %u (%s) %s\n", sentFxSlot_, sentFxModelName_.c_str(),
@@ -879,18 +921,14 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         state_.confirmHardwarePresetRequest(preset);
         return;
     }
-    uint8_t messageNumber = 0;
-    if (dataControl.changeHWPreset(preset, &messageNumber)) {
+    if (dataControl.changeHWPreset(preset)) {
         PRESET_TRACE("event=sent id=%lu target=%u elapsed=%lu", static_cast<unsigned long>(presetTraceId_),
                      preset, static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
         Serial.printf("Controller: sending preset %u\n", preset);
         sentPreset_ = preset;
-        sentPresetMessageNumber_ = messageNumber;
         sentAtMs_ = millis();
         sentAfterAckRevision_ = SparkDataControl::finalAckRevision();
-        sentAfterNumberRevision_ = SparkDataControl::hardwareNumberRevision();
-        confirmationQueryMessageNumber_ = 0;
-        awaitingConfirmationQuery_ = false;
+        numberVerification_.start(sentAtMs_, SparkDataControl::hardwareNumberRevision());
         awaitingPresetFullResponse_ = false;
         SparkDataControl::recordControllerPresetSend();
         persistentEventLog.record(PersistentEvent::PresetSend, preset);

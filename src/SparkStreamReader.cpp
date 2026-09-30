@@ -335,6 +335,21 @@ void SparkStreamReader::readPreset() {
     if (!parseValid_ || !readSparkPresetChecksum(msgData.data(), msgData.size(), msgPos, chksum)) {
         statusObject.resetLastMessageType();
         Serial.println("Discarding preset: invalid payload checksum or unsupported/truncated tail");
+#ifdef PANELAN_PRESET_TRACE
+        const size_t bodyEnd = msgPos < 0 ? 0 : static_cast<size_t>(msgPos);
+        const size_t remaining = bodyEnd <= msgData.size() ? msgData.size() - bodyEnd : 0;
+        uint8_t sum = 0;
+        if (msgData.size() > 2)
+            for (size_t i = 2; i + 1 < msgData.size(); ++i)
+                sum = static_cast<uint8_t>(sum + msgData[i]);
+        const bool tailShape = remaining == 1 ||
+            (remaining == 11 && bodyEnd + 5 < msgData.size() &&
+             msgData[bodyEnd] == 0xCA && msgData[bodyEnd + 5] == 0xCA);
+        const bool checksumMatches = !msgData.empty() && sum == msgData.back();
+        Serial.printf("PRESET_TRACE event=preset_parse_reject bytes=%u body=%u remaining=%u parsed=%u shape=%u checksum=%u\n",
+                      static_cast<unsigned>(msgData.size()), static_cast<unsigned>(bodyEnd),
+                      static_cast<unsigned>(remaining), parseValid_, tailShape, checksumMatches);
+#endif
         return;
     }
     msgPos = msgData.size();

@@ -176,9 +176,11 @@ Implication:
   requested effect model, or a post-send full-preset response that reports
   that exact model in the requested state. Both observations must be applied
   to SparkPresetControl before ControllerActions consumes them.
-- NEO Core may return the final `0x15` transport ACK without an FX_ONOFF
-  notification. For the matching serialized action, use that ACK only to
-  request the full current preset; the ACK itself is never confirmation.
+- NEO Core may omit the final `0x15` ACK and FX_ONOFF notification. Query the
+  full current preset after a short grace period even without ACK. A matching
+  full reply showing the requested state confirms; an old-state reply only
+  conflicts when its query was sent after the matching ACK. The ACK itself
+  is never confirmation.
 - the protocol does not correlate that observation to a specific outgoing
   command. A matching external Spark/App event after the request is therefore
   indistinguishable from the controller's result and resolves to the same

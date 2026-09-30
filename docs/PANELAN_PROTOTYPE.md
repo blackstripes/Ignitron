@@ -51,23 +51,78 @@ and `startup_full_timeout` before retrying an unanswered query. These include
 the request id for an already-observed accepted target, or id=0 for ordinary
 startup sync; `target` is the reported slot at query time. Results are based
 on a full-preset observation revision captured before sending. No payload is logged.
+After a confirmed switch, the full-preset read and any startup-sync recovery
+use a separate **two-second** attempt cadence (also after send failure), not
+the five-second switch confirmation timeout. A missing post-switch full reply
+revokes both old response expectations before the next startup retry; only a
+fresh response correlated to the current query may restore name/FX readiness.
+The confirmed selection remains confirmed while full data is stale. A newer
+selection or disconnect cancels the schedule. This does not alter number
+verification polling, tuner, looper, or cache timing. Host-only cadence
+and correlation regression (does not exercise the BLE parser or controller):
+`g++ -std=c++17 -Wall -Wextra -Werror -Isrc tools/test_full_preset_retry.cpp -o /tmp/test_full_preset_retry && /tmp/test_full_preset_retry`.
+For FX, a matching command ACK is a timing milestone (never confirmation).
+The ACK cursor is captured before the FX command is issued, so an
+ACK arriving during the send is eligible on the next tick; ACKs already present
+before the send are not. NEO Core may omit both ACK and FX_ONOFF. Host-only send-boundary model:
+`g++ -std=c++17 -Wall -Wextra -Werror -Isrc tools/test_fx_ack_during_send.cpp -o /tmp/test_fx_ack_during_send && /tmp/test_fx_ack_during_send`.
+The first correlated full-preset query is sent after a **one-second grace period
+from the FX send**, with or without ACK; failed sends and unanswered queries
+are retried no sooner than **five seconds after the previous attempt**, giving
+large fragmented replies a full response window before replacement (unlike the
+two-second preset refresh schedule). This is an FX-specific response window,
+not a parser timeout guarantee. Each replacement revokes the previous response
+gate before sending, including on send failure. A fresh direct FX_ONOFF takes
+priority; a current correlated full response showing the requested state can
+confirm even without ACK. An old-state response to a query issued before the
+matching ACK is inconclusive, even if the ACK arrives before its reply; only
+an old-state reply to a query issued after that ACK establishes a conflict.
+`fx_full_query` trace lines include `ack=0|1` at query send time (also logged
+for failed attempts); `fx_full_result` reports the matched query's ACK status.
+The FX action remains pending (and preset selection is blocked) until
+resolved, with a **15-second** deadline anchored to the original FX command;
+ACKs and retries never extend it. A reply at or after the deadline cannot confirm.
+FX timeout, conflict or send failure also invalidates the preset snapshot and
+revokes both full-query gates; the startup synchronizer, not an unregistered
+raw query, retries a correlated full read (including after a failed send).
+FX stays unavailable until its matching response restores Ready. Disconnect
+still sends no recovery query. Cancellation/disconnect clears the query gate
+and schedule. Host-only FX gate
+model: `g++ -std=c++17 -Wall -Wextra -Werror -Isrc tools/test_fx_full_preset_retry.cpp -o /tmp/test_fx_full_preset_retry && /tmp/test_fx_full_preset_retry`.
 `event=disconnect` is a diagnostic-only, id-free link-loss marker emitted once
 when `onAmpDisconnected()` runs after a connected `process()` tick, whether
 called directly on a disconnected headless tick or from `process()`, even with
 no preset action pending. It is not emitted on every disconnected tick or
 before the first observed connection.
-In controller mode a 0x38 ACK is only a transport milestone: its wire message
-number must match the outstanding switch before it starts a number query, and
-it never applies or saves a preset. Legacy profiles retain ACK bookkeeping.
+In controller mode a 0x38 ACK is only a transport milestone; it never applies
+or saves a preset. Verification polls start even if no ACK or number broadcast
+arrives. Legacy profiles retain ACK bookkeeping.
 Unsolicited 03/38 broadcasts (and older 03/10 replies) still update Spark's
-reported slot/snapshot; when they report the target they may trigger a fresh
-verification query, but cannot themselves confirm a sent command. Final ACK
+reported slot/snapshot, but cannot themselves confirm a sent command. Final ACK
 events are retained through a controller tick, even if unrelated ACKs arrive
 afterward. The wire uses a finite message-number space: if an old reply is
 delayed across reuse of the same number, the protocol provides no further
 identity to distinguish it from the new query's reply. Link/time bounds and
 monotonic sequence allocation reduce, but cannot eliminate, that ambiguity.
 The normal environment emits no `PRESET_TRACE` lines.
+
+After sending a switch, the controller sends a 02/10 number query on the next
+controller tick, even without any ACK/broadcast, and polls at most once per
+500 ms until confirmation or the **original five-second switch timeout**.
+Failed sends and unanswered replies are retried at that bounded cadence;
+there is no duplicate poll while a reply is outstanding within that interval.
+Only a fresh 03/10 reply with the current poll's message number and a target
+slot consistent with the snapshot confirms. A previous-slot reply releases
+the poll for a subsequent attempt, not confirmation. Expired poll replies
+cannot confirm a newer poll (subject to finite wire message-number reuse).
+The host regression for this poll gate is
+`g++ -std=c++17 -Wall -Wextra -Werror -Isrc tools/test_preset_number_verification.cpp -o /tmp/test_preset_number_verification && /tmp/test_preset_number_verification`.
+On the connected Spark NEO Core trace run before this polling change, preset 2
+was sent at t=8870 with no ACK/number trace until t=13982 (>5 seconds).
+The switch timed out; a subsequent reconciliation query (msg12) reported slot
+2 in 107 ms and satisfied the deferred latest slot 2. This showed a missing
+post-switch verification query, not a failed switch. Later rapid-switch runs
+with the polling build confirmed non-noop changes in roughly 0.4–1.3 seconds.
 
 Rapid selections use one latest-wins deferred target. While a command is sent,
 new taps replace that target; the next command is dispatched after the current
@@ -99,6 +154,54 @@ port (opening it may reset the board):
 python3 tools/stress_panelan_presets.py --port /dev/your-device --sequence 2,3,4,2,3,2 --interval 0.15
 ```
 
+For the separate **six-slot FX hardware acceptance run**, with the PanelLan
+controller firmware already running and an amp connected, use one exclusive USB
+CDC serial session (115200 baud):
+
+```sh
+set -o pipefail
+python3 tools/stress_panelan_fx.py --port /dev/your-device --probe-preset 2 2>&1 | tee panelan-fx-run.log
+```
+
+The script does **not** flash, save, write presets, or detect a port. It polls
+`status` until Spark is connected and Amp, Serial, and Preset name are known,
+then sends only `fx gate|comp|drive|mod|delay|reverb toggle` (in that order),
+twice per slot. It requires a slot/model/direction send line and a subsequent
+matching `confirmed by FX_ONOFF` or `confirmed by full preset response` line for
+each action **and** a `Message processed:` Spark payload with the exact model's
+`Effect`/`IsOn` or full-preset pedal `Name`/`IsOn` matching the sent direction.
+A controller confirmation alone is inconclusive. It verifies the second
+requested direction is opposite. It waits
+for ready status between actions and prints a PASS per slot. Default first-action
+busy probes send an immediate duplicate toggle after the first send and require
+its explicit rejection **before** confirmation; a too-fast confirmation is
+inconclusive, not a pass. `--probe-preset 2` additionally probes preset rejection
+while FX is pending (slots 1..8 valid); this requires the opt-in preset-trace
+firmware to correlate `PRESET_TRACE event=reject target=2 reason=fx` with the
+CLI rejection. Without that option no preset command is sent. Use
+`--no-busy-probes` to skip busy probes (and do not supply `--probe-preset`).
+For this FX policy, allow more than 15 seconds per action (the harness default
+`--timeout` is 18 seconds); `--ready-timeout` defaults to 30.
+Capture stdout and stderr for diagnosis; `set -o pipefail` preserves the harness
+exit status through `tee`. Any reject,
+cancel, missing/crossed confirmation, lost readiness, timeout, or probe race
+exits nonzero and **never sends a compensating toggle**. A failed run can leave
+an FX changed; inspect the amp before rerunning. Keep touch/other serial clients
+idle throughout; unsolicited FX changes can invalidate the result. This is an
+operator-run hardware check, not a host simulation or proof of BLE behavior.
+An earlier six-slot run with two-second FX full-query retries stopped at
+compressor-on after overlapping fragmented replies were rejected as malformed.
+After lengthening the FX response window and adding no-ACK query fallback, a
+trace run completed all six slots with two confirmed inverse toggles each. The
+script verified both the controller confirmation and the returned Spark
+`IsOn` value. On delay-on, two earlier replies were absent/malformed; the third
+query produced a matching full payload and confirmation at about 11.5 seconds,
+inside the 15-second deadline. Gate, compressor, drive, modulation, and reverb
+also completed both directions. Busy-duplicate probes had separately passed
+on the first four slots. The normal non-trace firmware was then restored and
+reported Spark connected, preset 1 CLEAN. The host harness still cannot prove
+audio output; it verifies Spark-owned protocol state.
+
 The stdlib-only script does not flash or auto-detect hardware. It prints each
 trace line and per-request acceptance-to-number-confirmation latency, sent and
 failed status, rejects, and `final_synced_target`; `none` means the final
@@ -123,7 +226,22 @@ is Ready. The
 host-only queue test is `g++ -std=c++17 -Isrc tools/test_preset_target_queue.cpp
 -o /tmp/test_preset_target_queue && /tmp/test_preset_target_queue`. It covers
 the deferred-target-equals-confirmed transition and the startup-query busy
-gate; wire reply ordering still needs the hardware run.
+gate. The deterministic multi-request host regression is:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tools/test_preset_orchestration.cpp -o /tmp/test_preset_orchestration && /tmp/test_preset_orchestration
+```
+
+It is a host protocol *model* that composes the production queue, ACK matcher,
+receive history and reconciliation gate, then injects rapid replacements,
+stale ACKs and number replies, unsolicited broadcasts, an obsolete full
+response and a timed-out switch with a deferred latest intent. Its driver
+reimplements those event boundaries; it does not execute or regression-test
+`ControllerActions.cpp` or `SparkDataControl`. In particular, the full-response
+check only verifies message correlation, not payload decoding/publication; the
+model uses an ACK-triggered query and does not simulate the polling cadence.
+It cannot prove BLE delivery, scheduling latency or actual amp behavior. Wire
+reply ordering and real-world timing still need the hardware run.
 
 On BLE loss, the headless loop clears controller actions before its early return:
 sent/queued/deferred presets, timeout reconciliation and query gates are revoked
@@ -132,10 +250,11 @@ event; an unsent selection is discarded without a send failure. FX cancellation
 retains its failure event. The host-only reset regression is
 `g++ -std=c++17 -Isrc tools/test_preset_link_reset.cpp -o /tmp/test_preset_link_reset && /tmp/test_preset_link_reset`.
 
-Hardware regression gap (no host harness for the BLE/protocol/controller loop):
+Hardware regression gap (the host model does not run the BLE/protocol/controller loop):
 with a ready link, inject/tap P3 after another preset. Verify `sent`, Spark
-ACK and `number_confirm` on reported number 3 clear pending without RETRY;
-withhold the matching msg12 full-preset response for >5s and verify
+correlated 03/10 reply and `number_confirm` on reported number 3 clear pending
+without RETRY (ACK is optional with proactive polling);
+withhold the matching msg12 full-preset response for >2s and verify
 `full_data_timeout` (not `fail`), Syncing/stale name and unavailable FX, then
 a retry query. Deliver a matching full response and verify FX becomes known.
 Separately test no number (bounded `number_timeout` and RETRY), wrong number

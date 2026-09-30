@@ -5,6 +5,9 @@
 #include "HardwarePresetScan.h"
 #include "PresetTargetQueue.h"
 #include "PresetTimeoutReconcile.h"
+#include "PresetNumberVerification.h"
+#include "FullPresetRetry.h"
+#include "FxFullPresetRetry.h"
 
 class ControllerState;
 class SparkDataControl;
@@ -42,7 +45,6 @@ public:
 
 private:
     static constexpr uint32_t kPresetTimeoutMs = 5000;
-    static constexpr uint32_t kFxTimeoutMs = 5000;
     static constexpr uint32_t kTunerTimeoutMs = 3000;
     static constexpr uint32_t kLooperTimeoutMs = 5000;
     static constexpr uint32_t kLooperClearArmMs = 3000;
@@ -54,18 +56,15 @@ private:
     bool presetReconcileQueryAttempted_ = false;
     uint8_t reconciledPresetNumber_ = 0;
     uint8_t sentPreset_ = 0;
-    uint8_t sentPresetMessageNumber_ = 0;
     uint8_t presetBeforeRequest_ = 0;
     uint32_t sentAtMs_ = 0;
     uint32_t sentAfterAckRevision_ = 0;
-    uint32_t sentAfterNumberRevision_ = 0;
-    uint8_t confirmationQueryMessageNumber_ = 0;
-    bool awaitingConfirmationQuery_ = false;
+    PresetNumberVerification numberVerification_;
     // Refresh-only after number confirmation; never owns preset action status.
     bool awaitingPresetFullResponse_ = false;
-    uint32_t presetFullObservationRevisionBeforeQuery_ = 0;
     uint8_t presetFullQueryMessageNumber_ = 0;
     uint8_t presetFullTarget_ = 0;
+    FullPresetRetry fullPresetRetry_;
 #ifdef PANELAN_PRESET_TRACE
     // Set only after process() has seen a connected link; log its loss once.
     bool presetTraceConnectionObserved_ = false;
@@ -93,7 +92,6 @@ private:
     // This is independent of preset-action verification. It establishes the
     // initial complete preset observation required for the current BLE link.
     bool startupFullPresetQueryIssued_ = false;
-    uint32_t startupFullPresetQueryAtMs_ = 0;
     uint8_t startupFullPresetQueryMessageNumber_ = 0;
     HardwarePresetScan cacheScan_;
     bool cacheMetadataRequested_ = false;
@@ -113,7 +111,9 @@ private:
     uint32_t fxFullPresetObservationRevisionBeforeRequest_ = 0;
     uint32_t fxSentAfterAckRevision_ = 0;
     uint8_t sentFxMessageNumber_ = 0;
-    bool fxFullPresetQueryIssued_ = false;
+    // Independent of startup/preset refresh; ACK starts verification, not success.
+    bool fxAckReceived_ = false;
+    FxFullPresetRetry fxFullPresetRetry_;
 
     bool queuedTunerRequest_ = false;
     bool tunerRequestSent_ = false;
