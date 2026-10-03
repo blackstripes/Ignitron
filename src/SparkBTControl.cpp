@@ -6,6 +6,7 @@
  */
 
 #include "SparkBTControl.h"
+#include "BleChunkWrite.h"
 #include "PersistentEventLog.h"
 
 #ifdef PANELAN_SC05X_MODE
@@ -219,7 +220,7 @@ bool SparkBTControl::subscribeToNotifications(notify_callback notifyCallback) {
 }
 
 // To send messages to Spark via Bluetooth LE
-bool SparkBTControl::writeBLE(ByteVector &cmd, bool withDelay, bool response) {
+bool SparkBTControl::writeBLE(const ByteVector &cmd, bool withDelay, bool response) {
     // DEBUG_PRINTLN("Sending message:");
     // DEBUG_PRINTVECTOR(cmd);
     // DEBUG_PRINTLN();
@@ -236,24 +237,17 @@ bool SparkBTControl::writeBLE(ByteVector &cmd, bool withDelay, bool response) {
                 // if (characteristic->canWrite()) {
                 // for (auto block : cmd) {
 
-                // This it to split messages into sizes of max. max_send_size.
-                // As we have chosen 173, usually no further splitting is requried.
-                // SparkMessage already creates messages split into 173 byte chunks
+                // SparkMessage normally splits at the protocol layer; cap any
+                // remaining BLE writes at the configured transport chunk size.
                 DEBUG_PRINT("Sending block:");
                 DEBUG_PRINTVECTOR(cmd);
                 DEBUG_PRINTLN();
-                bool return_value = true;
-                ByteVector send_cmd;
-                while (cmd.size() > 0) {
-                    int cmd_size = cmd.size();
-                    int cut_point = min(cmd_size, bleMaxMsgSize_);
-                    if (cut_point > 0) {
-                        send_cmd.assign(cmd.begin(), cmd.begin() + cut_point);
-                        cmd.assign(cmd.begin() + cut_point, cmd.end());
-                        return_value = characteristic->writeValue(send_cmd.data(), send_cmd.size(), response);
-                    }
-                }
-                if (return_value) {
+                const BleChunkWriteResult result = writeBleChunks(
+                    cmd, static_cast<size_t>(bleMaxMsgSize_),
+                    [characteristic, response](const uint8_t *data, size_t size) {
+                        return characteristic->writeValue(data, size, response);
+                    });
+                if (result.success) {
                     // Delay seems to be required in order to not lose any packages.
                     // Seems to be more stable with a short delay
                     // also seems to be not working for Spark Mini without a delay.s
@@ -262,8 +256,15 @@ bool SparkBTControl::writeBLE(ByteVector &cmd, bool withDelay, bool response) {
                         delay(80);
                     }
                 } else {
-                    Serial.println("There was an error with writing!");
-                    persistentEventLog.record(PersistentEvent::BleWriteFailure, 0, true);
+                    Serial.printf("BLE write failed at chunk %u/%u\n",
+                                  static_cast<unsigned>(result.failedChunkIndex + 1),
+                                  static_cast<unsigned>(result.chunkCount));
+                    // The persistent value has two bytes: 1-based failed chunk
+                    // then total chunks, each saturated at 255.
+                    const uint16_t failed = static_cast<uint16_t>(min(result.failedChunkIndex + 1, size_t(255)));
+                    const uint16_t total = static_cast<uint16_t>(min(result.chunkCount, size_t(255)));
+                    persistentEventLog.record(PersistentEvent::BleWriteFailure,
+                                              static_cast<uint16_t>((failed << 8) | total), true);
                     // Disconnect if write failed
                     client_->disconnect();
                     isAmpConnected_ = false;

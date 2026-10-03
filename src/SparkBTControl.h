@@ -101,12 +101,12 @@ public:
      * Send messages/commands/acknowledgements to the Spark Amp and App
      * This will trigger a change in the Spark Amp setting.
      *
-     * @param cmd vector of byte vectors containing the messages. Each byte vector is a chunk to be sent to Spark Amp/App
+     * @param cmd message bytes; left unchanged, split into BLE-sized chunks for transmission
      * @param response indicate if a response is expected. Always false in this case
      *
-     * @return TRUE if successful
+     * @return TRUE only if every chunk was written successfully
      */
-    bool writeBLE(ByteVector &cmd, bool withDelay = false, bool response = false);
+    bool writeBLE(const ByteVector &cmd, bool withDelay = false, bool response = false);
     /**
      * @brief  Initializes Ignitron BLE as client to connect to the Spark Amp
      *

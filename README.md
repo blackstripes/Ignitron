@@ -96,6 +96,10 @@ log clear confirm   # erase both persistent segments (explicit confirmation)
 The log captures boot/init, BLE lifecycle and transport failures, ingress
 drops/resets, controller synchronization phases, and confirmed/failed preset
 and FX actions. It deliberately does not record every BLE packet.
+For `BleWriteFailure`, the numeric value packs the 1-based failed chunk index
+in the high byte and the total chunk count in the low byte (each capped at 255).
+The serial diagnostic prints the uncapped failed index/count. A failed BLE
+chunk stops the remaining writes, marks the send failed, and disconnects.
 
 For a display-and-touch-only smoke test, use `panelan-display-bringup` instead.
 The full hardware notes, USB/flashing advice, and planned multi-device pairing
