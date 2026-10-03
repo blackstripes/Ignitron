@@ -22,7 +22,7 @@ SparkBLEKeyboard SparkDataControl::bleKeyboard = SparkBLEKeyboard();
 queue<ByteVector> SparkDataControl::msgQueue;
 SemaphoreHandle_t SparkDataControl::msgQueueMutex = nullptr;
 atomic_bool SparkDataControl::ingressInvalidated_{false};
-deque<CmdData> SparkDataControl::currentCommand;
+SparkOutbound<CmdData> SparkDataControl::currentCommand;
 deque<AckData> SparkDataControl::pendingLooperAcks;
 uint32_t SparkDataControl::finalAckRevision_ = 0;
 AckData SparkDataControl::lastFinalAck_;
@@ -62,6 +62,7 @@ vector<CmdData>
 vector<CmdData> SparkDataControl::currentMsg;
 
 bool SparkDataControl::customPresetNumberChangePending = false;
+bool SparkDataControl::customPresetNumberChangeReady_ = false;
 OperationMode SparkDataControl::operationMode_ = SPARK_MODE_APP;
 SubMode SparkDataControl::subMode_ = SUB_MODE_PRESET;
 
@@ -358,6 +359,7 @@ void SparkDataControl::resetStatus() {
     ++linkGeneration_;
     cancelHWPresetRead();
     customPresetNumberChangePending = false;
+    customPresetNumberChangeReady_ = false;
     sparkAmpType = AMP_TYPE_40;
     sparkAmpName = "Spark 40";
     withDelay = false;
@@ -442,8 +444,21 @@ void SparkDataControl::checkForUpdates() {
 
     if (recordStartFlag) {
         if (looperControl_.currentBar() != 0) {
-            sparkLooperCommand(SPK_LOOPER_CMD_REC);
-            recordStartFlag = false;
+            if (sparkLooperCommand(SPK_LOOPER_CMD_REC)) {
+                recordStartFlag = false;
+            }
+        }
+    }
+
+    // A final preset ACK can arrive while another multipart command has taken
+    // ownership. Retain this follow-up until the owner is free and only update
+    // active preset state after the BLE send succeeds.
+    if (customPresetNumberChangeReady_ && !currentCommand.hasRemaining()) {
+        currentMsg = sparkMsg.changeHardwarePreset(nextMessageNum, 128);
+        if (triggerCommand(currentMsg)) {
+            customPresetNumberChangePending = false;
+            customPresetNumberChangeReady_ = false;
+            SparkPresetControl::getInstance().updateActiveWithPendingPreset();
         }
     }
 
@@ -454,8 +469,9 @@ void SparkDataControl::checkForUpdates() {
 
     const LooperSetting &looperSetting = looperControl_.looperSetting();
     if (looperSetting.changePending) {
-        updateLooperSettings();
-        looperControl_.resetChangePending();
+        if (updateLooperSettings()) {
+            looperControl_.resetChangePending();
+        }
     }
 
 #ifdef ENABLE_BATTERY_STATUS_INDICATOR
@@ -556,6 +572,7 @@ bool SparkDataControl::changePreset(Preset preset) {
     currentMsg = sparkMsg.changePreset(preset, DIR_TO_SPARK, nextMessageNum);
     if (triggerCommand(currentMsg)) {
         customPresetNumberChangePending = true;
+        customPresetNumberChangeReady_ = false;
         return true;
     }
     return false;
@@ -639,38 +656,29 @@ bool SparkDataControl::getCurrentPreset(int num) {
 }
 
 bool SparkDataControl::triggerCommand(vector<CmdData> &msg) {
+    // The first part must actually be written before a caller may treat true
+    // as an issued command. Never replace another command's unsent parts.
+    if (currentCommand.hasRemaining()) return false;
     // Spark encodes zero as wire sequence one. A command built with zero is
     // therefore sequence one, so advance directly to two and avoid reusing
     // one for the following command.
     nextMessageNum = nextNormalSparkMessageNumber(nextMessageNum);
-    if (msg.size() > 0) {
-        currentCommand.assign(msg.begin(), msg.end());
-    }
     // sparkSsr.clearMessageBuffer();
     DEBUG_PRINTLN("Sending message via BT.");
-    return sendNextRequest();
+    return currentCommand.start(msg, writeRequest);
     // sparkSsr.clearMessageBuffer();
 }
 
-bool SparkDataControl::sendNextRequest() {
-    if (currentCommand.size() > 0) {
-        CmdData request = currentCommand.front();
-        ByteVector firstBlock = request.data;
-        AckData currRequest;
-        currRequest.cmd = request.cmd;
-        currRequest.subcmd = request.subcmd;
-        currRequest.detail = request.detail;
-        currRequest.msgNum = request.msgNum;
-
-        if (sendMessageToBT(firstBlock)) {
-            pendingLooperAcks.push_back(currRequest);
-            if (currentCommand.size() > 0) {
-                currentCommand.pop_front();
-            }
-            return true;
-        }
-    }
-    return false;
+bool SparkDataControl::writeRequest(const CmdData &request) {
+    ByteVector block = request.data;
+    if (!sendMessageToBT(block)) return false;
+    AckData currRequest;
+    currRequest.cmd = request.cmd;
+    currRequest.subcmd = request.subcmd;
+    currRequest.detail = request.detail;
+    currRequest.msgNum = request.msgNum;
+    pendingLooperAcks.push_back(currRequest);
+    return true;
 }
 
 void SparkDataControl::handleSendingAck(const ByteVector &blk) {
@@ -690,7 +698,13 @@ void SparkDataControl::handleSendingAck(const ByteVector &blk) {
 
         DEBUG_PRINTLN("Sending acknowledgment");
         if (operationMode_ == SPARK_MODE_APP) {
-            triggerCommand(ackMsg);
+            // Protocol ACKs bypass the ordinary multipart owner and looper
+            // bookkeeping. Retain the legacy cursor advance, but send the
+            // wire sequence supplied by sendAck(incoming seq, ...).
+            writeSparkProtocolAck(ackMsg, nextMessageNum, [](const CmdData &ack) {
+                ByteVector block = ack.data;
+                return sendMessageToBT(block);
+            });
         } else if (operationMode_ == SPARK_MODE_AMP) {
             bleControl->notifyClients(ackMsg);
         }
@@ -1027,10 +1041,7 @@ void SparkDataControl::handleIncomingAck() {
     AckData lastAck = sparkSsr.getLastAckAndEmpty();
     if (lastAck.cmd == 0x05) { // 05 is intermediate ack, not last message
         DEBUG_PRINTLN("Received intermediate ACK");
-        if (lastAck.subcmd == 0x01) {
-            // send next part of command on intermediate ACK
-            sendNextRequest();
-        }
+        currentCommand.onIntermediateAck(lastAck, writeRequest);
     }
     if (lastAck.cmd == 0x04) {
         lastFinalAck_ = lastAck;
@@ -1040,10 +1051,7 @@ void SparkDataControl::handleIncomingAck() {
         if (lastAck.subcmd == 0x01) {
             // only execute preset number change on last ack for preset change
             if (customPresetNumberChangePending) {
-                currentMsg = sparkMsg.changeHardwarePreset(nextMessageNum, 128);
-                triggerCommand(currentMsg);
-                customPresetNumberChangePending = false;
-                presetControl.updateActiveWithPendingPreset();
+                customPresetNumberChangeReady_ = true;
             }
         }
         if (lastAck.subcmd == 0x38) {

@@ -293,6 +293,20 @@ Initial migration should be behavior-preserving:
 
 At this phase, prove that unrelated calls cannot overwrite a multi-part command.
 
+Phase 2 implementation contract: the outbound owner retains unsent parts until
+their BLE writes succeed; a competing ordinary command returns false without
+consuming a sequence number. A matching 05/01 intermediate ACK releases one
+part. Protocol ACKs write immediately outside this owner and do not create
+pending looper requests, but still advance the ordinary sequence cursor once
+per ACK as the previous `triggerCommand` path did. The ACK wire number remains
+the incoming sequence. After the final part is written the lane is free;
+final-ACK/response ownership and backpressure remain Phase 4 work. This
+incremental owner does not distinguish duplicate intermediate ACKs (the
+protocol observation has no part identity), and a missing intermediate ACK
+keeps the unsent parts owned until link reset. Busy ordinary submissions are
+rejected synchronously rather than queued, preserving the existing meaning of
+the bool send result; callers remain responsible for retaining/retrying intent.
+
 ### Phase 3 - migrate every outgoing Spark path
 
 Audit every path that writes to Spark and ensure it enters the scheduler or an explicitly defined ACK fast path.

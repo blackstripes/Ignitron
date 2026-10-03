@@ -14,6 +14,7 @@
 #include "SparkBTControl.h"
 #include "SparkKeyboardControl.h"
 #include "SparkLooperControl.h"
+#include "SparkOutbound.h"
 
 #include <Arduino.h>
 #include <atomic>
@@ -248,6 +249,7 @@ private:
     static vector<CmdData> currentMsg;
     static vector<CmdData> ackMsg;
     static bool customPresetNumberChangePending;
+    static bool customPresetNumberChangeReady_;
 
     // Spark AMP mode
 
@@ -279,7 +281,7 @@ private:
     static SemaphoreHandle_t msgQueueMutex;
     static constexpr size_t kMaxQueuedNotifications = 32;
     static atomic_bool ingressInvalidated_;
-    static deque<CmdData> currentCommand;
+    static SparkOutbound<CmdData> currentCommand;
     static deque<AckData> pendingLooperAcks;
     static uint32_t finalAckRevision_;
     static AckData lastFinalAck_;
@@ -310,7 +312,7 @@ private:
     static bool takeQueuedMessage(ByteVector &message);
     static void clearQueuedMessages();
     static bool triggerCommand(vector<CmdData> &msg);
-    static bool sendNextRequest();
+    static bool writeRequest(const CmdData &request);
 
     // Retrieves the current preset from Spark (required for HW presets)
     static void setAmpParameters();
