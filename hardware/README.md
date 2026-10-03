@@ -1,28 +1,34 @@
 # Ignitron - Hardware
 This document describes the hardware side of the **Ignitron** foot pedal.
 
-## PanelLan SC05_X mini #1 MCP23017 prototype (separate from the legacy PCB below)
+## PanelLan SC05_X two-mini MCP23017 prototype (separate from the legacy PCB below)
 
-The `panelan-lvgl-controller` and `panelan-mini-tft-bringup` targets now use
-an MCP23017 at I2C address **0x20** (A0/A1/A2 tied low) for the external
-ST7735S's CS and reset. This is a **one-display** bring-up, not the six-display
+The integrated `panelan-lvgl-controller` target uses
+the Waveshare MCP23017 at I2C address **0x27** (A0/A1/A2 physically open,
+which the board pulls high) for two external ST7735S displays' CS and shared
+reset. This is a **two-display** setup, not the six-display
 PCB or the classic ESP32 wiring described below. Connect the PanelLan IO12 to
 MCP SDA and IO13 to MCP SCL, with 3.3 V I2C pull-ups, common ground and 3.3 V
-MCP supply. Connect IO10 to mini SDA/MOSI, IO11 to mini SCL/SCK, IO14 to mini
-DC, MCP GPB0 to mini #1 active-low CS, and MCP GPB6 to mini active-low RES.
-Power mini VCC and BLK externally at regulated 3.3 V with common ground;
+MCP supply. Connect IO10 to both minis' SDA/MOSI, IO11 to both SCL/SCK, IO14
+to both DC, MCP GPB0 to TFT1 active-low CS, GPB1 to TFT2 active-low CS, and
+GPB6 to both minis' active-low RES. Power both minis' VCC and BLK externally
+at regulated 3.3 V with common ground;
 firmware never drives BLK. There is no MISO/readback. **Do not connect mini
-RES/CS to IO12/IO13:** those are I2C pins in these two targets.
+RES/CS to IO12/IO13:** those are I2C pins in these targets.
 
 At startup the driver preloads GPB0..6 high before enabling them as outputs,
-then pulses GPB6 low/high while keeping all CS lines high. Before each mini
-SPI draw it deasserts all CS lines, selects GPB0 low, and deasserts all after
-the draw. GPB1..5 are reserved high for prospective TFT2..6 CS, not rendered
-or tested yet; GPB6 is shared reset and GPB7 stays an input. Switch wiring
+then pulses GPB6 low/high while keeping all CS lines high. The integrated SPI2
+renderer initializes and splashes TFT1 then TFT2, and mirrors each state card
+sequentially. Each init/draw deasserts all CS lines before selecting only GPB0
+or GPB1 low, then deasserts all afterward; a failed selection/deselection is
+retried without permanently disabling drawing, and a card is cached only after
+both draws finish. GPB2..5 remain high for future TFT3..6 CS; GPB6 is shared
+reset and GPB7 stays an input. The standalone `panelan-mini-tft-bringup` test
+still selects **TFT1 only** (GPB0); it does not exercise TFT2. Switch wiring
 and handling via the expander are **not implemented**. Other targets (including
 the GPIO diagnostic fallback) have separate wiring and are not converted by
 this change. Visually check the standalone color bars/borders and the integrated
-mini splash/state cards: the write-only display cannot report pixel success.
+splashes/state cards on both minis: write-only displays cannot report pixel success.
 
 The software that controls the Spark amp runs on an ESP32 microcontroller which needs to be connected to the actual hardware so that it's able to react to hardware events, e.g. foot switch presses, and to indicate the current state via the LEDs. All of these connections, except the power supply via USB, are made via a PCB that piggybacks onto the ESP32 board.
 

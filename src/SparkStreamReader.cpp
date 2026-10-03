@@ -7,6 +7,7 @@
 
 #include "SparkStreamReader.h"
 #include "SparkPresetChecksum.h"
+#include <utility>
 
 SparkStreamReader::SparkStreamReader() : message{}, unstructuredData{}, msgData{}, msgPos(0) {
 }
@@ -346,9 +347,19 @@ void SparkStreamReader::readPreset() {
             (remaining == 11 && bodyEnd + 5 < msgData.size() &&
              msgData[bodyEnd] == 0xCA && msgData[bodyEnd + 5] == 0xCA);
         const bool checksumMatches = !msgData.empty() && sum == msgData.back();
-        Serial.printf("PRESET_TRACE event=preset_parse_reject bytes=%u body=%u remaining=%u parsed=%u shape=%u checksum=%u\n",
+        Serial.printf("PRESET_TRACE t=%lu event=preset_parse_reject msg=%u bytes=%u body=%u remaining=%u parsed=%u shape=%u checksum=%u frames=%u\n",
+                      static_cast<unsigned long>(millis()), statusObject.lastMessageNum(),
                       static_cast<unsigned>(msgData.size()), static_cast<unsigned>(bodyEnd),
-                      static_cast<unsigned>(remaining), parseValid_, tailShape, checksumMatches);
+                      static_cast<unsigned>(remaining), parseValid_, tailShape, checksumMatches,
+                      static_cast<unsigned>(response.size()));
+        for (size_t i = 0; i < response.size(); ++i) {
+            const ByteVector &frame = response[i];
+            if (frame.size() < 9) continue;
+            Serial.printf("PRESET_TRACE t=%lu event=preset_reject_frame i=%u len=%u seq=%u cmd=%02X sub=%02X chunks=%u part=%u\n",
+                          static_cast<unsigned long>(millis()), static_cast<unsigned>(i),
+                          static_cast<unsigned>(frame.size()), frame[2], frame[4], frame[5],
+                          frame[7], frame[8]);
+        }
 #endif
         return;
     }
@@ -603,11 +614,12 @@ boolean SparkStreamReader::structureData(bool processHeader) {
     blockContent.clear();
     message.clear();
 
-    for (auto block : unstructuredData) {
+    for (const auto &block : unstructuredData) {
 
         // DEBUG_PRINTVECTOR(block);
 
         int blockLength;
+        if (processHeader && block.size() < 16) return false;
         if (processHeader) {
             blockLength = block[6];
         } else {
@@ -617,11 +629,6 @@ boolean SparkStreamReader::structureData(bool processHeader) {
         // DEBUG_PRINTF("Read block size %d, %d\n", blockLength, dataSize);
         if (dataSize != blockLength) {
             DEBUG_PRINTF("Data is of size %d and reports %d\n", dataSize, blockLength);
-            Serial.println("Corrupt block:");
-            for (auto by : block) {
-                Serial.print(SparkHelper::intToHex(by).c_str());
-            }
-            Serial.println();
         }
         // DEBUG_PRINTLN("Sizes match");
         ByteVector chunk;
@@ -641,7 +648,7 @@ boolean SparkStreamReader::structureData(bool processHeader) {
     DEBUG_PRINTLN();
     // DEBUG_PRINTLN("...Processed");
 
-    if (blockContent[0] != 0xF0 || blockContent[1] != 0x01) {
+    if (blockContent.size() < 2 || blockContent[0] != 0xF0 || blockContent[1] != 0x01) {
         Serial.println("Invalid block start, ignoring all data");
         return false;
     }
@@ -659,8 +666,9 @@ boolean SparkStreamReader::structureData(bool processHeader) {
         }
     }
 
-    vector<CmdData> chunk_8bit = {};
-    for (auto chunk : chunks) {
+    ByteVector concatData;
+    for (const auto &chunk : chunks) {
+        if (chunk.size() < 7) return false;
         statusObject.lastMessageNum() = chunk[2];
         byte thisCmd = chunk[4];
         byte thisSubCmd = chunk[5];
@@ -673,43 +681,17 @@ boolean SparkStreamReader::structureData(bool processHeader) {
         currData.subcmd = thisSubCmd;
         currData.data = convertDataTo8bit(data7bit);
 
-        chunk_8bit.push_back(currData);
-
-        // now check for mult-chunk messages and collapse their data into a single message
-        // multi-chunk messages are cmd/subCmd of 1,1 or 3,1
-
-        message.clear();
-        ByteVector concatData;
-        concatData.clear();
-        for (CmdData chunkData : chunk_8bit) {
-            thisCmd = chunkData.cmd;
-            thisSubCmd = chunkData.subcmd;
-            ByteVector thisData = chunkData.data;
-            if ((thisCmd == 0x01 || thisCmd == 0x03) && thisSubCmd == 0x01) {
-                // DEBUG_PRINTLN("Multi message");
-                // found a multi-message
-                int numChunks = thisData[0];
-                int thisChunk = thisData[1];
-                ByteVector thisDataSuffix;
-                thisDataSuffix.assign(thisData.begin() + 3, thisData.end());
-                for (auto by : thisDataSuffix) {
-                    concatData.push_back(by);
-                }
-                // if at last chunk of multi-chunk
-                if (thisChunk == numChunks - 1) {
-                    // DEBUG_PRINTLN("Last chunk to process");
-                    currData.cmd = thisCmd;
-                    currData.subcmd = thisSubCmd;
-                    currData.data = concatData;
-
-                    message.push_back(currData);
-                    concatData = {};
-                }
-            } else {
-                // copy old one
-                message.push_back(chunkData);
-            } // else
-        } // For all in 8-bit vector
+        if ((thisCmd == 0x01 || thisCmd == 0x03) && thisSubCmd == 0x01 &&
+            SparkReceiveAssembly::presetShape(chunk, currData.data) == 2) {
+            concatData.insert(concatData.end(), currData.data.begin() + 3, currData.data.end());
+            if (currData.data[1] == currData.data[0] - 1) {
+                currData.data = concatData;
+                message.push_back(currData);
+                concatData.clear();
+            }
+        } else {
+            message.push_back(currData);
+        }
     } // for all chunks
 
     return true;
@@ -934,75 +916,7 @@ AckData SparkStreamReader::getLastAckAndEmpty() {
     return lastAck;
 }
 
-void SparkStreamReader::preProcessBlock(ByteVector &blk) {
-
-    // Special behavior: When receiving messages from Spark APP, blocks might be split into two.
-    // This will reassemble the block by appending to the previous one.
-
-    // Iterate through block and split into F001/F7 chunks into response.
-
-    // If nothing in response yet or if last read byte was a F7, add block
-    if (response.size() == 0 || lastReadByte == endMarker) {
-        if (blockIsStarted(blk)) {
-            response.push_back(blk);
-            lastReadByte = blk.back();
-        } else {
-            DEBUG_PRINTLN("Incomplete fragment found, ignoring.");
-        }
-        return;
-    }
-
-    auto it = blk.begin();
-    ByteVector segment = {};
-    ByteVector currentChunk = {};
-
-    // Search blk for each occurrence of F7 and append to response
-    while (it != blk.end()) {
-        it = find(blk.begin(), blk.end(), endMarker);
-        if (it != blk.end()) {
-            segment.assign(blk.begin(), it + 1);
-            blk.assign(it + 1, blk.end());
-            if (lastReadByte != endMarker) {
-                currentChunk = response.back();
-                currentChunk.insert(currentChunk.end(), segment.begin(), segment.end());
-                response.pop_back();
-                response.push_back(currentChunk);
-                currentChunk = {};
-            } else {
-                response.push_back(segment);
-            }
-            lastReadByte = response.back().back();
-        }
-    }
-    // If a remainder is left in blk, append to previous block
-    if (blk.size() > 0) {
-
-        if (lastReadByte != endMarker) {
-            currentChunk = response.back();
-            currentChunk.insert(currentChunk.end(), blk.begin(), blk.end());
-            response.pop_back();
-            response.push_back(currentChunk);
-            currentChunk = {};
-        } else {
-            response.push_back(blk);
-        }
-        lastReadByte = response.back().back();
-    }
-}
-
-bool SparkStreamReader::blockIsStarted(ByteVector &blk) {
-    if (blk.size() < 2)
-        return false;
-    bool newStart = (blk[0] == 0xF0 && blk[1] == 0x01);
-
-    return newStart;
-}
-
 MessageProcessStatus SparkStreamReader::processBlock(ByteVector &blk) {
-
-    MessageProcessStatus retValue = MSG_PROCESS_RES_INCOMPLETE;
-    bool msgToSpark = false;
-    bool msgFromSpark = true;
 
     /*
         DEBUG_PRINTLN("Processing block");
@@ -1014,81 +928,33 @@ MessageProcessStatus SparkStreamReader::processBlock(ByteVector &blk) {
     // 2. Build command (response) vector by splitting blocks into F001...F7 blocks
 
     // Remove 01FE header
-    if (blk[0] == 0x01 && blk[1] == 0xFE && blk.size() > 16) {
+    if (blk.size() >= 2 && blk[0] == 0x01 && blk[1] == 0xFE && blk.size() > 16) {
         // Block starts with 01FE and is long enough
         // Read meta data of block
-        int blkLength = blk[6];
-        byte dir[2] = {blk[4], blk[5]};
-
-        msgToSpark = dir[0] == 0x53 && dir[1] == 0xFE;
-        msgFromSpark = dir[0] == 0x41 && dir[1] == 0xFF;
-
         // Cut off header after extracting information
         blk.assign(blk.begin() + 16, blk.end());
     }
     // FROM HERE NO HEADER IS PRESENT ANYMORE and blk should start with F001 (after preprocessing)
 
     // Cut blk into chunks and append to response
-    preProcessBlock(blk);
-
-    if (response.size() == 0) {
-        return retValue;
+    for (const auto &frame : frameReader_.accept(blk)) {
+        SparkReceiveAssembly::Frames complete;
+        if (!assembly_.accept(frame, complete)) continue;
+        pendingMessages_.push_back(std::move(complete));
     }
 
-    // Check if last block is final and which command
-    ByteVector currentBlock = response.back();
-    byte seq = currentBlock[2];
-    byte cmd = currentBlock[4];
-    byte subCmd = currentBlock[5];
+    return nextMessage();
+}
 
-    if (!(isValidBlockWithoutHeader(currentBlock))) {
-        /*
-        DEBUG_PRINTLN("Block not ready for processing, skipping further processing.");
-        DEBUG_PRINTVECTOR(currentBlock);
-        DEBUG_PRINTLN();
-        */
-        return retValue;
-    }
-
-    // Check if currentBlock is last block of command
-    // If we don't have a 01 or 03 command with 01/10/38 sub command, we are ready to process
-    if ((cmd != 0x01 && cmd != 0x03) || (subCmd != 01 && subCmd != 10 && subCmd != 38)) {
-        msgLastBlock = true;
-    }
-    // Multi-chunk message
-    else {
-        int numChunks = currentBlock[7];
-        int thisChunk = currentBlock[8];
-        if ((thisChunk + 1) == numChunks) {
-            msgLastBlock = true;
-        }
-    }
-
-    // Process data if the block just analyzed was the last
-    if (msgLastBlock) {
-        msgLastBlock = false;
-        setMessage(response);
-        DEBUG_PRINT("Message received: ");
-        for (auto chunk : response) {
-            DEBUG_PRINTVECTOR(chunk);
-            DEBUG_PRINTLN();
-        }
-
-        readMessage(false);
-        response.clear();
-        lastReadByte = 0x00;
-        retValue = MSG_PROCESS_RES_COMPLETE;
-    } // msgLastBlock
-
-    // Message is not complete, has not been processed yet
-    // if request was an initiating one from the app, return value for INITIAL message,
-    // so SparkDataControl knows how to notify.
-    // so notifications will be triggered
-    if (cmd == 0x02) {
-        retValue = MSG_PROCESS_RES_REQUEST;
-    }
-
-    return retValue;
+MessageProcessStatus SparkStreamReader::nextMessage() {
+    if (pendingMessages_.empty()) return MSG_PROCESS_RES_INCOMPLETE;
+    response = std::move(pendingMessages_.front());
+    pendingMessages_.pop_front();
+    const bool request = response.back()[4] == 0x02;
+    setMessage(response);
+    readMessage(false);
+    response.clear();
+    return request ? MSG_PROCESS_RES_REQUEST : MSG_PROCESS_RES_COMPLETE;
 }
 
 void SparkStreamReader::interpretData() {
@@ -1165,17 +1031,21 @@ unsigned int SparkStreamReader::readInt16() {
 void SparkStreamReader::clearMessageBuffer() {
     DEBUG_PRINTLN("Clearing response buffer.");
     response.clear();
+    pendingMessages_.clear();
+    frameReader_.reset();
+    assembly_.reset();
 }
 
 void SparkStreamReader::reset() {
     response.clear();
+    pendingMessages_.clear();
+    frameReader_.reset();
+    assembly_.reset();
     unstructuredData.clear();
     message.clear();
     msgData.clear();
     msgPos = 0;
     parseValid_ = true;
-    msgLastBlock = false;
-    lastReadByte = 0;
 }
 
 ByteVector SparkStreamReader::convertDataTo8bit(ByteVector input) {

@@ -39,9 +39,12 @@ The actual parser root cause was identified and fixed: NEO Core's extra
 MessagePack float32 fields before the trailing preset checksum were mistaken
 for the checksum, preventing cache validation. A
 captured device run subsequently accepted hardware slots 1–4, and mini render
-diagnostics showed `name=CLEAN`. LittleFS mount corruption remains unresolved;
-neither visual behavior after switching presets nor cold-boot/reconnect recovery
-was tested. Do not equate serial render diagnostics with visual verification.
+diagnostics showed `name=CLEAN`. The initial LittleFS mount failure was later
+traced to the active PanelLan `default_8MB.csv` filesystem partition at
+`0x670000` being entirely erased/unformatted. Firmware now formats only when
+that partition is verified all-`0xFF`; a nonblank unmountable partition is
+preserved and left in RAM-only mode. Do not equate serial render diagnostics
+with visual verification.
 
 ## Validation
 
@@ -69,12 +72,18 @@ Firmware build commands:
 ```
 
 The normal SPI controller was flashed after the checksum fix; the captured
-device diagnostics above came from that run. LittleFS corruption and visual
-behavior still need separate validation.
+device diagnostics above came from that run. During later filesystem recovery,
+the current partition was read back as all `0xFF`, while the older `0x210000`
+layout region contained non-erased data but could not be unpacked as LittleFS.
+Both raw ranges were backed up before writes. After the blank active partition
+was formatted, the board reported `LittleFS: mounted (16384/1572864 bytes used)`
+on a subsequent reset. The older region was left untouched; its contents were
+not recovered. Verify cold-boot/reconnect behavior and slot-name persistence.
 
-Resolve LittleFS mount corruption; visually verify slot 1 CLEAN remains CLEAN
-through selection of slot 2 CRUNCH and recovery after a missed slot read. Check
-both a cold boot and reconnect.
+Visually verify slot 1 CLEAN remains CLEAN through selection of slot 2 CRUNCH
+and recovery after a missed slot read. Check both a cold boot and reconnect.
+Investigate whether any useful files can be recovered from the old-layout flash
+region before changing that partition layout or reusing it.
 `UNKNOWN` is expected while no validated name exists; a nonresponding amp cannot
 be made to supply a name. Long/unsupported names retain existing SPI truncation
 and ASCII substitution behavior. Additional physical minis are not validated.

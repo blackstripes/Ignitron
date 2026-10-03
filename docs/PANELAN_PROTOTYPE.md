@@ -1,8 +1,9 @@
 # PanelLan touchscreen controller prototype
 
 This document records the starting point for the custom Ignitron foot controller.
-The normal LVGL target now includes one visually verified external mini display;
-footswitches and the remaining five minis are still deferred.
+The normal LVGL target now drives two external minis with the same card; TFT1
+was visually verified before TFT2 was added. TFT2 still needs visual validation;
+footswitches and TFT3..6 remain deferred.
 
 ## Hardware identified and tested
 
@@ -285,8 +286,9 @@ pio run -e panelan-mini-tft-bringup -t upload --upload-port /dev/your-device
 
 Power the module externally from **3.3 V** with common GND; connect IO10 to
 SDA/MOSI, IO11 to SCL/SCK and IO14 to DC. IO12 is now I2C SDA and IO13 I2C SCL
-to an MCP23017 at 0x20: GPB0 drives mini #1 CS and GPB6 drives RES. Provide
-3.3 V pull-ups on I2C; GPB1..5 are reserved high for future mini CS lines.
+to the Waveshare MCP23017 at 0x27 (A0/A1/A2 left open/high): GPB0 drives mini #1 CS and GPB6 drives RES. Provide
+3.3 V pull-ups on I2C; this standalone test selects TFT1 only, even if TFT2
+is wired to GPB1. GPB2..5 are reserved high for future mini CS lines.
 Do not connect RES/CS directly to IO12/13. No MISO is
 used. Connect BLK to external 3.3 V (the standalone test displayed colors only
 after this connection); firmware never drives the backlight. Serial at
@@ -313,8 +315,9 @@ normal Spark testing.
   freshness. Multi-device selection is still pending.
 - On a Spark reboot, the BLE client refreshes GATT services and subscribes
   again before it considers the connection usable.
-- The normal `panelan-lvgl-controller` initializes **mini #1 (top-left)** on
-  IO10=MOSI, IO11=SCK, IO14=DC, MCP23017 GPB0=CS and GPB6=RES;
+- The normal `panelan-lvgl-controller` initializes **TFT1 and TFT2** on shared
+  IO10=MOSI, IO11=SCK, IO14=DC, MCP23017 GPB0=TFT1 CS, GPB1=TFT2 CS and
+  GPB6=shared RES;
   IO12/13 are I2C SDA/SCL (no MISO). BLK remains
   externally tied to regulated 3.3 V for maximum backlight, with common ground.
   The 2.8-inch panel backlight is set to brightness 255 (maximum); user
@@ -378,11 +381,12 @@ normal Spark testing.
    switching and mini updates have been verified together. Spark BLE
    responsiveness with the revised mini artwork active has not yet been
    specifically retested.
-  This is **only mini #1's hardware-SPI renderer**, not a change to the frozen
-  2.8-inch LVGL touchscreen UI or an implementation of the six-display layout.
+  This is **TFT1's card mirrored on TFT2** by the hardware-SPI renderer, not a
+  change to the frozen 2.8-inch LVGL touchscreen UI or an implementation of the
+  six-display layout.
   **Keep the 2.8-inch visuals and behavior frozen until all six mini displays
-  work.** Only mini #1 is physically present; bringing up the other five is a
-  separate task, not part of this artwork pass.
+  work.** TFT3..6 and footswitches remain future work; TFT2's mirrored output
+  requires visual verification on the connected hardware.
 
 The original OLED, LEDs, and footswitch source files are excluded from this
 target because their legacy GPIO initialization overlaps the PanelLan LCD bus.
@@ -390,7 +394,7 @@ target because their legacy GPIO initialization overlaps the PanelLan LCD bus.
 ### Mini coexistence and transport profiles
 
 The explicit SPI profile is an alias of the default integrated LVGL/controller
-build (state-fed mini #1, not the standalone test):
+build (state-fed mirrored TFT1/TFT2, not the standalone TFT1-only test):
 
 ```sh
 pio run -e panelan-lvgl-controller-spi-mini
@@ -404,10 +408,13 @@ SPI2_HOST mode-0 10 MHz profile (80x160 glass, portrait offset 26,1, rotated
 90° CW to 160x80 logical landscape; the integrated mini starts at landscape
 X offset 0 to avoid its observed left-edge RAM column). LovyanGFX does not
 own CS or reset pins: the MCP driver preloads all GPB0..6 high, pulses shared
-GPB6 reset with all CS high, then brackets initialization and each draw by
-selecting GPB0 only and deasserting all CS afterwards. GPB1..5 remain high;
-TFT2..6 and expander switch wiring are not implemented. After mini init it
-immediately sends six solid
+GPB6 reset with all CS high, then brackets each controller initialization and
+draw by deasserting all CS, selecting GPB0 (TFT1) or GPB1 (TFT2) only, and
+deasserting all CS afterwards. The two displays are driven sequentially, never
+selected together; transient select/deselect failures retry without permanently
+disabling rendering, and a card is cached only after both draws finish. GPB2..5
+remain high; TFT3..6 and expander switch wiring are not implemented. Each mini
+immediately receives six solid
 color bars, borders and `MINI` using LGFX primitives, holds that image for at
 least five seconds, then draws dark state-driven cards with slot/FX cues and a
   full-width status strip over SPI only when visible content changes (including the

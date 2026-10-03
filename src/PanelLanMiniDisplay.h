@@ -11,7 +11,7 @@
 #error "SPI mini and raw GPIO trace cannot share the mini pins"
 #endif
 
-// Direct, write-only top-left card; no LVGL objects or controller actions.
+// Direct, write-only mirrored TFT1/TFT2 cards; no LVGL objects or controller actions.
 class PanelLanMiniDisplay {
 public:
     PanelLanMiniDisplay();
@@ -28,7 +28,10 @@ public:
 private:
 #ifdef PANELAN_MINI_SPI_MODE
     bool miniReady_ = false;
+    uint8_t miniInitialized_ = 0;
+    void initPanels();
     uint32_t splashAt_ = 0;
+    uint32_t miniRetryAt_ = 0;
     PanelLanLVGLUI::View lastView_{};
     char lastCard_[96]{};
     bool cardDrawn_ = false;

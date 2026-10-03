@@ -551,26 +551,32 @@ void SparkDataControl::processSparkData(ByteVector &blk) {
     handleSendingAck(blk);
 
     MessageProcessStatus retCode = sparkSsr.processBlock(blk);
-    if (retCode == MSG_PROCESS_RES_REQUEST && operationMode_ == SPARK_MODE_AMP) {
-        handleAmpModeRequest();
-    }
-    if (retCode == MSG_PROCESS_RES_COMPLETE) {
-        const auto &parsed = sparkSsr.lastMessage();
-        const uint8_t responseNumber = statusObject.lastMessageNum();
-        const uint8_t responseCmd = parsed.empty() ? 0 : parsed.back().cmd;
-        const uint8_t responseSubcmd = parsed.empty() ? 0 : parsed.back().subcmd;
-        handleAppModeResponse();
-        // State processing and correlation gates see every complete message,
-        // including unsolicited ones, before transport ownership is released.
-        if (responseLane_.complete(responseNumber, responseCmd, responseSubcmd)) {
-            telemetry_.response(queryTelemetryId_, millis());
-            queryTelemetryId_ = 0;
-            notificationArmed_.store(false);
+    bool completed = false;
+    const bool hasMessage = retCode != MSG_PROCESS_RES_INCOMPLETE;
+    while (retCode != MSG_PROCESS_RES_INCOMPLETE) {
+        if (retCode == MSG_PROCESS_RES_REQUEST && operationMode_ == SPARK_MODE_AMP) {
+            handleAmpModeRequest();
         }
+        if (retCode == MSG_PROCESS_RES_COMPLETE) {
+            completed = true;
+            const auto &parsed = sparkSsr.lastMessage();
+            const uint8_t responseNumber = statusObject.lastMessageNum();
+            const uint8_t responseCmd = parsed.empty() ? 0 : parsed.back().cmd;
+            const uint8_t responseSubcmd = parsed.empty() ? 0 : parsed.back().subcmd;
+            handleAppModeResponse();
+            // State processing and correlation gates see every complete message,
+            // including unsolicited ones, before transport ownership is released.
+            if (responseLane_.complete(responseNumber, responseCmd, responseSubcmd)) {
+                telemetry_.response(queryTelemetryId_, millis());
+                queryTelemetryId_ = 0;
+                notificationArmed_.store(false);
+            }
+        }
+        handleIncomingAck();
+        retCode = sparkSsr.nextMessage();
     }
-
-    handleIncomingAck();
-    if (retCode == MSG_PROCESS_RES_COMPLETE) serviceRetainedIntents();
+    if (!hasMessage) handleIncomingAck();
+    if (completed) serviceRetainedIntents();
 }
 
 bool SparkDataControl::processAction() {

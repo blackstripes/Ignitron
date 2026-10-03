@@ -5,6 +5,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <string>
+#include <esp_partition.h>
 
 #include "SparkDataControl.h"
 #include "SparkPresetControl.h"
@@ -85,6 +86,31 @@ unsigned long lastInitialPresetTimestamp = 0;
 unsigned long currentTimestamp = 0;
 int initialRequestInterval = 3000;
 
+// Only auto-format a filesystem partition that is truly erased. A nonblank
+// unmountable image may contain recoverable user presets, so leave it intact.
+bool littleFsPartitionIsBlank() {
+    const esp_partition_t *partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+    if (!partition) {
+        Serial.println("LittleFS: filesystem partition 'spiffs' not found");
+        return false;
+    }
+
+    uint8_t buffer[1024];
+    for (size_t offset = 0; offset < partition->size; offset += sizeof(buffer)) {
+        const size_t count = partition->size - offset < sizeof(buffer)
+                                 ? partition->size - offset
+                                 : sizeof(buffer);
+        if (esp_partition_read(partition, offset, buffer, count) != ESP_OK) {
+            Serial.println("LittleFS: unable to inspect partition; preserving it");
+            return false;
+        }
+        for (size_t i = 0; i < count; ++i)
+            if (buffer[i] != 0xff) return false;
+    }
+    return true;
+}
+
 // Check for initial boot
 bool isInitBoot;
 OperationMode operationMode = SPARK_MODE_APP;
@@ -140,8 +166,21 @@ void setup() {
     serialCLI = new SparkSerialCLI(spark_dc);
     #endif
     SparkPresetControl::getInstance().setDataControl(spark_dc);
-    const bool littleFsMounted = LittleFS.begin(false);
-    if (!littleFsMounted) Serial.println("LittleFS Mount failed; continuing with RAM-only event log");
+    bool littleFsMounted = LittleFS.begin(false);
+    if (!littleFsMounted) {
+        if (littleFsPartitionIsBlank()) {
+            Serial.println("LittleFS: blank partition; formatting fresh filesystem");
+            littleFsMounted = LittleFS.begin(true);
+            if (littleFsMounted) Serial.println("LittleFS: fresh filesystem mounted");
+        } else {
+            Serial.println("LittleFS: nonblank mount failure; preserving data and using RAM-only event log");
+        }
+        if (!littleFsMounted) Serial.println("LittleFS Mount failed; continuing with RAM-only event log");
+    }
+    if (littleFsMounted)
+        Serial.printf("LittleFS: mounted (%lu/%lu bytes used)\n",
+                      static_cast<unsigned long>(LittleFS.usedBytes()),
+                      static_cast<unsigned long>(LittleFS.totalBytes()));
     persistentEventLog.begin(littleFsMounted);
     persistentEventLog.record(littleFsMounted ? PersistentEvent::Boot : PersistentEvent::FilesystemUnavailable, 0, true);
 

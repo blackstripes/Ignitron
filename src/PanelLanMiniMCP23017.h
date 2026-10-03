@@ -3,11 +3,12 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// MCP23017 at 0x20, default BANK=0 register map. Only port B is driven:
+// MCP23017 at 0x27 (Waveshare board address pins open/high), default BANK=0.
+// Only port B is driven:
 // GPB0..5 = active-low TFT1..6 CS; GPB6 = shared active-low reset.
 // GPB7 remains an input. No dependency on the main PanelLan touch I2C bus.
 class PanelLanMiniMCP23017 {
-    static constexpr uint8_t address_ = 0x20;
+    static constexpr uint8_t address_ = 0x27;
     static constexpr uint8_t csMask_ = 0x3f;
     static constexpr uint8_t resetMask_ = 0x40;
     static constexpr uint8_t high_ = csMask_ | resetMask_;
@@ -16,10 +17,25 @@ class PanelLanMiniMCP23017 {
     bool ready_ = false;
 
     bool write(uint8_t reg, uint8_t value) {
-        Wire.beginTransmission(address_);
-        Wire.write(reg);
-        Wire.write(value);
-        return Wire.endTransmission() == 0;
+        for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+            Wire.beginTransmission(address_);
+            Wire.write(reg);
+            Wire.write(value);
+            const uint8_t status = Wire.endTransmission();
+            if (status == 0) return true;
+            if (attempt == 1) {
+                Serial.printf("MCP23017: write reg 0x%02X failed (I2C status %u)\n", reg, status);
+                return false;
+            }
+
+            // SPI/display initialization can leave the shared Wire peripheral
+            // needing a restart. Rebind only after a failed transaction, then
+            // retry once; successful transactions keep the bus untouched.
+            Wire.end();
+            delay(2);
+            Wire.begin(12, 13);
+        }
+        return false;
     }
 
 public:
@@ -29,7 +45,7 @@ public:
         // Preload the latch *while pins are still inputs*: no selected TFT
         // when switching GPB0..6 to outputs. GPB7 is left as an input.
         if (!write(olatB_, high_) || !write(iodirB_, 0x80)) {
-            Serial.println("MCP23017: no ACK at 0x20 or port-B setup failed");
+            Serial.println("MCP23017: no ACK at 0x27 or port-B setup failed");
             return false;
         }
         ready_ = true;
@@ -38,7 +54,7 @@ public:
         delay(20);
         if (!write(olatB_, high_)) { ready_ = false; return false; }
         delay(120);
-        Serial.println("MCP23017: detected at 0x20; GPB0-GPB6 ready, TFT1 reset complete");
+        Serial.println("MCP23017: detected at 0x27; GPB0-GPB6 ready, shared TFT1/TFT2 reset complete");
         return true;
     }
 
@@ -47,7 +63,6 @@ public:
     bool select(uint8_t display) {
         if (!ready_ || display < 1 || display > 6) return false;
         if (!write(olatB_, high_) || !write(olatB_, high_ & ~(1u << (display - 1)))) {
-            ready_ = false;
             return false;
         }
         return true;
@@ -55,7 +70,7 @@ public:
 
     bool deselect() {
         if (!ready_) return false;
-        if (!write(olatB_, high_)) { ready_ = false; return false; }
+        if (!write(olatB_, high_)) return false;
         return true;
     }
 };

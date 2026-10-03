@@ -9,11 +9,13 @@
 #define SPARK_STREAM_READER_H
 
 #include <string>
+#include <deque>
 #include <tuple>
 #include <vector>
 
 #include "Config_Definitions.h"
 #include "SparkHelper.h"
+#include "SparkReceiveAssembly.h"
 #include "SparkStatus.h"
 #include "SparkTypes.h"
 #include "StringBuilder.h"
@@ -43,12 +45,13 @@ private:
     ByteVector msgData;
     int msgPos;
     bool parseValid_ = true;
-    // indicator if a block received is the last one
-    bool msgLastBlock = false;
+    SparkReceiveAssembly assembly_;
+    SparkReceiveFrames frameReader_;
     vector<ByteVector> response;
-
-    byte lastReadByte;
-    const byte endMarker = 0xF7;
+    // Completed logical messages waiting for the receive consumer. Parse on
+    // dequeue so lastMessage(), SparkStatus and trace frames refer to the
+    // item currently being handled, not the last frame in the BLE block.
+    deque<vector<ByteVector>> pendingMessages_;
 
     // Functions to process calls based on identified cmd/sub_cmd.
     void readAmpName();
@@ -71,8 +74,6 @@ private:
     void readSerialNumber();
     void readInputVolume();
 
-    void preProcessBlock(ByteVector &blk);
-    bool blockIsStarted(ByteVector &blk);
 
     // Functions to structure and process input data (high level)
     vector<CmdData> readMessage(bool processHeader = true);
@@ -104,6 +105,8 @@ public:
 
     tuple<boolean, byte, byte> needsAck(const ByteVector &block);
     MessageProcessStatus processBlock(ByteVector &block);
+    // Drain any further complete logical messages from the same block.
+    MessageProcessStatus nextMessage();
     AckData getLastAckAndEmpty();
     void clearMessageBuffer();
     // Discard all incremental framing state after a lost transport fragment

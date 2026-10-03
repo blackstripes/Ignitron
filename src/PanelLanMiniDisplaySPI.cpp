@@ -11,10 +11,12 @@
 namespace {
 // Rotation maps the portrait row offset onto landscape X. The integrated
 // module showed a stray left-edge RAM column at offset 1; start at column 0.
-PanelLanMiniSPI tft(0);
+PanelLanMiniSPI tft1(0);
+PanelLanMiniSPI tft2(0);
+PanelLanMiniSPI *const tfts[] = {&tft1, &tft2};
 PanelLanMiniMCP23017 miniSelect;
 
-void drawSplash() {
+void drawSplash(PanelLanMiniSPI &tft) {
     constexpr uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFE0, 0xF81F, 0x07FF};
     tft.fillScreen(0x0000);
     for (int i = 0; i < 6; ++i) tft.fillRect(4 + i * 26, 4, 26, 72, colors[i]);
@@ -108,8 +110,7 @@ void drawMark(lgfx::LGFXBase &g, Mark mark, int y, uint16_t color) {
     }
 }
 
-void drawCard(const Card &card) {
-    lgfx::LGFXBase &g = tft;
+void drawCard(PanelLanMiniSPI &g, const Card &card) {
     g.fillScreen(bg);
     g.setTextSize(1);
     g.setTextDatum(lgfx::textdatum_t::middle_center);
@@ -137,30 +138,54 @@ void drawCard(const Card &card) {
 
 PanelLanMiniDisplay::PanelLanMiniDisplay() = default;
 
-void PanelLanMiniDisplay::begin() {
-    Serial.println("ST7735S: integrated SPI2 init (write-only)");
-    if (!miniSelect.begin() || !miniSelect.select(1)) {
-        Serial.println("ST7735S: MCP23017 init/select failed; mini disabled");
-        return;
-    }
-    tft.init();
-    tft.setRotation(1); // 90 degrees clockwise: 160x80 landscape
-    Serial.printf("ST7735S logical geometry: %d x %d\n", tft.width(), tft.height());
-    drawSplash(); // first pixels before controller state is consulted
-    miniReady_ = miniSelect.deselect();
-    if (!miniReady_) {
-        Serial.println("ST7735S: MCP23017 deselect failed; mini disabled");
-        return;
+void PanelLanMiniDisplay::initPanels() {
+    while (miniInitialized_ < 2) {
+        const uint8_t display = miniInitialized_ + 1;
+        if (!miniSelect.select(display)) {
+            // A failed selection may have left a CS asserted. Try to clear it;
+            // the next select also starts with all CS high.
+            miniSelect.deselect();
+            miniRetryAt_ = millis() + 1000;
+            Serial.printf("ST7735S: MCP23017 select failed; TFT%u init will retry\n", display);
+            return;
+        }
+        PanelLanMiniSPI &tft = *tfts[miniInitialized_];
+        tft.init();
+        tft.setRotation(1); // 90 degrees clockwise: 160x80 landscape
+        Serial.printf("ST7735S TFT%u logical geometry: %d x %d\n", display, tft.width(), tft.height());
+        drawSplash(tft); // first pixels before controller state is consulted
+        if (!miniSelect.deselect()) {
+            miniRetryAt_ = millis() + 1000;
+            Serial.printf("ST7735S: MCP23017 deselect failed; TFT%u init will retry\n", display);
+            return;
+        }
+        Serial.printf("ST7735S TFT%u: SPI2 color bars sent (no readback)\n", display);
+        ++miniInitialized_;
     }
     splashAt_ = millis();
-    Serial.println("ST7735S: SPI2 color bars sent (no readback)");
+}
+
+void PanelLanMiniDisplay::begin() {
+    Serial.println("ST7735S: integrated SPI2 init (write-only)");
+    if (!miniSelect.begin()) {
+        Serial.println("ST7735S: MCP23017 init failed; minis disabled");
+        return;
+    }
+    miniReady_ = true;
+    initPanels();
 }
 
 void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view) {
     if (!miniReady_) return;
+    const uint32_t now = millis();
+    if (static_cast<int32_t>(now - miniRetryAt_) < 0) return;
+    if (miniInitialized_ < 2) {
+        initPanels();
+        return;
+    }
     // Keep the diagnostic visible through startup, even if the controller is
     // disconnected or BLE setup is slow. Afterwards use only SPI2 for state cards.
-    if (millis() - splashAt_ < 5000) return;
+    if (now - splashAt_ < 5000) return;
     Card card;
     switch (view) {
     case PanelLanLVGLUI::View::Preset:
@@ -231,19 +256,23 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
              card.name, card.status, card.accent, static_cast<unsigned>(card.layout),
              static_cast<unsigned>(card.mark), card.filled);
     if (cardDrawn_ && view == lastView_ && !strcmp(key, lastCard_)) return;
-    if (!miniSelect.select(1)) {
-        miniReady_ = false;
-        Serial.println("ST7735S: MCP23017 select failed; mini disabled");
-        return;
-    }
-    drawCard(card);
-    if (!miniSelect.deselect()) {
-        miniReady_ = false;
-        Serial.println("ST7735S: MCP23017 deselect failed; mini disabled");
-        return;
+    for (uint8_t i = 0; i < 2; ++i) {
+        const uint8_t display = i + 1;
+        if (!miniSelect.select(display)) {
+            miniSelect.deselect();
+            miniRetryAt_ = millis() + 1000;
+            Serial.printf("ST7735S: MCP23017 select failed; TFT%u draw will retry\n", display);
+            return;
+        }
+        drawCard(*tfts[i], card);
+        if (!miniSelect.deselect()) {
+            miniRetryAt_ = millis() + 1000;
+            Serial.printf("ST7735S: MCP23017 deselect failed; TFT%u draw will retry\n", display);
+            return;
+        }
     }
     if (view == PanelLanLVGLUI::View::Preset)
-        Serial.printf("ST7735S preset card sent (no readback): slot=1 name=%s active=%u\n",
+        Serial.printf("ST7735S TFT1/TFT2 preset cards sent (no readback): slot=1 name=%s active=%u\n",
                       card.name, snapshot.confirmedHardwarePreset);
     lastView_ = view;
     strcpy(lastCard_, key);

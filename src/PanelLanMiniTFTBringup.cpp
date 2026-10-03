@@ -33,7 +33,7 @@ void setup() {
         delay(10);
     }
     Serial.println("PanelLan SC05_X external ST7735S bring-up (no LCD/Spark)");
-    Serial.println("3.3V external power for VCC and BLK; MOSI=10 SCK=11 DC=14; I2C SDA=12 SCL=13; MCP=0x20 GPB0=CS GPB6=RES; no MISO");
+    Serial.println("3.3V external power for VCC and BLK; MOSI=10 SCK=11 DC=14; I2C SDA=12 SCL=13; MCP=0x27 GPB0=CS GPB6=RES; no MISO");
     Serial.println("Trying 80x160, RAM offset (26,1), rotation 0, 10 MHz SPI");
     if (!miniSelect.begin() || !miniSelect.select(1)) {
         Serial.println("MCP23017 init/select failed; diagnostic not sent");
