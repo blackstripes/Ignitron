@@ -23,6 +23,9 @@ queue<ByteVector> SparkDataControl::msgQueue;
 SemaphoreHandle_t SparkDataControl::msgQueueMutex = nullptr;
 atomic_bool SparkDataControl::ingressInvalidated_{false};
 SparkOutbound<CmdData> SparkDataControl::currentCommand;
+SparkResponseLane SparkDataControl::responseLane_;
+SparkRetainedIntents SparkDataControl::retainedIntents_;
+SparkSubmission SparkDataControl::lastSubmissionStatus_ = SparkSubmission::Failed;
 deque<AckData> SparkDataControl::pendingLooperAcks;
 uint32_t SparkDataControl::finalAckRevision_ = 0;
 AckData SparkDataControl::lastFinalAck_;
@@ -166,6 +169,11 @@ OperationMode SparkDataControl::init(OperationMode opModeInput) {
 }
 
 void SparkDataControl::switchSubMode(SubMode subMode) {
+    lastSubmissionStatus_ = SparkSubmission::Sent;
+    // A refused tuner write must not claim a local mode transition. Do this
+    // before keyboard/tail-window side effects as well.
+    if (subMode_ == SUB_MODE_TUNER && subMode != SUB_MODE_TUNER && !switchTuner(false)) return;
+    if (subMode == SUB_MODE_TUNER && subMode_ != SUB_MODE_TUNER && !switchTuner(true)) return;
     // TODO: Check if that works fine
     if (subMode == SUB_MODE_LOOPER) {
         bleKeyboard.start();
@@ -178,10 +186,6 @@ void SparkDataControl::switchSubMode(SubMode subMode) {
         // exit. Ignore only this short tail; a later sample is still allowed
         // to reveal a genuinely active externally-entered tuner session.
         ignoreTunerOutputUntilMs_ = millis() + 2000;
-        switchTuner(false);
-    }
-    if (subMode == SUB_MODE_TUNER) {
-        switchTuner(true);
     }
     subMode_ = subMode;
     SparkPresetControl::getInstance().updatePendingWithActive();
@@ -240,8 +244,7 @@ bool SparkDataControl::toggleLooperAppMode() {
             newSubMode = SUB_MODE_LOOP_CONTROL;
             looperControl_.stop();
             looperControl_.reset();
-            sparkLooperGetConfig();
-            sparkLooperGetStatus();
+            requestLooperSync();
         } else {
             newSubMode = SUB_MODE_LOOPER;
         }
@@ -368,6 +371,10 @@ void SparkDataControl::resetStatus() {
     clearQueuedMessages();
     sparkSsr.reset();
     currentCommand.clear();
+    responseLane_.reset();
+    controllerFullPresetMessageNumber_ = 0;
+    retainedIntents_.reset();
+    lastSubmissionStatus_ = SparkSubmission::Failed;
     pendingLooperAcks.clear();
     currentMsg.clear();
     ackMsg.clear();
@@ -418,6 +425,7 @@ void SparkDataControl::readPresetChecksums() {
 
 void SparkDataControl::checkForUpdates() {
 
+    expireResponseOwner();
     ByteVector queuedMessage;
     while (true) {
         // A lost BLE fragment invalidates any partial Spark response. Reset
@@ -426,6 +434,7 @@ void SparkDataControl::checkForUpdates() {
             persistentEventLog.record(PersistentEvent::IngressInvalidated, 0, true);
             clearQueuedMessages();
             sparkSsr.reset();
+            invalidateResponseOwner();
             break;
         }
         if (!takeQueuedMessage(queuedMessage)) {
@@ -435,12 +444,14 @@ void SparkDataControl::checkForUpdates() {
             persistentEventLog.record(PersistentEvent::IngressInvalidated, 0, true);
             clearQueuedMessages();
             sparkSsr.reset();
+            invalidateResponseOwner();
             break;
         }
         processSparkData(queuedMessage);
     }
 
     SparkPresetControl::getInstance().checkForUpdates(operationMode_);
+    serviceRetainedIntents();
 
     if (recordStartFlag) {
         if (looperControl_.currentBar() != 0) {
@@ -479,9 +490,8 @@ void SparkDataControl::checkForUpdates() {
     unsigned int currentTime = millis();
     if (lastAmpBatteryUpdate == 0 || (currentTime - lastAmpBatteryUpdate > updateAmpBatteryInterval)) {
         Serial.println("Reading current battery level");
-        lastAmpBatteryUpdate = currentTime;
         currentMsg = sparkMsg.getAmpStatus(nextMessageNum);
-        triggerCommand(currentMsg);
+        if (triggerCommand(currentMsg)) lastAmpBatteryUpdate = currentTime;
     }
 #endif
 #endif
@@ -525,10 +535,18 @@ void SparkDataControl::processSparkData(ByteVector &blk) {
         handleAmpModeRequest();
     }
     if (retCode == MSG_PROCESS_RES_COMPLETE) {
+        const auto &parsed = sparkSsr.lastMessage();
+        const uint8_t responseNumber = statusObject.lastMessageNum();
+        const uint8_t responseCmd = parsed.empty() ? 0 : parsed.back().cmd;
+        const uint8_t responseSubcmd = parsed.empty() ? 0 : parsed.back().subcmd;
         handleAppModeResponse();
+        // State processing and correlation gates see every complete message,
+        // including unsolicited ones, before transport ownership is released.
+        responseLane_.complete(responseNumber, responseCmd, responseSubcmd);
     }
 
     handleIncomingAck();
+    if (retCode == MSG_PROCESS_RES_COMPLETE) serviceRetainedIntents();
 }
 
 bool SparkDataControl::processAction() {
@@ -580,11 +598,11 @@ bool SparkDataControl::changePreset(Preset preset) {
 
 bool SparkDataControl::switchEffectOnOff(const string &fxName, bool enable, uint8_t *messageNumber) {
 
-    SparkPresetControl::getInstance().switchFXOnOff(fxName, enable);
     currentMsg = sparkMsg.turnEffectOnOff(nextMessageNum, fxName, enable);
 
     const uint8_t issuedMessageNumber = nextMessageNum == 0 ? 0x01 : nextMessageNum;
     const bool sent = triggerCommand(currentMsg);
+    if (sent) SparkPresetControl::getInstance().switchFXOnOff(fxName, enable);
     if (sent && messageNumber != nullptr) {
         *messageNumber = issuedMessageNumber;
     }
@@ -631,6 +649,36 @@ bool SparkDataControl::getSerialNumber() {
     return triggerCommand(currentMsg);
 }
 
+void SparkDataControl::requestSerialNumber() {
+    retainedIntents_.request(SparkRetainedIntents::Serial);
+    serviceRetainedIntents();
+}
+
+void SparkDataControl::requestCurrentPresetRefresh() {
+    retainedIntents_.request(SparkRetainedIntents::CurrentPreset);
+    // Only the controller loop dispatches this: callers may be inside the
+    // response handler, before its current owner has been released.
+}
+
+SparkSubmission SparkDataControl::lastSubmissionStatus() { return lastSubmissionStatus_; }
+
+bool SparkDataControl::responseQueryPending(uint8_t messageNumber, uint8_t subcmd) {
+    expireResponseOwner();
+    return responseLane_.owns(messageNumber, subcmd);
+}
+
+void SparkDataControl::invalidateResponseOwner() {
+    if (responseLane_.owns(controllerFullPresetMessageNumber_, 0x01))
+        controllerFullPresetMessageNumber_ = 0;
+    responseLane_.reset();
+}
+
+void SparkDataControl::expireResponseOwner() {
+    const bool ownedController = responseLane_.owns(controllerFullPresetMessageNumber_, 0x01);
+    if (responseLane_.expire(millis()) && ownedController)
+        controllerFullPresetMessageNumber_ = 0;
+}
+
 bool SparkDataControl::getFirmwareVersion() {
     currentMsg = sparkMsg.getFirmwareVersion(nextMessageNum);
     DEBUG_PRINTLN("Getting firmware version from Spark");
@@ -658,15 +706,68 @@ bool SparkDataControl::getCurrentPreset(int num) {
 bool SparkDataControl::triggerCommand(vector<CmdData> &msg) {
     // The first part must actually be written before a caller may treat true
     // as an issued command. Never replace another command's unsent parts.
-    if (currentCommand.hasRemaining()) return false;
+    expireResponseOwner();
+    if (currentCommand.hasRemaining() ||
+        (!msg.empty() && msg.front().cmd == 0x02 && responseLane_.active())) {
+        lastSubmissionStatus_ = SparkSubmission::Busy;
+        return false;
+    }
+    if (msg.empty() || !responseLane_.supported(msg.front().cmd, msg.front().subcmd)) {
+        lastSubmissionStatus_ = SparkSubmission::Failed;
+        return false;
+    }
     // Spark encodes zero as wire sequence one. A command built with zero is
     // therefore sequence one, so advance directly to two and avoid reusing
     // one for the following command.
     nextMessageNum = nextNormalSparkMessageNumber(nextMessageNum);
     // sparkSsr.clearMessageBuffer();
     DEBUG_PRINTLN("Sending message via BT.");
-    return currentCommand.start(msg, writeRequest);
+    if (!currentCommand.start(msg, writeRequest)) {
+        lastSubmissionStatus_ = SparkSubmission::Failed;
+        return false;
+    }
+    responseLane_.acquire(msg.front().cmd, msg.front().subcmd, msg.front().msgNum, millis());
+    lastSubmissionStatus_ = SparkSubmission::Sent;
+    return true;
     // sparkSsr.clearMessageBuffer();
+}
+
+void SparkDataControl::serviceRetainedIntents() {
+    if (operationMode_ != SPARK_MODE_APP || !isAmpConnected()) return;
+    retainedIntents_.service([](SparkRetainedIntents::Kind kind) {
+        switch (kind) {
+        case SparkRetainedIntents::AmpName: return getAmpName();
+        case SparkRetainedIntents::Serial: return getSerialNumber();
+        case SparkRetainedIntents::Checksums: return getHWChecksums();
+        case SparkRetainedIntents::CurrentPreset: return getCurrentPresetFromSpark();
+        case SparkRetainedIntents::LooperConfig:
+            currentMsg = sparkMsg.getLooperConfig(nextMessageNum);
+            return triggerCommand(currentMsg);
+        case SparkRetainedIntents::LooperStatus:
+            currentMsg = sparkMsg.getLooperStatus(nextMessageNum);
+            return triggerCommand(currentMsg);
+        case SparkRetainedIntents::LooperRecordStatus:
+            currentMsg = sparkMsg.getLooperRecordStatus(nextMessageNum);
+            return triggerCommand(currentMsg);
+        default: return false;
+        }
+    });
+}
+
+void SparkDataControl::requestLooperSync() {
+    retainedIntents_.request(SparkRetainedIntents::LooperConfig);
+    retainedIntents_.request(SparkRetainedIntents::LooperStatus);
+    serviceRetainedIntents();
+}
+
+void SparkDataControl::requestLooperStatus() {
+    retainedIntents_.request(SparkRetainedIntents::LooperStatus);
+    serviceRetainedIntents();
+}
+
+void SparkDataControl::requestLooperRecordStatus() {
+    retainedIntents_.request(SparkRetainedIntents::LooperRecordStatus);
+    serviceRetainedIntents();
 }
 
 bool SparkDataControl::writeRequest(const CmdData &request) {
@@ -807,7 +908,7 @@ void SparkDataControl::handleAppModeResponse() {
             DEBUG_PRINTLN("Last message was amp name.");
             sparkAmpName = statusObject.ampName();
             setAmpParameters();
-            getHWChecksums();
+            retainedIntents_.request(SparkRetainedIntents::Checksums);
             printMessage = true;
             // The PanelLan profile uses this as the command-readiness gate.
             // The original source left it disabled, causing valid reconnects
@@ -823,7 +924,7 @@ void SparkDataControl::handleAppModeResponse() {
             cancelHWPresetRead();
             SparkPresetControl::getInstance().setAmpParameters(sparkAmpName);
             // reading HW checksums for cache
-            getAmpName();
+            retainedIntents_.request(SparkRetainedIntents::AmpName);
             printMessage = true;
         }
 
@@ -841,7 +942,7 @@ void SparkDataControl::handleAppModeResponse() {
             // try to load last selected preset from filesystem,
             // if not available, read current preset from amp
             if (!presetControl.readLastPresetFromFile()) {
-                getCurrentPresetFromSpark();
+                retainedIntents_.request(SparkRetainedIntents::CurrentPreset);
             };
 #endif
         }
@@ -1133,7 +1234,8 @@ bool SparkDataControl::checkBLEConnection() {
                 // The initial model query selects the correct Spark 2 / NEO
                 // transport parameters.  It must run only after the GATT
                 // notification channel is usable.
-                getAmpName();
+                retainedIntents_.request(SparkRetainedIntents::AmpName);
+                serviceRetainedIntents();
                 Serial.println("BLE connection to Spark established.");
                 return true;
             }
@@ -1222,6 +1324,8 @@ uint8_t SparkDataControl::fullPresetObservationMessageNumber() {
 }
 
 void SparkDataControl::expectControllerFullPreset(uint8_t messageNumber) {
+    if (messageNumber == 0)
+        responseLane_.revokeControllerFullPreset(controllerFullPresetMessageNumber_);
     controllerFullPresetMessageNumber_ = messageNumber;
 }
 
@@ -1495,7 +1599,9 @@ void SparkDataControl::updateLooperCommand(byte lastCommand) {
 
 bool SparkDataControl::sparkLooperStopAll() {
     bool stopReturn = sparkLooperStopPlaying();
+    if (!stopReturn) return false;
     bool recStopReturn = sparkLooperStopRec();
+    if (!recStopReturn) lastSubmissionStatus_ = SparkSubmission::Failed; // STOP already sent.
     return stopReturn && recStopReturn;
 }
 
@@ -1505,7 +1611,7 @@ bool SparkDataControl::sparkLooperStopPlaying() {
     if (retValue) {
         looperControl_.stop();
         looperControl_.reset();
-        sparkLooperGetStatus();
+        retainedIntents_.request(SparkRetainedIntents::LooperStatus);
     }
     return retValue;
 }
@@ -1514,16 +1620,15 @@ bool SparkDataControl::sparkLooperPlay() {
     // The local playback flag can outlive the last trustworthy Spark
     // observation. It may avoid restarting our timer, never suppress an
     // explicit native PLAY request or claim that request was sent.
-    if (!(looperControl_.isPlaying())) {
-        looperControl_.start();
-    }
-    return sparkLooperCommand(SPK_LOOPER_CMD_PLAY);
+    if (!sparkLooperCommand(SPK_LOOPER_CMD_PLAY)) return false;
+    if (!(looperControl_.isPlaying())) looperControl_.start();
+    return true;
 }
 
 bool SparkDataControl::sparkLooperRec() {
     bool countIn = looperControl_.looperSetting().click;
     if (countIn) {
-        sparkLooperCommand(SPK_LOOPER_CMD_COUNTIN);
+        if (!sparkLooperCommand(SPK_LOOPER_CMD_COUNTIN)) return false;
         looperControl_.setCurrentBar(0);
     }
     looperControl_.start();
@@ -1533,15 +1638,19 @@ bool SparkDataControl::sparkLooperRec() {
 
 bool SparkDataControl::sparkLooperDub() {
     bool retValue = sparkLooperCommand(SPK_LOOPER_CMD_DUB);
+    if (!retValue) return false;
     // looperControl_.reset();
-    looperControl_.start();
     retValue = retValue && sparkLooperCommand(SPK_LOOPER_CMD_PLAY);
-    looperControl_.isPlaying() = true;
+    if (!retValue) lastSubmissionStatus_ = SparkSubmission::Failed; // DUB already sent; not safe to replay.
+    if (retValue) {
+        looperControl_.start();
+        looperControl_.isPlaying() = true;
+    }
     return retValue;
 }
 
 bool SparkDataControl::sparkLooperRetry() {
-    sparkLooperCommand(SPK_LOOPER_CMD_RETRY);
+    if (!sparkLooperCommand(SPK_LOOPER_CMD_RETRY)) return false;
     looperControl_.reset();
     return sparkLooperRec();
 }
@@ -1550,14 +1659,22 @@ bool SparkDataControl::sparkLooperRetry() {
 bool SparkDataControl::sparkLooperStopRec() {
     bool isRecAvailable = looperControl_.isRecAvailable();
     bool retVal = false;
+    bool stopSent = false;
     if (isRecAvailable) {
         retVal = sparkLooperCommand(SPK_LOOPER_CMD_STOP_DUB);
+        stopSent = retVal;
     } else {
         retVal = sparkLooperCommand(SPK_LOOPER_CMD_STOP_REC);
-        retVal = sparkLooperCommand(SPK_LOOPER_CMD_REC_COMPLETE);
-        looperControl_.reset();
+        stopSent = retVal;
+        if (retVal && !sparkLooperCommand(SPK_LOOPER_CMD_REC_COMPLETE)) {
+            retVal = false;
+            lastSubmissionStatus_ = SparkSubmission::Failed; // STOP_REC already sent.
+        }
+        if (retVal) looperControl_.reset();
     }
-    sparkLooperGetStatus();
+    // A Busy first stop has not changed Spark: do not occupy the response
+    // lane with a status query ahead of the queued controller retry.
+    if (refreshLooperAfterStop(stopSent)) retainedIntents_.request(SparkRetainedIntents::LooperStatus);
     return retVal;
 }
 
@@ -1579,8 +1696,10 @@ bool SparkDataControl::sparkLooperRedo() {
 
 bool SparkDataControl::sparkLooperStopRecAndPlay() {
     // sparkLooperCommand(SPK_LOOPER_CMD_STOPREC);
-    sparkLooperStopRec();
-    return sparkLooperPlay();
+    if (!sparkLooperStopRec()) return false;
+    if (sparkLooperPlay()) return true;
+    lastSubmissionStatus_ = SparkSubmission::Failed; // STOP_REC already sent.
+    return false;
 }
 
 bool SparkDataControl::sparkLooperDeleteAll() {

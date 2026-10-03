@@ -65,7 +65,7 @@ void SparkPresetControl::getMissingHWPresets() {
         if (sparkDC->processAction()) {
             // Only check for HW presets if current preset is known
             if (activePreset_.isEmpty) {
-                sparkDC->getCurrentPresetFromSpark();
+                sparkDC->requestCurrentPresetRefresh();
                 return;
             }
             // DEBUG_PRINTLN("Checking missing HW presets");
@@ -257,7 +257,7 @@ void SparkPresetControl::setActiveHWPreset() {
     if (activePreset_.isEmpty) {
 #if !defined(PANELAN_LVGL_UI_MODE)
         DEBUG_PRINTLN("Cache not filled, getting preset from Spark");
-        sparkDC->getCurrentPresetFromSpark();
+        sparkDC->requestCurrentPresetRefresh();
 #endif
     }
 }
@@ -328,7 +328,7 @@ void SparkPresetControl::updateFromSparkResponseHWPreset(int presetNum) {
     if (newPreset.isEmpty) {
 #if !defined(PANELAN_LVGL_UI_MODE)
         Serial.println("Preset number changed, preset not cached, getting current preset from Spark");
-        sparkDC->getCurrentPresetFromSpark();
+        sparkDC->requestCurrentPresetRefresh();
 #endif
     }
     // In case there are more than (PRESETS_PER_BANK) HW Presets, we have to calculate modulo (for internal display);

@@ -258,7 +258,7 @@ void loop() {
         // After connection is established, continue.
         // On first boot, get the amp type and initial state.
         if (spark_dc->isInitBoot()) {
-            spark_dc->getSerialNumber();
+            spark_dc->requestSerialNumber();
             spark_dc->isInitBoot() = false;
         }
     }

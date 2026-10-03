@@ -376,8 +376,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             sentLooperAction_ = LooperAction::None;
         } else if (millis() - looperSentAtMs_ >= kLooperTimeoutMs) {
             state_.failLooperRequest();
-            dataControl.sparkLooperGetStatus();
-            dataControl.sparkLooperGetConfig();
+            dataControl.requestLooperSync();
             sentLooperAction_ = LooperAction::None;
         }
         return;
@@ -385,7 +384,6 @@ void ControllerActions::process(SparkDataControl &dataControl) {
 
     if (queuedLooperAction_ != LooperAction::None) {
         const LooperAction action = queuedLooperAction_;
-        queuedLooperAction_ = LooperAction::None;
         const uint32_t commandRevisionBeforeSend = SparkDataControl::looperCommandObservationRevision();
         const uint32_t statusRevisionBeforeSend = SparkDataControl::looperStatusObservationRevision();
         bool sent = false;
@@ -410,12 +408,16 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         default: break;
         }
         if (sent) {
+            queuedLooperAction_ = LooperAction::None;
             sentLooperAction_ = action;
             looperSentAtMs_ = millis();
             looperCommandRevisionBeforeRequest_ = commandRevisionBeforeSend;
             looperStatusRevisionBeforeRequest_ = statusRevisionBeforeSend;
         }
-        else state_.failLooperRequest();
+        else if (!keepQueuedSparkIntent(SparkDataControl::lastSubmissionStatus())) {
+            queuedLooperAction_ = LooperAction::None;
+            state_.failLooperRequest();
+        }
         return;
     }
 
@@ -445,23 +447,27 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     }
 
     if (queuedTunerRequest_) {
-        queuedTunerRequest_ = false;
         if (!queuedTunerEnabled_) {
             // Spark 2 accepted the native 0x01/0x65-off command in testing
             // but did not consistently emit TUNER_OFF. The project's normal
             // tuner-off path makes the same request and restores preset mode;
             // a later fresh tuner output still wins and re-enters tuner.
             SparkDataControl::switchSubMode(SUB_MODE_PRESET);
-            Serial.println("Controller: requested tuner exit via preset mode");
+            if (keepQueuedSparkIntent(SparkDataControl::lastSubmissionStatus())) return;
+            if (SparkDataControl::lastSubmissionStatus() == SparkSubmission::Sent)
+                Serial.println("Controller: requested tuner exit via preset mode");
+            queuedTunerRequest_ = false;
             return;
         }
         if (SparkDataControl::switchTuner(queuedTunerEnabled_)) {
+            queuedTunerRequest_ = false;
             tunerRequestSent_ = true;
             tunerRequestEnabled_ = queuedTunerEnabled_;
             tunerRequestSentAtMs_ = millis();
             Serial.printf("Controller: requesting tuner %s\n",
                           queuedTunerEnabled_ ? "entry" : "exit");
-        } else {
+        } else if (!keepQueuedSparkIntent(SparkDataControl::lastSubmissionStatus())) {
+            queuedTunerRequest_ = false;
             Serial.printf("Controller: tuner %s command failed\n",
                           queuedTunerEnabled_ ? "entry" : "exit");
         }
@@ -475,8 +481,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         snapshot.looperCapability == ControllerLooperCapability::Verified &&
         (!snapshot.looperKnown || !snapshot.looperSettingsKnown) &&
         (looperSyncRequestedAtMs_ == 0 || millis() - looperSyncRequestedAtMs_ >= kLooperTimeoutMs)) {
-        dataControl.sparkLooperGetConfig();
-        dataControl.sparkLooperGetStatus();
+        dataControl.requestLooperSync();
         looperSyncRequestedAtMs_ = millis();
         return;
     }
@@ -532,6 +537,10 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         // PanelLan owns the startup full-preset request, avoiding races with
         // legacy cache restoration and giving the current link one authority.
         if (fullPresetRetry_.due(millis())) {
+            // The two-second controller cadence does not supersede a still
+            // fragmented transport response; wait for its five-second lane.
+            if (startupFullPresetQueryIssued_ && dataControl.responseQueryPending(startupFullPresetQueryMessageNumber_, 0x01))
+                return;
 #ifdef PANELAN_PRESET_TRACE
             const bool retry = fullPresetRetry_.attempted();
             if (startupFullPresetQueryIssued_)
@@ -543,11 +552,14 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             presetTraceStartupTarget_ = snapshot.confirmedHardwarePreset;
             presetTraceStartupId_ = presetTraceSatisfiedTarget_ == snapshot.confirmedHardwarePreset ? presetTraceId_ : 0;
 #endif
-            // On retry, revoke the old reply even if the new send fails.
+            const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
+            uint8_t newMessage = 0;
+            const bool sent = dataControl.getCurrentPresetFromSpark(&newMessage);
+            if (!sent && keepQueuedSparkIntent(dataControl.lastSubmissionStatus())) return;
             state_.expectStartupFullPreset(0);
             SparkDataControl::expectControllerFullPreset(0);
-            const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
-            startupFullPresetQueryIssued_ = dataControl.getCurrentPresetFromSpark(&startupFullPresetQueryMessageNumber_);
+            startupFullPresetQueryIssued_ = sent;
+            if (sent) startupFullPresetQueryMessageNumber_ = newMessage;
             fullPresetRetry_.attemptedAt(millis(), startupFullPresetQueryIssued_,
                                          startupFullPresetQueryMessageNumber_, revisionBeforeSend);
             PRESET_TRACE("event=startup_full_query id=%lu target=%u msg=%u sent=%u match=0 ready=0 retry=%u",
@@ -732,8 +744,9 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             fullPresetRetry_.reset();
             SparkDataControl::expectControllerFullPreset(0);
         } else if (fullPresetRetry_.due(millis()) ||
-                    (snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetFullTarget_)) {
+                     (snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetFullTarget_)) {
             const bool conflict = snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetFullTarget_;
+            if (!conflict && dataControl.responseQueryPending(presetFullQueryMessageNumber_, 0x01)) return;
             PRESET_TRACE("event=%s id=%lu target=%u msg=%u elapsed=%lu",
                          conflict ? "full_data_conflict" : "full_data_timeout",
                          static_cast<unsigned long>(presetTraceId_), presetFullTarget_, presetFullQueryMessageNumber_,
@@ -826,16 +839,21 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             // conflicts. Query after the grace period even without ACK, and
             // wait a full response window before replacing fragmented replies.
             if (fxFullPresetRetry_.due(millis(), fxSentAtMs_)) {
-                // NEO Core may omit both ACK and FX_ONOFF. Revoke the previous reply
-                // before every replacement, including a failed send.
-                SparkDataControl::expectControllerFullPreset(0);
+                // NEO may omit both ACK and FX_ONOFF. A still-owned fragmented
+                // response must not be superseded by the retry cadence.
+                if (fxFullPresetRetry_.attempted() &&
+                    dataControl.responseQueryPending(fxFullPresetRetry_.messageNumber(), 0x01)) return;
                 const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
                 const bool firstQuery = !fxFullPresetRetry_.attempted();
                 uint8_t fxQueryMessage = 0;
                 const bool sent = dataControl.getCurrentPresetFromSpark(&fxQueryMessage);
+                if (!sent && keepQueuedSparkIntent(dataControl.lastSubmissionStatus())) return;
+                SparkDataControl::expectControllerFullPreset(0);
                 fxFullPresetRetry_.attemptedAt(millis(), sent, fxQueryMessage, revisionBeforeSend,
-                                               fxAckReceived_);
-                if (sent) SparkDataControl::expectControllerFullPreset(fxQueryMessage);
+                                                fxAckReceived_);
+                if (sent) {
+                    SparkDataControl::expectControllerFullPreset(fxQueryMessage);
+                }
 #ifdef PANELAN_PRESET_TRACE
                 PRESET_TRACE("event=fx_full_query slot=%u msg=%u sent=%u first=%u ack=%u elapsed=%lu",
                               sentFxSlot_, sent ? fxQueryMessage : 0, sent, firstQuery, fxAckReceived_,
@@ -900,12 +918,13 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             persistentEventLog.record(PersistentEvent::FxSend, sentFxSlot_);
             Serial.printf("Controller: sending FX %u (%s) %s\n", sentFxSlot_, sentFxModelName_.c_str(),
                           sentFxDesiredEnabled_ ? "on" : "off");
-        } else {
+        } else if (!keepQueuedSparkIntent(SparkDataControl::lastSubmissionStatus())) {
             cancelFxRequest(state_, &dataControl, true, "Spark command send failed");
         }
         return;
     }
     const uint8_t preset = presetTargets_.takeQueued();
+    const uint8_t reconciliationBeforeSend = reconciledPresetNumber_;
     const bool satisfiedByReconciliation = reconciledPresetNumber_ == preset;
     const bool mustSendAfterReconciliation = reconciledPresetNumber_ != 0 && !satisfiedByReconciliation;
     reconciledPresetNumber_ = 0;
@@ -932,6 +951,10 @@ void ControllerActions::process(SparkDataControl &dataControl) {
         awaitingPresetFullResponse_ = false;
         SparkDataControl::recordControllerPresetSend();
         persistentEventLog.record(PersistentEvent::PresetSend, preset);
+    } else if (keepQueuedSparkIntent(SparkDataControl::lastSubmissionStatus())) {
+        presetTargets_.select(preset, false);
+        reconciledPresetNumber_ = reconciliationBeforeSend;
+        return;
     } else {
         PRESET_TRACE("event=fail id=%lu target=%u reason=send elapsed=%lu", static_cast<unsigned long>(presetTraceId_),
                      preset, static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));

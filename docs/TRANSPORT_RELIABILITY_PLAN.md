@@ -294,7 +294,9 @@ Initial migration should be behavior-preserving:
 At this phase, prove that unrelated calls cannot overwrite a multi-part command.
 
 Phase 2 implementation contract: the outbound owner retains unsent parts until
-their BLE writes succeed; a competing ordinary command returns false without
+their BLE writes succeed (except after a BLE write failure, when the disconnected
+transport discards unsent parts rather than replaying a partial command); a
+competing ordinary command returns false without
 consuming a sequence number. A matching 05/01 intermediate ACK releases one
 part. Protocol ACKs write immediately outside this owner and do not create
 pending looper requests, but still advance the ordinary sequence cursor once
@@ -340,6 +342,69 @@ Key rules:
 - full-preset reads get enough uninterrupted receive time to complete.
 
 Do not remove the existing message-number/revision correlation gates. The scheduler complements them.
+
+Phase 3/4 implementation audit (main e2d56c5 baseline): the only active
+controller-to-Spark GATT route is `triggerCommand -> SparkOutbound ->
+writeRequest -> sendMessageToBT -> SparkBTControl::writeBLE`. All ordinary
+mutations (preset/FX/tuner/looper/settings), full/current-number/identity/
+firmware/checksum/amp-battery/looper queries, cache reads and CLI calls use it.
+`writeSparkProtocolAck -> sendMessageToBT` is the explicit fast path: ACKs
+neither wait for nor release the ordinary owner. AMP-mode `notifyClients` sends
+in the opposite direction; there is no other active direct Spark BLE writer.
+
+The owner rejects busy submissions synchronously without advancing the request
+cursor. One successfully written 02 query owns the receive lane for 5000 ms
+(wrap-safe), until a **complete parsed** 03 response has the same message
+number and subcommand, or until revoke, ingress invalidation, or link reset.
+Expiry/invalidation/link reset also clear the matching PanelLan full-preset
+publication gate before any orphaned late reply can publish active state.
+Supported 02 subcommands are 01, 10, 11, 23, 2a, 2b, 2f, 71, 75, 76, 78;
+unknown queries fail closed. 03/38 broadcasts and transport ACKs do not
+retire 02/10. A 01/38 mutation does not own the response lane: NEO can omit
+its final ACK while the controller needs to send 02/10 verification. A 01
+mutation may write during a pending 02 response if no multipart parts remain;
+a second 02 is rejected without consuming a sequence. Semantic
+confirmation remains the controller's own revision/message correlation, not
+transport completion. A revoked/expired response with an older normal sequence
+cannot release its successor; the reserved EE cache sequence is not reused by
+normal requests. Sequence identity alone cannot disambiguate replies if a
+number is eventually reused after a full wrap or a repeated reserved EE read;
+hardware validation/correlation remains necessary.
+
+The controller's two-second preset retry check does **not** revoke a still-
+owned fragmented response: the five-second transport deadline wins. A busy
+replacement (including unrelated response ownership) retains the old semantic
+and publication gates and does not count as a failed replacement attempt.
+Only after that owner expires/completes, or on a successfully dispatched
+replacement, may the controller change its expectation. A first or intermediate
+multipart BLE write failure clears unsent outbound parts (the BLE transport
+disconnects); replay of a partially written command is not automatic.
+
+Busy-intent audit: the connection amp-name read, legacy startup serial read,
+post-serial amp-name read, post-name checksums, legacy post-checksum and cache-
+miss full-preset follow-ups, looper-entry/controller config+status pairs, and
+legacy button looper status/record-status reads retain **named intent** (not built
+messages or sequence reservations) and retry from the controller loop. Follow-
+ups requested inside response handlers dispatch only after lane release. CLI
+`amp` queues serial after a successfully sent name query; `refresh` reports
+rejected sends. Queued controller preset/FX/looper/tuner actions keep their
+pending intent on multipart-owner Busy; attempted BLE write failures still
+fail. A refused tuner write cannot advance the local mode. The
+record-start command, looper settings `changePending`, and legacy custom
+preset-number follow-up already retain state until a successful send; the amp
+battery poll now leaves its due time unchanged on busy. Controller preset/FX
+queries and cache slot reads have existing bounded periodic retry/state gates;
+controller serial/checksum cache metadata also retries periodically. Diagnostic
+and CLI one-shot calls may report busy and require explicit retry; other
+multi-step looper commands do not gain atomicity here. No priority queue,
+preemption, automatic retry of failed BLE writes, Phase 5 telemetry, or timing
+tuning is included in this phase.
+Legacy Spark-2 looper *button mutations* remain one-shot: if their first send
+is Busy or fails, serial output explicitly says the action was not sent and
+requires another press. They are not silently queued because a composite
+looper operation with an already-written first subcommand cannot safely be
+replayed. A Busy first STOP_REC/STOP_DUB does not schedule a competing status
+query; a later failed subcommand after a sent stop may schedule a refresh.
 
 ### Phase 5 - instrumentation and tuning
 

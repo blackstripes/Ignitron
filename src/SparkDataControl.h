@@ -15,6 +15,9 @@
 #include "SparkKeyboardControl.h"
 #include "SparkLooperControl.h"
 #include "SparkOutbound.h"
+#include "SparkResponseLane.h"
+#include "SparkRetainedIntents.h"
+#include "SparkSubmission.h"
 
 #include <Arduino.h>
 #include <atomic>
@@ -106,6 +109,11 @@ public:
     static bool getAmpName();
     static bool getCurrentPresetNum(uint8_t *messageNumber = nullptr);
     static bool getSerialNumber();
+    static void requestSerialNumber();
+    static void requestCurrentPresetRefresh();
+    static SparkSubmission lastSubmissionStatus();
+    // Services the 5s transport deadline before testing this exact owner.
+    static bool responseQueryPending(uint8_t messageNumber, uint8_t subcmd);
     static bool getFirmwareVersion();
     static bool getHWChecksums();
     bool getCurrentPreset(int num);
@@ -192,6 +200,10 @@ public:
     bool sparkLooperGetStatus();
     bool sparkLooperGetConfig();
     bool sparkLooperGetRecordStatus();
+    // One-shot internal refresh, retained until each query is dispatched.
+    static void requestLooperSync();
+    static void requestLooperStatus();
+    static void requestLooperRecordStatus();
 
     void tapTempoButton();
 
@@ -282,6 +294,9 @@ private:
     static constexpr size_t kMaxQueuedNotifications = 32;
     static atomic_bool ingressInvalidated_;
     static SparkOutbound<CmdData> currentCommand;
+    static SparkResponseLane responseLane_;
+    static SparkRetainedIntents retainedIntents_;
+    static SparkSubmission lastSubmissionStatus_;
     static deque<AckData> pendingLooperAcks;
     static uint32_t finalAckRevision_;
     static AckData lastFinalAck_;
@@ -312,6 +327,9 @@ private:
     static bool takeQueuedMessage(ByteVector &message);
     static void clearQueuedMessages();
     static bool triggerCommand(vector<CmdData> &msg);
+    static void serviceRetainedIntents();
+    static void invalidateResponseOwner();
+    static void expireResponseOwner();
     static bool writeRequest(const CmdData &request);
 
     // Retrieves the current preset from Spark (required for HW presets)

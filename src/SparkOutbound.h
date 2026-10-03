@@ -39,7 +39,12 @@ public:
     template <typename Write>
     bool sendNext(Write write) {
         if (remaining_.empty()) return false;
-        if (!write(remaining_.front())) return false;
+        if (!write(remaining_.front())) {
+            // BLE failed and disconnects the link. Replaying a partial
+            // multipart command would be unsafe; release all unsent parts.
+            clear();
+            return false;
+        }
         lastWritten_ = remaining_.front();
         lastWrittenValid_ = true;
         remaining_.pop_front();

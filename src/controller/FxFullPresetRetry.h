@@ -12,6 +12,7 @@ public:
 
     void reset() { attempted_ = false; revoke(); }
     bool attempted() const { return attempted_; }
+    uint8_t messageNumber() const { return message_; }
     bool querySentAfterAck() const { return message_ != 0 && sentAfterAck_; }
     bool expired(uint32_t now, uint32_t commandSentAt) const {
         return uint32_t(now - commandSentAt) >= kDeadlineMs;

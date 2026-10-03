@@ -102,16 +102,17 @@ void SparkSerialCLI::execute(String command) {
         if (!SparkDataControl::isAmpConnected()) {
             Serial.println("Spark amp is not connected.");
         } else {
-            sparkDC_->getAmpName();
-            sparkDC_->getSerialNumber();
-            Serial.println("Requested amp identity. Run 'status' after the response arrives.");
+            if (sparkDC_->getAmpName()) {
+                sparkDC_->requestSerialNumber();
+                Serial.println("Requested amp identity; serial queued after name response.");
+            } else Serial.println("Amp identity not sent (transport busy or write failed); retry 'amp'.");
         }
     } else if (verb == "refresh") {
         if (!SparkDataControl::isAmpConnected()) {
             Serial.println("Spark amp is not connected.");
         } else {
-            sparkDC_->getCurrentPresetFromSpark();
-            Serial.println("Requested current preset.");
+            Serial.println(sparkDC_->getCurrentPresetFromSpark() ? "Requested current preset." :
+                           "Current preset not sent (transport busy or write failed); retry 'refresh'.");
         }
     } else if (verb == "screenshot") {
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
@@ -324,10 +325,12 @@ void SparkSerialCLI::handleTuner(const String &args) {
 
     if (args == "on") {
         sparkDC_->switchSubMode(SUB_MODE_TUNER);
-        Serial.println("Tuner enabled.");
+        Serial.println(SparkDataControl::lastSubmissionStatus() == SparkSubmission::Sent ?
+                       "Tuner command sent; awaiting Spark observation." : "Tuner command not sent; retry.");
     } else if (args == "off") {
         sparkDC_->switchSubMode(SUB_MODE_PRESET);
-        Serial.println("Tuner disabled.");
+        Serial.println(SparkDataControl::lastSubmissionStatus() == SparkSubmission::Sent ?
+                       "Tuner exit command sent; awaiting Spark observation." : "Tuner exit not sent; retry.");
     } else {
         Serial.println("Usage: tuner on|off");
     }

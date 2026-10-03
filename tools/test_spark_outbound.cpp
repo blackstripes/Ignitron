@@ -61,12 +61,10 @@ int main() {
     assert(simple.start({{next, 1, 0x38, 41}}, write));
     assert(writes[writes.size() - 1] == 41);
 
-    // Failed writes retain the unsent part and do not release ownership.
+    // Failed writes disconnect transport; an unsent part must not block
+    // subsequent work after link recovery.
     SparkOutbound<Part> failed;
     assert(!failed.start(a, [](const Part &) { return false; }));
-    assert(failed.hasRemaining());
-    assert(!failed.start({{2, 1, 0x38, 20}}, write));
-    failed.clear();
     assert(!failed.hasRemaining());
     assert(failed.start({{2, 1, 0x38, 20}}, write));
 
@@ -76,8 +74,9 @@ int main() {
     next = 1;
     next = nextNormalSparkMessageNumber(next);
     assert(!failedFirst.start({{1, 1, 0x38, 22}},
-                              [](const Part &) { return false; }));
+                               [](const Part &) { return false; }));
     assert(next == 2);
+    assert(!failedFirst.hasRemaining());
 
     // With no intermediate ACK the owner retains its remaining parts and
     // rejects unrelated requests without advancing their message cursor.
@@ -92,9 +91,8 @@ int main() {
     const std::vector<Part> twoParts{{1, 1, 1, 50}, {1, 1, 1, 51}};
     assert(retry.start(twoParts, write));
     assert(!retry.onIntermediateAck(Ack{1, 5, 1}, [](const Part &) { return false; }));
-    assert(retry.hasRemaining());
-    assert(retry.onIntermediateAck(Ack{1, 5, 1}, write));
     assert(!retry.hasRemaining());
+    assert(retry.start({{2, 1, 0x38, 52}}, write));
 
     next = 3;
     assert(!writeSparkProtocolAck(std::vector<Part>{{0x66, 4, 1, 92}}, next,

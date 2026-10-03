@@ -397,34 +397,38 @@ void SparkButtonHandler::btnSpark2LooperHandler(BfButton *btn, BfButton::press_p
     DEBUG_PRINT("Button pressed: ");
     DEBUG_PRINTLN(pressed_btn_gpio);
 
+    const auto reportIfRejected = [](bool sent) {
+        if (!sent) Serial.println(legacyLooperButtonFailure(SparkDataControl::lastSubmissionStatus()));
+    };
+
     // Check if button has been pressed short or long
     switch (pattern) {
     case BfButton::SINGLE_PRESS:
         switch (pressed_btn_gpio) {
         case BUTTON_PRESET1_GPIO:
-            spark_dc_->sparkLooperRecDub();
+            reportIfRejected(spark_dc_->sparkLooperRecDub());
             break;
         case BUTTON_PRESET2_GPIO:
-            spark_dc_->sparkLooperPlayStop();
+            reportIfRejected(spark_dc_->sparkLooperPlayStop());
             break;
         case BUTTON_PRESET3_GPIO:
-            spark_dc_->sparkLooperUndoRedo();
+            reportIfRejected(spark_dc_->sparkLooperUndoRedo());
             break;
         case BUTTON_PRESET4_GPIO:
-            spark_dc_->sparkLooperGetRecordStatus();
+            spark_dc_->requestLooperRecordStatus();
             break;
         case BUTTON_BANK_DOWN_GPIO:
             spark_dc_->tapTempoButton();
             break;
         case BUTTON_BANK_UP_GPIO:
-            spark_dc_->sparkLooperGetStatus();
+            spark_dc_->requestLooperStatus();
             break;
         }
         break;
     case BfButton::LONG_PRESS:
         switch (pressed_btn_gpio) {
         case BUTTON_PRESET3_GPIO:
-            spark_dc_->sparkLooperDeleteAll();
+            reportIfRejected(spark_dc_->sparkLooperDeleteAll());
             break;
         }
     }
