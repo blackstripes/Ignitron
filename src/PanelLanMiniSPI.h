@@ -3,6 +3,7 @@
 #include <LovyanGFX.hpp>
 
 // Shared write-only mini profile for standalone and integrated SPI tests.
+// CS and reset are owned by PanelLanMiniMCP23017, never by LovyanGFX.
 // BLK is externally powered; do not drive it from the MCU.
 class PanelLanMiniSPI : public lgfx::LGFX_Device {
     lgfx::Panel_ST7735S panel_;
@@ -24,8 +25,8 @@ public:
         panel_.setBus(&bus_);
 
         auto panelConfig = panel_.config();
-        panelConfig.pin_rst = 12;
-        panelConfig.pin_cs = 13;
+        panelConfig.pin_rst = -1;
+        panelConfig.pin_cs = -1;
         panelConfig.panel_width = 80;
         panelConfig.panel_height = 160;
         panelConfig.offset_x = 26;

@@ -5,12 +5,14 @@
 #include <cstdio>
 #include <cstring>
 #include "PanelLanMiniSPI.h"
+#include "PanelLanMiniMCP23017.h"
 #include "controller/HardwarePresetNames.h"
 
 namespace {
 // Rotation maps the portrait row offset onto landscape X. The integrated
 // module showed a stray left-edge RAM column at offset 1; start at column 0.
 PanelLanMiniSPI tft(0);
+PanelLanMiniMCP23017 miniSelect;
 
 void drawSplash() {
     constexpr uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFE0, 0xF81F, 0x07FF};
@@ -137,15 +139,25 @@ PanelLanMiniDisplay::PanelLanMiniDisplay() = default;
 
 void PanelLanMiniDisplay::begin() {
     Serial.println("ST7735S: integrated SPI2 init (write-only)");
+    if (!miniSelect.begin() || !miniSelect.select(1)) {
+        Serial.println("ST7735S: MCP23017 init/select failed; mini disabled");
+        return;
+    }
     tft.init();
     tft.setRotation(1); // 90 degrees clockwise: 160x80 landscape
     Serial.printf("ST7735S logical geometry: %d x %d\n", tft.width(), tft.height());
     drawSplash(); // first pixels before controller state is consulted
+    miniReady_ = miniSelect.deselect();
+    if (!miniReady_) {
+        Serial.println("ST7735S: MCP23017 deselect failed; mini disabled");
+        return;
+    }
     splashAt_ = millis();
     Serial.println("ST7735S: SPI2 color bars sent (no readback)");
 }
 
 void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view) {
+    if (!miniReady_) return;
     // Keep the diagnostic visible through startup, even if the controller is
     // disconnected or BLE setup is slow. Afterwards use only SPI2 for state cards.
     if (millis() - splashAt_ < 5000) return;
@@ -219,7 +231,17 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
              card.name, card.status, card.accent, static_cast<unsigned>(card.layout),
              static_cast<unsigned>(card.mark), card.filled);
     if (cardDrawn_ && view == lastView_ && !strcmp(key, lastCard_)) return;
+    if (!miniSelect.select(1)) {
+        miniReady_ = false;
+        Serial.println("ST7735S: MCP23017 select failed; mini disabled");
+        return;
+    }
     drawCard(card);
+    if (!miniSelect.deselect()) {
+        miniReady_ = false;
+        Serial.println("ST7735S: MCP23017 deselect failed; mini disabled");
+        return;
+    }
     if (view == PanelLanLVGLUI::View::Preset)
         Serial.printf("ST7735S preset card sent (no readback): slot=1 name=%s active=%u\n",
                       card.name, snapshot.confirmedHardwarePreset);

@@ -27,6 +27,7 @@ public:
 
 private:
 #ifdef PANELAN_MINI_SPI_MODE
+    bool miniReady_ = false;
     uint32_t splashAt_ = 0;
     PanelLanLVGLUI::View lastView_{};
     char lastCard_[96]{};

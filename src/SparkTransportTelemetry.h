@@ -68,7 +68,12 @@ public:
     void pinSemantic(uint32_t id, unsigned slot) {
         if (slot >= 2) return;
         const Record *r = get(id);
-        semanticPins_[slot] = r && r->written ? SemanticPin{id, r->sendEnd} : SemanticPin{};
+        SemanticPin pin{};
+        if (r && r->written) {
+            pin.id = id;
+            pin.sendEnd = r->sendEnd;
+        }
+        semanticPins_[slot] = pin;
     }
     void semantic(uint32_t id, uint32_t now) {
         Record *r = get(id);

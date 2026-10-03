@@ -284,7 +284,10 @@ pio run -e panelan-mini-tft-bringup -t upload --upload-port /dev/your-device
 ```
 
 Power the module externally from **3.3 V** with common GND; connect IO10 to
-SDA/MOSI, IO11 to SCL/SCK, IO12 to RES, IO13 to CS, and IO14 to DC. No MISO is
+SDA/MOSI, IO11 to SCL/SCK and IO14 to DC. IO12 is now I2C SDA and IO13 I2C SCL
+to an MCP23017 at 0x20: GPB0 drives mini #1 CS and GPB6 drives RES. Provide
+3.3 V pull-ups on I2C; GPB1..5 are reserved high for future mini CS lines.
+Do not connect RES/CS directly to IO12/13. No MISO is
 used. Connect BLK to external 3.3 V (the standalone test displayed colors only
 after this connection); firmware never drives the backlight. Serial at
 115200 reports the selected settings and completion of the draw commands, but
@@ -311,7 +314,8 @@ normal Spark testing.
 - On a Spark reboot, the BLE client refreshes GATT services and subscribes
   again before it considers the connection usable.
 - The normal `panelan-lvgl-controller` initializes **mini #1 (top-left)** on
-  IO10=MOSI, IO11=SCK, IO12=RES, IO13=CS, IO14=DC (no MISO). BLK remains
+  IO10=MOSI, IO11=SCK, IO14=DC, MCP23017 GPB0=CS and GPB6=RES;
+  IO12/13 are I2C SDA/SCL (no MISO). BLK remains
   externally tied to regulated 3.3 V for maximum backlight, with common ground.
   The 2.8-inch panel backlight is set to brightness 255 (maximum); user
   brightness adjustment is deferred. The default renderer
@@ -392,13 +396,17 @@ build (state-fed mini #1, not the standalone test):
 pio run -e panelan-lvgl-controller-spi-mini
 ```
 
-Use the IO10-14 wiring above and regulated external 3.3 V for VCC and BLK,
+Use the IO10/11/14 and MCP23017 wiring above and regulated external 3.3 V for VCC and BLK,
 common ground, and the stable 5 V wall supply for the PanelLan board; do not
 connect two USB power sources simultaneously. Both SPI controller targets exclude
 the GPIO renderer and raw trace commands. They use the standalone LovyanGFX ST7735S
 SPI2_HOST mode-0 10 MHz profile (80x160 glass, portrait offset 26,1, rotated
 90° CW to 160x80 logical landscape; the integrated mini starts at landscape
-X offset 0 to avoid its observed left-edge RAM column). After mini init it
+X offset 0 to avoid its observed left-edge RAM column). LovyanGFX does not
+own CS or reset pins: the MCP driver preloads all GPB0..6 high, pulses shared
+GPB6 reset with all CS high, then brackets initialization and each draw by
+selecting GPB0 only and deasserting all CS afterwards. GPB1..5 remain high;
+TFT2..6 and expander switch wiring are not implemented. After mini init it
 immediately sends six solid
 color bars, borders and `MINI` using LGFX primitives, holds that image for at
 least five seconds, then draws dark state-driven cards with slot/FX cues and a

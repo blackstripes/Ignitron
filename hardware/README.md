@@ -1,6 +1,29 @@
 # Ignitron - Hardware
 This document describes the hardware side of the **Ignitron** foot pedal.
 
+## PanelLan SC05_X mini #1 MCP23017 prototype (separate from the legacy PCB below)
+
+The `panelan-lvgl-controller` and `panelan-mini-tft-bringup` targets now use
+an MCP23017 at I2C address **0x20** (A0/A1/A2 tied low) for the external
+ST7735S's CS and reset. This is a **one-display** bring-up, not the six-display
+PCB or the classic ESP32 wiring described below. Connect the PanelLan IO12 to
+MCP SDA and IO13 to MCP SCL, with 3.3 V I2C pull-ups, common ground and 3.3 V
+MCP supply. Connect IO10 to mini SDA/MOSI, IO11 to mini SCL/SCK, IO14 to mini
+DC, MCP GPB0 to mini #1 active-low CS, and MCP GPB6 to mini active-low RES.
+Power mini VCC and BLK externally at regulated 3.3 V with common ground;
+firmware never drives BLK. There is no MISO/readback. **Do not connect mini
+RES/CS to IO12/IO13:** those are I2C pins in these two targets.
+
+At startup the driver preloads GPB0..6 high before enabling them as outputs,
+then pulses GPB6 low/high while keeping all CS lines high. Before each mini
+SPI draw it deasserts all CS lines, selects GPB0 low, and deasserts all after
+the draw. GPB1..5 are reserved high for prospective TFT2..6 CS, not rendered
+or tested yet; GPB6 is shared reset and GPB7 stays an input. Switch wiring
+and handling via the expander are **not implemented**. Other targets (including
+the GPIO diagnostic fallback) have separate wiring and are not converted by
+this change. Visually check the standalone color bars/borders and the integrated
+mini splash/state cards: the write-only display cannot report pixel success.
+
 The software that controls the Spark amp runs on an ESP32 microcontroller which needs to be connected to the actual hardware so that it's able to react to hardware events, e.g. foot switch presses, and to indicate the current state via the LEDs. All of these connections, except the power supply via USB, are made via a PCB that piggybacks onto the ESP32 board.
 
 One objective of the PCB design was to keep things as modular as possible. This means that no cables coming from the hardware should be soldered directly to the PCB or the ESP32. For example the foot switches, LEDs and the external power supply are supposed to be connected by PCB connectors that can be connected and disconnected. In case you cannot find such connectors you can of course still solder the cables directly to the PCB.
