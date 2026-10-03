@@ -448,8 +448,8 @@ Queue delay begins at the first Busy rejection of a kind (or at dispatch if
 never Busy), not at UI tap time; synchronous Busy submissions are not queued,
 so this is a kind-level retry-wait estimate, not a per-action queue timestamp.
 BLE completion includes existing pacing and ends with the final successful
-part of a multipart command; earlier parts
-accumulate attempted BLE chunks but do not increment `sent` or mark the
+part of a multipart command; earlier parts accumulate attempted BLE chunks
+but do not increment `sent` or mark the
 transaction written. A failed later part increments `write_fail` only.
 The active response query retains bounded lifecycle state if its recent ring
 record is overwritten, so retries, timeout/termination and response totals
