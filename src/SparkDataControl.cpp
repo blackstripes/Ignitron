@@ -24,6 +24,15 @@ SemaphoreHandle_t SparkDataControl::msgQueueMutex = nullptr;
 atomic_bool SparkDataControl::ingressInvalidated_{false};
 SparkOutbound<CmdData> SparkDataControl::currentCommand;
 SparkResponseLane SparkDataControl::responseLane_;
+SparkTransportTelemetry SparkDataControl::telemetry_;
+uint32_t SparkDataControl::queryTelemetryId_ = 0, SparkDataControl::writeTelemetryId_ = 0;
+uint32_t SparkDataControl::lastMutationTelemetryId_ = 0;
+uint32_t SparkDataControl::presetTelemetryId_ = 0, SparkDataControl::fxTelemetryId_ = 0;
+uint32_t SparkDataControl::busySince_[2] = {};
+bool SparkDataControl::busySeen_[2] = {};
+atomic_uint32_t SparkDataControl::firstNotificationAt_{UINT32_MAX};
+atomic_bool SparkDataControl::notificationArmed_{false};
+atomic_uint32_t SparkDataControl::ingressHighWater_{0};
 SparkRetainedIntents SparkDataControl::retainedIntents_;
 SparkSubmission SparkDataControl::lastSubmissionStatus_ = SparkSubmission::Failed;
 deque<AckData> SparkDataControl::pendingLooperAcks;
@@ -371,6 +380,13 @@ void SparkDataControl::resetStatus() {
     clearQueuedMessages();
     sparkSsr.reset();
     currentCommand.clear();
+    telemetry_.end(queryTelemetryId_, SparkTransportTelemetry::Reason::LinkReset);
+    telemetry_.end(presetTelemetryId_, SparkTransportTelemetry::Reason::LinkReset);
+    telemetry_.end(fxTelemetryId_, SparkTransportTelemetry::Reason::LinkReset);
+    queryTelemetryId_ = 0;
+    presetTelemetryId_ = fxTelemetryId_ = lastMutationTelemetryId_ = writeTelemetryId_ = 0;
+    notificationArmed_.store(false);
+    busySeen_[0] = busySeen_[1] = false;
     responseLane_.reset();
     controllerFullPresetMessageNumber_ = 0;
     retainedIntents_.reset();
@@ -436,6 +452,10 @@ void SparkDataControl::checkForUpdates() {
             sparkSsr.reset();
             invalidateResponseOwner();
             break;
+        }
+        if (responseLane_.active() && queryTelemetryId_) {
+            const uint32_t at = firstNotificationAt_.load();
+            if (at != UINT32_MAX) telemetry_.notification(queryTelemetryId_, at);
         }
         if (!takeQueuedMessage(queuedMessage)) {
             break;
@@ -542,7 +562,11 @@ void SparkDataControl::processSparkData(ByteVector &blk) {
         handleAppModeResponse();
         // State processing and correlation gates see every complete message,
         // including unsolicited ones, before transport ownership is released.
-        responseLane_.complete(responseNumber, responseCmd, responseSubcmd);
+        if (responseLane_.complete(responseNumber, responseCmd, responseSubcmd)) {
+            telemetry_.response(queryTelemetryId_, millis());
+            queryTelemetryId_ = 0;
+            notificationArmed_.store(false);
+        }
     }
 
     handleIncomingAck();
@@ -668,6 +692,9 @@ bool SparkDataControl::responseQueryPending(uint8_t messageNumber, uint8_t subcm
 }
 
 void SparkDataControl::invalidateResponseOwner() {
+    telemetry_.ingressInvalidation(queryTelemetryId_);
+    queryTelemetryId_ = 0;
+    notificationArmed_.store(false);
     if (responseLane_.owns(controllerFullPresetMessageNumber_, 0x01))
         controllerFullPresetMessageNumber_ = 0;
     responseLane_.reset();
@@ -675,8 +702,12 @@ void SparkDataControl::invalidateResponseOwner() {
 
 void SparkDataControl::expireResponseOwner() {
     const bool ownedController = responseLane_.owns(controllerFullPresetMessageNumber_, 0x01);
-    if (responseLane_.expire(millis()) && ownedController)
-        controllerFullPresetMessageNumber_ = 0;
+    if (responseLane_.expire(millis())) {
+        telemetry_.end(queryTelemetryId_, SparkTransportTelemetry::Reason::Timeout);
+        queryTelemetryId_ = 0;
+        notificationArmed_.store(false);
+        if (ownedController) controllerFullPresetMessageNumber_ = 0;
+    }
 }
 
 bool SparkDataControl::getFirmwareVersion() {
@@ -709,6 +740,10 @@ bool SparkDataControl::triggerCommand(vector<CmdData> &msg) {
     expireResponseOwner();
     if (currentCommand.hasRemaining() ||
         (!msg.empty() && msg.front().cmd == 0x02 && responseLane_.active())) {
+        if (!msg.empty()) {
+            const unsigned kind = msg.front().cmd == 0x02 ? 0 : 1;
+            if (!busySeen_[kind]) { busySeen_[kind] = true; busySince_[kind] = millis(); }
+        }
         lastSubmissionStatus_ = SparkSubmission::Busy;
         return false;
     }
@@ -722,11 +757,32 @@ bool SparkDataControl::triggerCommand(vector<CmdData> &msg) {
     nextMessageNum = nextNormalSparkMessageNumber(nextMessageNum);
     // sparkSsr.clearMessageBuffer();
     DEBUG_PRINTLN("Sending message via BT.");
+    const bool query = msg.front().cmd == 0x02;
+    const unsigned kind = query ? 0 : 1;
+    const uint32_t id = telemetry_.begin(query ? 1 : 2, busySeen_[kind] ? busySince_[kind] : millis());
+    busySeen_[kind] = false;
+    writeTelemetryId_ = id;
+    if (query) {
+        firstNotificationAt_.store(UINT32_MAX);
+        notificationArmed_.store(true);
+    }
     if (!currentCommand.start(msg, writeRequest)) {
+        if (query) notificationArmed_.store(false);
+        writeTelemetryId_ = 0;
         lastSubmissionStatus_ = SparkSubmission::Failed;
         return false;
     }
+    writeTelemetryId_ = 0;
+    if (query) queryTelemetryId_ = id;
+    else lastMutationTelemetryId_ = id;
     responseLane_.acquire(msg.front().cmd, msg.front().subcmd, msg.front().msgNum, millis());
+    if (query && responseLane_.active()) {
+        // A callback can enqueue a reply during the synchronous BLE write.
+        // This timestamp was cleared before that write, not inherited from a
+        // notification of the previous query.
+        const uint32_t at = firstNotificationAt_.load();
+        if (at != UINT32_MAX) telemetry_.notification(id, at);
+    }
     lastSubmissionStatus_ = SparkSubmission::Sent;
     return true;
     // sparkSsr.clearMessageBuffer();
@@ -772,7 +828,12 @@ void SparkDataControl::requestLooperRecordStatus() {
 
 bool SparkDataControl::writeRequest(const CmdData &request) {
     ByteVector block = request.data;
-    if (!sendMessageToBT(block)) return false;
+    const uint32_t id = writeTelemetryId_;
+    telemetry_.start(id, millis());
+    size_t chunks = 0;
+    const bool sent = sendMessageToBT(block, &chunks);
+    telemetry_.write(id, millis(), static_cast<uint16_t>(chunks), sent, currentCommand.writingLastPart());
+    if (!sent) return false;
     AckData currRequest;
     currRequest.cmd = request.cmd;
     currRequest.subcmd = request.subcmd;
@@ -1142,7 +1203,9 @@ void SparkDataControl::handleIncomingAck() {
     AckData lastAck = sparkSsr.getLastAckAndEmpty();
     if (lastAck.cmd == 0x05) { // 05 is intermediate ack, not last message
         DEBUG_PRINTLN("Received intermediate ACK");
+        writeTelemetryId_ = lastMutationTelemetryId_;
         currentCommand.onIntermediateAck(lastAck, writeRequest);
+        writeTelemetryId_ = 0;
     }
     if (lastAck.cmd == 0x04) {
         lastFinalAck_ = lastAck;
@@ -1324,8 +1387,14 @@ uint8_t SparkDataControl::fullPresetObservationMessageNumber() {
 }
 
 void SparkDataControl::expectControllerFullPreset(uint8_t messageNumber) {
-    if (messageNumber == 0)
+    if (messageNumber == 0) {
+        if (responseLane_.owns(controllerFullPresetMessageNumber_, 0x01)) {
+            telemetry_.end(queryTelemetryId_, SparkTransportTelemetry::Reason::Revoked);
+            queryTelemetryId_ = 0;
+            notificationArmed_.store(false);
+        }
         responseLane_.revokeControllerFullPreset(controllerFullPresetMessageNumber_);
+    }
     controllerFullPresetMessageNumber_ = messageNumber;
 }
 
@@ -1346,12 +1415,17 @@ void SparkDataControl::recordBleReconnect() { ++bleReconnectCount_; }
 void SparkDataControl::recordIngressDropBusy() { ++ingressDropBusyCount_; persistentEventLog.record(PersistentEvent::IngressDropBusy, 0, true); }
 void SparkDataControl::recordIngressDropFull() { ++ingressDropFullCount_; persistentEventLog.record(PersistentEvent::IngressDropFull, 0, true); }
 void SparkDataControl::recordCompletedFullPreset() { ++completedFullPresetCount_; }
-void SparkDataControl::recordControllerPresetSend() { ++controllerPresetSendCount_; }
-void SparkDataControl::recordControllerPresetConfirm() { ++controllerPresetConfirmCount_; }
-void SparkDataControl::recordControllerPresetFailure() { ++controllerPresetFailureCount_; }
-void SparkDataControl::recordControllerFxSend() { ++controllerFxSendCount_; }
-void SparkDataControl::recordControllerFxConfirm() { ++controllerFxConfirmCount_; }
-void SparkDataControl::recordControllerFxFailure() { ++controllerFxFailureCount_; }
+void SparkDataControl::recordControllerPresetSend() { ++controllerPresetSendCount_; presetTelemetryId_ = lastMutationTelemetryId_; telemetry_.pinSemantic(presetTelemetryId_, 0); }
+void SparkDataControl::recordControllerPresetConfirm() { ++controllerPresetConfirmCount_; telemetry_.semantic(presetTelemetryId_, millis()); presetTelemetryId_ = 0; }
+void SparkDataControl::recordControllerPresetFailure() { ++controllerPresetFailureCount_; telemetry_.end(presetTelemetryId_, SparkTransportTelemetry::Reason::Failed); presetTelemetryId_ = 0; }
+void SparkDataControl::recordControllerFxSend() { ++controllerFxSendCount_; fxTelemetryId_ = lastMutationTelemetryId_; telemetry_.pinSemantic(fxTelemetryId_, 1); }
+void SparkDataControl::recordControllerFxConfirm() { ++controllerFxConfirmCount_; telemetry_.semantic(fxTelemetryId_, millis()); fxTelemetryId_ = 0; }
+void SparkDataControl::recordControllerFxFailure() { ++controllerFxFailureCount_; telemetry_.end(fxTelemetryId_, SparkTransportTelemetry::Reason::Failed); fxTelemetryId_ = 0; }
+void SparkDataControl::recordTransportRetry() {
+    // The replacement is the transaction being measured. The prior lane may
+    // already have timed out and its id is deliberately no longer retained.
+    if (responseLane_.active()) telemetry_.retry(queryTelemetryId_);
+}
 
 void SparkDataControl::printDiagnostics() {
     Serial.printf("diagnostics ble disconnect=%lu reconnect=%lu ingress busy=%lu full=%lu preset complete=%lu controller preset send=%lu confirm=%lu fail=%lu fx send=%lu confirm=%lu fail=%lu\n",
@@ -1366,6 +1440,31 @@ void SparkDataControl::printDiagnostics() {
                   static_cast<unsigned long>(controllerFxSendCount_.load()),
                   static_cast<unsigned long>(controllerFxConfirmCount_.load()),
                   static_cast<unsigned long>(controllerFxFailureCount_.load()));
+    Serial.printf("transport sent=%lu write_fail=%lu parsed=%lu semantic=%lu retry=%lu timeout=%lu invalidated=%lu ingress_hwm=%lu drops_busy=%lu drops_full=%lu\n",
+                  (unsigned long)telemetry_.sent, (unsigned long)telemetry_.writeFailed,
+                  (unsigned long)telemetry_.responses, (unsigned long)telemetry_.confirms,
+                  (unsigned long)telemetry_.retries, (unsigned long)telemetry_.timeouts,
+                  (unsigned long)telemetry_.invalidations, (unsigned long)ingressHighWater_.load(),
+                  (unsigned long)ingressDropBusyCount_.load(), (unsigned long)ingressDropFullCount_.load());
+    const SparkTransportTelemetry::Bucket *buckets[] = {&telemetry_.queueDelay, &telemetry_.firstResponse,
+                                                         &telemetry_.completeResponse, &telemetry_.confirmation};
+    const char *names[] = {"accept_to_write", "write_to_notify", "write_to_parse", "write_to_confirm"};
+    for (unsigned i = 0; i < 4; ++i) {
+        const auto &b = *buckets[i];
+        Serial.printf("transport %s <100=%lu <500=%lu <2000=%lu <5000=%lu >=5000=%lu\n", names[i],
+                      (unsigned long)b.count[0], (unsigned long)b.count[1], (unsigned long)b.count[2],
+                      (unsigned long)b.count[3], (unsigned long)b.count[4]);
+    }
+    if (telemetry_.lastId()) {
+        const auto &r = telemetry_.recent(0);
+        Serial.printf("transport id=%lu kind=%u reason=%u queue=%lu start=%lu end=%lu chunks=%u notify=%lu parsed=%lu semantic=%lu retries=%u resets=%u flags=%u\n",
+                      (unsigned long)r.id, r.kind, (unsigned)r.reason, (unsigned long)r.accepted,
+                      (unsigned long)r.sendStart, (unsigned long)r.sendEnd, r.chunks,
+                      (unsigned long)r.firstNotification, (unsigned long)r.parsed, (unsigned long)r.semantic,
+                      r.retries, r.invalidations,
+                      (r.started ? 1 : 0) | (r.written ? 2 : 0) | (r.notified ? 4 : 0) |
+                      (r.completed ? 8 : 0) | (r.confirmed ? 16 : 0));
+    }
 }
 
 bool SparkDataControl::isAppConnected() {
@@ -1412,6 +1511,13 @@ void SparkDataControl::queueMessage(ByteVector &blk) {
         Serial.println("Dropping Spark notification: ingress queue full");
     } else {
         msgQueue.push(blk);
+        if (notificationArmed_.load()) {
+            uint32_t unset = UINT32_MAX;
+            firstNotificationAt_.compare_exchange_strong(unset, millis());
+        }
+        const uint32_t depth = msgQueue.size();
+        uint32_t high = ingressHighWater_.load();
+        while (depth > high && !ingressHighWater_.compare_exchange_weak(high, depth)) {}
     }
     xSemaphoreGive(msgQueueMutex);
 }
@@ -1438,9 +1544,9 @@ void SparkDataControl::clearQueuedMessages() {
     xSemaphoreGive(msgQueueMutex);
 }
 
-bool SparkDataControl::sendMessageToBT(ByteVector &msg) {
+bool SparkDataControl::sendMessageToBT(ByteVector &msg, size_t *chunks) {
     DEBUG_PRINTLN("Sending message via BT.");
-    return bleControl->writeBLE(msg, withDelay);
+    return bleControl->writeBLE(msg, withDelay, false, chunks);
 }
 
 /////////////////////////////////////////////////////////

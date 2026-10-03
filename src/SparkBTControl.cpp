@@ -220,7 +220,8 @@ bool SparkBTControl::subscribeToNotifications(notify_callback notifyCallback) {
 }
 
 // To send messages to Spark via Bluetooth LE
-bool SparkBTControl::writeBLE(const ByteVector &cmd, bool withDelay, bool response) {
+bool SparkBTControl::writeBLE(const ByteVector &cmd, bool withDelay, bool response, size_t *chunkCount) {
+    if (chunkCount) *chunkCount = 0;
     // DEBUG_PRINTLN("Sending message:");
     // DEBUG_PRINTVECTOR(cmd);
     // DEBUG_PRINTLN();
@@ -247,6 +248,7 @@ bool SparkBTControl::writeBLE(const ByteVector &cmd, bool withDelay, bool respon
                     [characteristic, response](const uint8_t *data, size_t size) {
                         return characteristic->writeValue(data, size, response);
                     });
+                if (chunkCount) *chunkCount = result.attemptedChunkCount;
                 if (result.success) {
                     // Delay seems to be required in order to not lose any packages.
                     // Seems to be more stable with a short delay

@@ -106,7 +106,8 @@ public:
      *
      * @return TRUE only if every chunk was written successfully
      */
-    bool writeBLE(const ByteVector &cmd, bool withDelay = false, bool response = false);
+    bool writeBLE(const ByteVector &cmd, bool withDelay = false, bool response = false,
+                  size_t *chunkCount = nullptr);
     /**
      * @brief  Initializes Ignitron BLE as client to connect to the Spark Amp
      *

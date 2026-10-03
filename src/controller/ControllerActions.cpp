@@ -541,8 +541,8 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             // fragmented transport response; wait for its five-second lane.
             if (startupFullPresetQueryIssued_ && dataControl.responseQueryPending(startupFullPresetQueryMessageNumber_, 0x01))
                 return;
-#ifdef PANELAN_PRESET_TRACE
             const bool retry = fullPresetRetry_.attempted();
+#ifdef PANELAN_PRESET_TRACE
             if (startupFullPresetQueryIssued_)
                 PRESET_TRACE("event=startup_full_timeout id=%lu target=%u msg=%u sent=1 match=0 ready=0",
                              static_cast<unsigned long>(presetTraceStartupId_), presetTraceStartupTarget_,
@@ -556,6 +556,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             uint8_t newMessage = 0;
             const bool sent = dataControl.getCurrentPresetFromSpark(&newMessage);
             if (!sent && keepQueuedSparkIntent(dataControl.lastSubmissionStatus())) return;
+            if (sent && retry) SparkDataControl::recordTransportRetry();
             state_.expectStartupFullPreset(0);
             SparkDataControl::expectControllerFullPreset(0);
             startupFullPresetQueryIssued_ = sent;
@@ -685,6 +686,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 const uint32_t beforeQuery = SparkDataControl::hardwareNumberRevision();
                 uint8_t queryMessage = 0;
                 const bool querySent = dataControl.getCurrentPresetNum(&queryMessage);
+                if (querySent && numberVerification_.queryDispatched()) SparkDataControl::recordTransportRetry();
                 PRESET_TRACE("event=number_query id=%lu target=%u sent=%u elapsed=%lu",
                               static_cast<unsigned long>(presetTraceId_), sentPreset_, querySent,
                               static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
@@ -848,6 +850,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 uint8_t fxQueryMessage = 0;
                 const bool sent = dataControl.getCurrentPresetFromSpark(&fxQueryMessage);
                 if (!sent && keepQueuedSparkIntent(dataControl.lastSubmissionStatus())) return;
+                if (sent && !firstQuery) SparkDataControl::recordTransportRetry();
                 SparkDataControl::expectControllerFullPreset(0);
                 fxFullPresetRetry_.attemptedAt(millis(), sent, fxQueryMessage, revisionBeforeSend,
                                                 fxAckReceived_);

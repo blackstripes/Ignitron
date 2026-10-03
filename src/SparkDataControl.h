@@ -16,6 +16,7 @@
 #include "SparkLooperControl.h"
 #include "SparkOutbound.h"
 #include "SparkResponseLane.h"
+#include "SparkTransportTelemetry.h"
 #include "SparkRetainedIntents.h"
 #include "SparkSubmission.h"
 
@@ -90,6 +91,7 @@ public:
     static void recordControllerFxSend();
     static void recordControllerFxConfirm();
     static void recordControllerFxFailure();
+    static void recordTransportRetry(); // an attempted semantic verification replacement
     static void printDiagnostics();
     static bool isAppConnected(); // true if ESP in AMP mode and client is connected
     void startBLEServer();
@@ -295,6 +297,14 @@ private:
     static atomic_bool ingressInvalidated_;
     static SparkOutbound<CmdData> currentCommand;
     static SparkResponseLane responseLane_;
+    static SparkTransportTelemetry telemetry_;
+    static uint32_t queryTelemetryId_, writeTelemetryId_, lastMutationTelemetryId_;
+    static uint32_t presetTelemetryId_, fxTelemetryId_;
+    static uint32_t busySince_[2];
+    static bool busySeen_[2];
+    static atomic_uint32_t firstNotificationAt_;
+    static atomic_bool notificationArmed_;
+    static atomic_uint32_t ingressHighWater_;
     static SparkRetainedIntents retainedIntents_;
     static SparkSubmission lastSubmissionStatus_;
     static deque<AckData> pendingLooperAcks;
@@ -323,7 +333,7 @@ private:
     static atomic_uint32_t controllerFxConfirmCount_;
     static atomic_uint32_t controllerFxFailureCount_;
 
-    static bool sendMessageToBT(ByteVector &msg);
+    static bool sendMessageToBT(ByteVector &msg, size_t *chunks = nullptr);
     static bool takeQueuedMessage(ByteVector &message);
     static void clearQueuedMessages();
     static bool triggerCommand(vector<CmdData> &msg);

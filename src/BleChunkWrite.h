@@ -9,6 +9,7 @@ struct BleChunkWriteResult {
     bool success;
     std::size_t failedChunkIndex; // zero-based; equals chunkCount on success
     std::size_t chunkCount;
+    std::size_t attemptedChunkCount; // includes the rejected chunk; zero for empty input
 };
 
 // maxChunkSize must be positive. Writer receives a read-only slice of the
@@ -20,9 +21,9 @@ BleChunkWriteResult writeBleChunks(const std::vector<uint8_t> &cmd,
     for (std::size_t offset = 0, index = 0; offset < cmd.size(); ++index) {
         const std::size_t size = std::min(maxChunkSize, cmd.size() - offset);
         if (!writer(cmd.data() + offset, size)) {
-            return {false, index, count};
+            return {false, index, count, index + 1};
         }
         offset += size;
     }
-    return {true, count, count};
+    return {true, count, count, count};
 }

@@ -436,6 +436,46 @@ Useful latency buckets:
 
 Do not print every raw BLE packet in normal builds.
 
+Phase 5 implementation notes: `diagnostics` now prints lifetime transport
+counts, five latency buckets in milliseconds (<100, <500, <2000, <5000,
+>=5000), and one last outbound transaction summary. The bounded in-memory
+ring retains 16 records but is not dumped on every invocation. Records contain only an internal
+monotonic id, query/mutation kind, reason code (Pending=0, Sent=1,
+Response=2, Timeout=3, Invalidated=4, Revoked=5, LinkReset=6,
+WriteFailed=7, Confirmed=8, Failed=9), `millis()` timestamps, counts and
+presence flags; no wire numbers, payloads, model names or device identity.
+Queue delay begins at the first Busy rejection of a kind (or at dispatch if
+never Busy), not at UI tap time; synchronous Busy submissions are not queued,
+so this is a kind-level retry-wait estimate, not a per-action queue timestamp.
+BLE completion includes existing pacing. First notification measures the
+end of the final successful part of a multipart command; earlier parts
+accumulate attempted BLE chunks but do not increment `sent` or mark the
+transaction written. A failed later part increments `write_fail` only.
+The active response query retains bounded lifecycle state if its recent ring
+record is overwritten, so retries, timeout/termination and response totals
+remain accurate; the ring still contains only the latest 16 records. First notification measures the
+first newly queued BLE notification after query dispatch (including one
+received during the write), not necessarily a correlated
+reply; parsed completion requires the matching complete 03 response. If a
+notification arrives synchronously before BLE completion its timestamp is
+retained but excluded from the post-write latency histogram. Semantic latency
+is recorded only for controller preset/FX commands after their existing
+confirmation gates; full-preset refresh is not preset action confirmation.
+Retries count successfully dispatched replacement verification queries in the
+instrumented controller branches, on the replacement's record even if the
+prior query has expired; rejected Busy/failed first submissions do not count
+as a query to replace. Failed BLE writes report attempted chunks (including
+the rejected chunk), while the failure event retains the planned total and
+failed position. Semantic confirmation aggregates retain the action's BLE
+completion time independently of the 16-record ring until confirmation or
+failure; an overwritten record cannot lose its latency/counter observation.
+Ingress parser resets are counted once per consumed ingress invalidation even without an
+active query; an active owner's record also notes that invalidation. The high-water
+mark is the maximum callback queue depth since boot. Counters and records are
+in-memory and reset on reboot; link reset terminates an active query without
+erasing prior observations. Use hardware traces to interpret distributions;
+these buckets are not p50/p95/p99 estimates.
+
 ### Phase 6 - tune only after data exists
 
 After the scheduler is stable, use hardware traces to revisit:

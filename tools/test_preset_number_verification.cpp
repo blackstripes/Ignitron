@@ -9,12 +9,14 @@ int main() {
     ProtocolObservations<Number> numbers;
     PresetNumberVerification verification;
     assert(!verification.shouldQuery(100));
+    assert(!verification.queryDispatched());
     numbers.record({1, 0x03, 0x10, 7}); // reply before switch
     verification.start(100, numbers.revision());
     // No ACK or broadcast: first poll is immediate, well inside 500 ms.
     assert(verification.shouldQuery(101));
     const uint32_t beforeFirst = numbers.revision();
     verification.attempted(true, 12, beforeFirst, 101);
+    assert(verification.queryDispatched());
     auto drain = [&](uint8_t target, uint8_t snapshot, uint32_t now) {
         (void)now; // Models a delayed process tick; the receive record has no timestamp.
         Number n{};
@@ -52,13 +54,16 @@ int main() {
     assert(!verification.shouldQuery(3000));
 
     verification.start(4000, numbers.revision());
+    assert(!verification.queryDispatched());
     assert(verification.shouldQuery(4000));
     verification.attempted(false, 16, numbers.revision(), 4000);
+    assert(verification.attempted() && !verification.queryDispatched());
     numbers.record({2, 0x03, 0x10, 16});
     assert(!drain(2, 2, 4001)); // failed send has no query identity
     assert(!verification.shouldQuery(4499));
     assert(verification.shouldQuery(4500));
     verification.attempted(false, 17, numbers.revision(), 4500);
+    assert(!verification.queryDispatched());
     assert(!verification.shouldQuery(4999));
     assert(verification.shouldQuery(5000));
     assert(!verification.expired(8999));
@@ -66,9 +71,14 @@ int main() {
     assert(!verification.shouldQuery(9000)); // polls cannot extend switch deadline
 
     verification.start(10000, numbers.revision());
+    verification.attempted(false, 0, numbers.revision(), 10000);
+    assert(!verification.queryDispatched()); // first successful send is not a retry
     verification.attempted(true, 19, numbers.revision(), 10001);
+    assert(verification.queryDispatched());
     numbers.record({2, 0x03, 0x10, 19});
     assert(drain(2, 2, 10501)); // queued timely response survives a late process tick
+    verification.attempted(false, 0, numbers.revision(), 10502);
+    assert(verification.queryDispatched()); // failed replacement does not erase history
 
     verification.start(UINT32_MAX - 101, numbers.revision());
     verification.attempted(false, 18, numbers.revision(), UINT32_MAX - 100);
