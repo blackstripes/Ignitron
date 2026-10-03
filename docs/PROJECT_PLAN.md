@@ -434,6 +434,12 @@ kept for context. The active sequence is the looper-first plan in
 - Keep serial diagnostics available throughout development.
 - Maintain clear compile-time or board-specific separation so upstream classic ESP32 builds are not accidentally broken.
 
+## Active reliability gate
+
+Before adding more Spark-facing features, complete the transport hardening work in [TRANSPORT_RELIABILITY_PLAN.md](TRANSPORT_RELIABILITY_PLAN.md).
+
+This reliability gate currently takes priority over the looper/tap-tempo sequence below. Preserve the existing ControllerState/ControllerActions authority and confirmation model; focus first on BLE chunk-write correctness, serialized transport ownership, response backpressure, diagnostics, and long hardware soak tests. Resume feature expansion after the reliability acceptance criteria pass.
+
 ## Immediate Codex task
 
 The main touchscreen framework is **LVGL 9.x** over the working
