@@ -38,12 +38,15 @@ int main() {
 
     // A failed send still waits a bounded interval; it cannot open a gate.
     retry.attemptedAt(9000, false, 23, 10);
+    assert(retry.attempted() && !retry.queryDispatched());
     assert(!retry.matches(23, 11) && !retry.due(10999));
     // A failed send still leaves an active retry schedule; a newer selection
     // must be allowed to supersede the stale refresh while the snapshot syncs.
     assert(presetSelectionMayProceedDuringSync(false, false, retry.attempted(), false, false));
     assert(retry.due(11000));
+    const bool failedAttemptWasRetry = retry.queryDispatched();
     retry.attemptedAt(11000, true, 24, 11);
+    assert(!failedAttemptWasRetry && retry.queryDispatched());
     assert(!retry.matches(23, 12) && retry.matches(24, 12));
     retry.reset();
     assert(retry.due(11001)); // A new selection starts a new schedule.

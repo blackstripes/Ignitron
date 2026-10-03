@@ -541,7 +541,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             // fragmented transport response; wait for its five-second lane.
             if (startupFullPresetQueryIssued_ && dataControl.responseQueryPending(startupFullPresetQueryMessageNumber_, 0x01))
                 return;
-            const bool retry = fullPresetRetry_.attempted();
+            const bool retry = fullPresetRetry_.queryDispatched();
 #ifdef PANELAN_PRESET_TRACE
             if (startupFullPresetQueryIssued_)
                 PRESET_TRACE("event=startup_full_timeout id=%lu target=%u msg=%u sent=1 match=0 ready=0",
@@ -846,11 +846,11 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 if (fxFullPresetRetry_.attempted() &&
                     dataControl.responseQueryPending(fxFullPresetRetry_.messageNumber(), 0x01)) return;
                 const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
-                const bool firstQuery = !fxFullPresetRetry_.attempted();
+                const bool retry = fxFullPresetRetry_.queryDispatched();
                 uint8_t fxQueryMessage = 0;
                 const bool sent = dataControl.getCurrentPresetFromSpark(&fxQueryMessage);
                 if (!sent && keepQueuedSparkIntent(dataControl.lastSubmissionStatus())) return;
-                if (sent && !firstQuery) SparkDataControl::recordTransportRetry();
+                if (sent && retry) SparkDataControl::recordTransportRetry();
                 SparkDataControl::expectControllerFullPreset(0);
                 fxFullPresetRetry_.attemptedAt(millis(), sent, fxQueryMessage, revisionBeforeSend,
                                                 fxAckReceived_);
@@ -859,7 +859,7 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 }
 #ifdef PANELAN_PRESET_TRACE
                 PRESET_TRACE("event=fx_full_query slot=%u msg=%u sent=%u first=%u ack=%u elapsed=%lu",
-                              sentFxSlot_, sent ? fxQueryMessage : 0, sent, firstQuery, fxAckReceived_,
+                              sentFxSlot_, sent ? fxQueryMessage : 0, sent, !retry, fxAckReceived_,
                              static_cast<unsigned long>(millis() - fxSentAtMs_));
 #endif
                 Serial.printf("Controller: FX %u verification full preset (%s)\n", sentFxSlot_,

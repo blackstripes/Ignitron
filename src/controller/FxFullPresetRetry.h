@@ -10,8 +10,9 @@ public:
     static constexpr uint32_t kResponseWindowMs = 5000;
     static constexpr uint32_t kDeadlineMs = 15000;
 
-    void reset() { attempted_ = false; revoke(); }
+    void reset() { attempted_ = false; queryDispatched_ = false; revoke(); }
     bool attempted() const { return attempted_; }
+    bool queryDispatched() const { return queryDispatched_; }
     uint8_t messageNumber() const { return message_; }
     bool querySentAfterAck() const { return message_ != 0 && sentAfterAck_; }
     bool expired(uint32_t now, uint32_t commandSentAt) const {
@@ -31,6 +32,7 @@ public:
             message_ = message;
             revision_ = revisionBeforeSend;
             sentAfterAck_ = ackReceived;
+            queryDispatched_ = true;
         }
     }
     void revoke() { message_ = 0; sentAfterAck_ = false; }
@@ -40,6 +42,7 @@ public:
 
 private:
     bool attempted_ = false;
+    bool queryDispatched_ = false;
     uint32_t lastAttemptMs_ = 0;
     uint32_t revision_ = 0;
     uint8_t message_ = 0;

@@ -7,8 +7,9 @@ class FullPresetRetry {
 public:
     static constexpr uint32_t kIntervalMs = 2000;
 
-    void reset() { attempted_ = false; revoke(); }
+    void reset() { attempted_ = false; queryDispatched_ = false; revoke(); }
     bool attempted() const { return attempted_; }
+    bool queryDispatched() const { return queryDispatched_; }
     bool due(uint32_t now) const {
         return !attempted_ || uint32_t(now - lastAttemptMs_) >= kIntervalMs;
     }
@@ -19,6 +20,7 @@ public:
         if (sent && message != 0) {
             message_ = message;
             revision_ = revisionBeforeSend;
+            queryDispatched_ = true;
         }
     }
     void revoke() { message_ = 0; }
@@ -28,6 +30,7 @@ public:
 
 private:
     bool attempted_ = false;
+    bool queryDispatched_ = false;
     uint32_t lastAttemptMs_ = 0;
     uint32_t revision_ = 0;
     uint8_t message_ = 0;

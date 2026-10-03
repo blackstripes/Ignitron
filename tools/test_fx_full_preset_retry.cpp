@@ -145,9 +145,12 @@ int main() {
     fx.ack(0x15, 7);
     assert(!fx.tick(1099, false, 20));
     assert(fx.tick(1100, false, 20)); // failed initial send consumes schedule
+    assert(fx.retry.attempted() && !fx.retry.queryDispatched());
     assert(fx.expected == 0 && fx.pending && !fx.selectPreset());
     assert(!fx.tick(6099, true, 21));
+    const bool firstSuccessfulQueryWasRetry = fx.retry.queryDispatched();
     assert(fx.tick(6100, true, 21));
+    assert(!firstSuccessfulQueryWasRetry && fx.retry.queryDispatched());
     assert(fx.expected == 21 && !fx.selectPreset());
     // Partial/malformed replies never reach the applied full observation gate.
     assert(!fx.tick(8120, true, 22) && fx.pending && fx.expected == 21);
