@@ -476,6 +476,112 @@ in-memory and reset on reboot; link reset terminates an active query without
 erasing prior observations. Use hardware traces to interpret distributions;
 these buckets are not p50/p95/p99 estimates.
 
+## Current unresolved issue: intermittent user-visible preset synchronization latency
+
+Hardware testing on 2026-10-03 still shows a recurring pattern where most preset
+changes feel immediate, but some transitions take roughly 2-3 seconds before all
+renderer-visible preset data is synchronized. Treat this as an active reliability
+issue even when the preset eventually succeeds.
+
+Important distinction: a hardware preset change and a fully synchronized controller
+snapshot are separate milestones. The Spark can report the new hardware-preset
+number quickly while Ignitron is still waiting for the matching full-preset response
+that supplies the preset name, effect chain, FX state, and the evidence required for
+`ControllerState` to return to `Ready`.
+
+Earlier trace evidence demonstrated one concrete failure mode:
+
+- command dispatch occurred about 160 ms after acceptance;
+- correlated hardware-preset-number confirmation occurred about 489 ms after
+  acceptance;
+- the full-preset refresh later timed out after roughly 5.5 seconds;
+- stale fragments from one full-preset response were then combined with a retry
+  carrying a different message number, producing an invalid 822-byte assembled
+  payload;
+- receive framing was subsequently hardened so multipart assembly rejects mismatched
+  message identities/chunk ordering instead of combining them.
+
+That framing bug is considered fixed, but intermittent multi-second synchronization
+delay is still observed in hardware use. Do not assume the remaining delay has the
+same root cause.
+
+### Known trace blind spot
+
+The current preset stress summary can under-report what the user actually sees.
+Its per-request latency is primarily based on:
+
+    accept -> number_confirm
+
+That measures authoritative hardware-slot confirmation, but not completion of the
+subsequent full-preset synchronization. A transition can therefore be reported as
+fast even while the UI remains stale/Syncing for another few seconds. A slow
+full-preset response that completes before the five-second deadline can also produce
+no timeout or parser-reject event, despite being plainly visible to the user.
+
+For reliability work, track both of these separately:
+
+- **number confirmation latency**: request accepted -> correlated hardware-preset
+  number confirmed;
+- **full synchronization latency**: request accepted -> matching full-preset response
+  parsed and renderer-facing `ControllerState` returned to `Ready`.
+
+A successful action with low number-confirm latency but high full-sync latency is
+still a performance problem.
+
+### Required next investigation
+
+Before changing timeout values, retry cadence, outbound scheduling, or controller
+confirmation semantics, extend the preset trace so each accepted preset request can
+be correlated through the complete user-visible lifecycle.
+
+Capture at minimum:
+
+- accept -> preset command sent;
+- command sent -> correlated hardware-number confirmation;
+- number confirmation -> full-preset query dispatched;
+- full-preset query dispatch -> first BLE notification observed for that query;
+- full-preset query dispatch -> complete matching parsed full-preset response;
+- complete parsed response -> renderer-facing `ControllerState` becomes `Ready`;
+- total accept -> fully synchronized/Ready.
+
+Also record, correlated by preset trace id and full-preset message number:
+
+- whether a full-preset retry was required;
+- whether the response lane was busy/backpressured;
+- expected and received multipart chunk counts where available;
+- framing reset/restart/revoke events;
+- ingress invalidations/drops;
+- whether a late response arrived after the active query was replaced or revoked.
+
+Update `tools/stress_panelan_presets.py` so its per-request summary reports at least:
+
+    number_confirm_ms=<...>
+    full_sync_ms=<...>
+
+and explicitly flags any action whose full synchronization exceeds 1000 ms even if
+it succeeds before timeout.
+
+If practical, emit a trace event when the renderer-facing snapshot first becomes
+`Ready` for the request so instrumentation measures the same transition visible on
+the main TFT and mini displays.
+
+### Diagnostic interpretation
+
+The next captured slow transition should distinguish these cases:
+
+1. **accept -> sent is slow**: scheduler/backpressure or dispatch delay.
+2. **sent -> number_confirm is slow**: preset command or number-verification path.
+3. **full query -> first notification is slow**: Spark/transport is slow to begin the
+   full-preset response.
+4. **first notification -> complete parse is slow**: fragmented response delivery,
+   callback/queue service, or receive assembly is the likely bottleneck.
+5. **complete parse -> Ready is slow**: controller publication/state-transition
+   logic is the likely bottleneck.
+
+Do not tune around the symptom until one or more visibly slow transitions have been
+captured with these phase timings. Preserve the existing five-second response-lane
+deadline while collecting this evidence.
+
 ### Phase 6 - tune only after data exists
 
 After the scheduler is stable, use hardware traces to revisit:
