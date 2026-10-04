@@ -440,6 +440,14 @@ Before adding more Spark-facing features, complete the transport hardening work 
 
 This reliability gate currently takes priority over the looper/tap-tempo sequence below. Preserve the existing ControllerState/ControllerActions authority and confirmation model; focus first on BLE chunk-write correctness, serialized transport ownership, response backpressure, diagnostics, and long hardware soak tests. Resume feature expansion after the reliability acceptance criteria pass.
 
+**Current next reliability task:** intermittent preset transitions are still visibly slow
+for several seconds even when hardware-preset-number confirmation succeeds quickly.
+Before adding more displays/features or tuning timeouts, extend the preset trace to
+measure the full user-visible lifecycle through matching full-preset parse and
+renderer-facing `Ready` state. The detailed investigation plan and trace requirements
+are in [TRANSPORT_RELIABILITY_PLAN.md](TRANSPORT_RELIABILITY_PLAN.md), under
+"Current unresolved issue: intermittent user-visible preset synchronization latency."
+
 ## Immediate Codex task
 
 The main touchscreen framework is **LVGL 9.x** over the working
