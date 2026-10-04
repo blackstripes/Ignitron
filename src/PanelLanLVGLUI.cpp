@@ -421,7 +421,7 @@ void PanelLanLVGLUI::begin() {
     uiInstance = this;
     tft_.begin();
     tft_.setBrightness(255);
-    tft_.setRotation(1);
+    tft_.setRotation(3);
     lv_init();
     lastLvglTickAt_ = millis();
 

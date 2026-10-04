@@ -1,8 +1,8 @@
 # PanelLan touchscreen controller prototype
 
 This document records the starting point for the custom Ignitron foot controller.
-The normal LVGL target now drives two external minis with the same card; TFT1
-was visually verified before TFT2 was added. TFT2 still needs visual validation;
+The normal LVGL target now drives two external minis with separate preset/FX
+cards; TFT1 was visually verified before TFT2 was added. TFT2 still needs visual validation;
 footswitches and TFT3..6 remain deferred.
 
 ## Hardware identified and tested
@@ -331,7 +331,8 @@ normal Spark testing.
   name from the checksum-validated per-amp hardware-slot cache, even when P2
   is active (for example P1 `CLEAN` remains `CLEAN` after selecting P2
    `CRUNCH`). It shows `UNKNOWN` while slot 1's name is unknown, never the active
-   preset's name or a misleading `P1`. The GPIO fallback follows the same rule.
+   preset's name or a misleading `P1`. TFT2 independently shows slot 2's name
+   (or `UNKNOWN`) and selection state. The GPIO fallback follows TFT1's rule.
    The controller
   loop asynchronously fetches missing slots one at a time after identity,
   checksums, current number and full-preset startup sync are ready. A slot gets
@@ -354,7 +355,8 @@ normal Spark testing.
   failed, stale/unknown, selected and nonselected states use amber dots, red
   exclamation, amber dash, filled gold waveform strip and muted outline/dash,
   respectively. A failure on another preset does not claim P1 was targeted.
-  FX shows `GATE` with a large green `ON` or blue-grey `OFF` filled strip when
+  TFT1 FX shows `GATE` and TFT2 shows `COMP` (logical FX slots 0 and 1), each
+  with a large green `ON` or blue-grey `OFF` filled strip when
   confirmed; pending/failed/unknown use amber dots, red exclamation or amber
   dash without asserting ON/OFF. Looper is labeled `UNWIRED` (no switch action),
   tuner shows a large note and cents only with a fresh active sample (otherwise
@@ -375,17 +377,18 @@ normal Spark testing.
    primitives; the 160x80 sprite/`pushSprite` path was removed after it produced
    diagonal artifacts. The direct-drawn artwork has now been visually checked:
    the diagonal streaks and left-edge rainbow column are gone. Cache keys cover
-   the preset name, label, status, colors, icon/layout, and touchscreen view. No
+   the preset name, label, status, colors, icon/layout, and touchscreen view
+   independently for each mini. No
    new assets or graphics libraries are required.
    No pedal input or looper control is assigned to it. Main-panel touch/page
    switching and mini updates have been verified together. Spark BLE
    responsiveness with the revised mini artwork active has not yet been
    specifically retested.
-  This is **TFT1's card mirrored on TFT2** by the hardware-SPI renderer, not a
+  Other views retain the same touchscreen-context card on both minis. This is not a
   change to the frozen 2.8-inch LVGL touchscreen UI or an implementation of the
   six-display layout.
   **Keep the 2.8-inch visuals and behavior frozen until all six mini displays
-  work.** TFT3..6 and footswitches remain future work; TFT2's mirrored output
+  work.** TFT3..6 and footswitches remain future work; TFT2's output
   requires visual verification on the connected hardware.
 
 The original OLED, LEDs, and footswitch source files are excluded from this
@@ -394,7 +397,7 @@ target because their legacy GPIO initialization overlaps the PanelLan LCD bus.
 ### Mini coexistence and transport profiles
 
 The explicit SPI profile is an alias of the default integrated LVGL/controller
-build (state-fed mirrored TFT1/TFT2, not the standalone TFT1-only test):
+build (state-fed TFT1/TFT2 cards, not the standalone TFT1-only test):
 
 ```sh
 pio run -e panelan-lvgl-controller-spi-mini
@@ -412,7 +415,8 @@ GPB6 reset with all CS high, then brackets each controller initialization and
 draw by deasserting all CS, selecting GPB0 (TFT1) or GPB1 (TFT2) only, and
 deasserting all CS afterwards. The two displays are driven sequentially, never
 selected together; transient select/deselect failures retry without permanently
-disabling rendering, and a card is cached only after both draws finish. GPB2..5
+disabling rendering, and each panel caches its card only after its own draw
+finishes. GPB2..5
 remain high; TFT3..6 and expander switch wiring are not implemented. Each mini
 immediately receives six solid
 color bars, borders and `MINI` using LGFX primitives, holds that image for at

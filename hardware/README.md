@@ -18,11 +18,13 @@ RES/CS to IO12/IO13:** those are I2C pins in these targets.
 
 At startup the driver preloads GPB0..6 high before enabling them as outputs,
 then pulses GPB6 low/high while keeping all CS lines high. The integrated SPI2
-renderer initializes and splashes TFT1 then TFT2, and mirrors each state card
-sequentially. Each init/draw deasserts all CS lines before selecting only GPB0
+renderer initializes and splashes TFT1 then TFT2, and draws their state cards
+sequentially. On the Preset page TFT1 shows hardware slot 1 and TFT2 slot 2;
+on FX TFT1 shows GATE and TFT2 COMP. Other pages share touchscreen context.
+Each init/draw deasserts all CS lines before selecting only GPB0
 or GPB1 low, then deasserts all afterward; a failed selection/deselection is
-retried without permanently disabling drawing, and a card is cached only after
-both draws finish. GPB2..5 remain high for future TFT3..6 CS; GPB6 is shared
+retried without permanently disabling drawing, and each card is cached only after
+its draw finishes. GPB2..5 remain high for future TFT3..6 CS; GPB6 is shared
 reset and GPB7 stays an input. The standalone `panelan-mini-tft-bringup` test
 still selects **TFT1 only** (GPB0); it does not exercise TFT2. Switch wiring
 and handling via the expander are **not implemented**. Other targets (including

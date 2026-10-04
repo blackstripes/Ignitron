@@ -32,6 +32,10 @@ constexpr uint16_t bg = 0x0021;
 constexpr uint16_t white = 0xFFFF;
 constexpr uint16_t muted = 0x7BD0;
 constexpr uint16_t green = 0x07EC;
+// Match the main FX page accents: GATE #00E65D and COMP #48D8BC,
+// converted to RGB565 for the mini TFTs.
+constexpr uint16_t gateGreen = 0x072B;
+constexpr uint16_t compTeal = 0x4ED7;
 constexpr uint16_t amber = 0xFEA0;
 constexpr uint16_t red = 0xF924;
 
@@ -186,78 +190,79 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
     // Keep the diagnostic visible through startup, even if the controller is
     // disconnected or BLE setup is slow. Afterwards use only SPI2 for state cards.
     if (now - splashAt_ < 5000) return;
-    Card card;
-    switch (view) {
-    case PanelLanLVGLUI::View::Preset:
-        card.layout = Layout::Preset;
-        // Slot identity is independent of the active selection and its color.
-        shortName(card.name, sizeof(card.name), HardwarePresetNames::label(snapshot.hardwarePresetNames, 1));
-        if (!card.name[0]) strcpy(card.name, "UNKNOWN");
-        if (snapshot.pendingHardwarePreset) { card.accent = amber; card.mark = Mark::Dots; }
-        else if (snapshot.presetActionFailed) { card.accent = red; card.mark = Mark::Bang; }
-        else if (snapshot.sparkStateStale || !snapshot.confirmedHardwarePreset) {
-            card.accent = amber;
-        } else if (snapshot.confirmedHardwarePreset == 1) {
-            card.accent = amber; card.filled = true; card.mark = Mark::Wave;
-        } else { card.accent = muted; card.mark = Mark::Dash; }
-        break;
-    case PanelLanLVGLUI::View::Fx: {
-        card.layout = Layout::Gate;
-        strcpy(card.name, "GATE");
-        const ControllerFxSlot &slot = snapshot.fxSlots[0];
-        if (slot.pending) { card.accent = amber; card.mark = Mark::Dots; }
-        else if (slot.actionFailed) { card.accent = red; card.mark = Mark::Bang; }
-        else if (snapshot.sparkStateStale || !slot.known) card.accent = amber;
-        else {
-            strcpy(card.status, slot.enabled ? "ON" : "OFF");
-            card.accent = slot.enabled ? green : muted;
-            card.filled = true;
-        }
-        break;
-    }
-    case PanelLanLVGLUI::View::Looper:
-        strcpy(card.name, "LOOPER"); strcpy(card.status, "UNWIRED");
-        card.accent = muted; break;
-    case PanelLanLVGLUI::View::Tuner:
-        strcpy(card.name, "TUNER");
-        if (!snapshot.tunerActive) card.accent = muted;
-        else if (snapshot.sparkStateStale || !snapshot.tunerSampleFresh || !snapshot.tunerSampleKnown) card.accent = amber;
-        else if (snapshot.tunerNote.empty() || snapshot.tunerNote == " ") card.accent = muted;
-        else {
-            char note[12]{};
-            shortName(note, sizeof(note), snapshot.tunerNote);
-            note[4] = '\0';
-            if (note[0]) {
-                snprintf(card.name, sizeof(card.name), "%s", note);
-                snprintf(card.status, sizeof(card.status), "%+dc", snapshot.tunerOffsetCents);
-                card.accent = green; card.filled = true;
-            }
-        }
-        break;
-    case PanelLanLVGLUI::View::Device:
-        strcpy(card.name, "SPARK");
-        switch (snapshot.connectionPhase) {
-        case ControllerConnectionPhase::Scanning: strcpy(card.status, "SEARCHING"); break;
-        case ControllerConnectionPhase::Reconnecting: strcpy(card.status, "LINKING"); break;
-        case ControllerConnectionPhase::Identifying:
-        case ControllerConnectionPhase::Syncing: card.mark = Mark::Dots; break;
-        case ControllerConnectionPhase::Ready:
-            if (!snapshot.sparkStateStale) {
-                strcpy(card.status, "LINKED"); card.accent = green; card.filled = true;
+    for (uint8_t i = 0; i < 2; ++i) {
+        const uint8_t display = i + 1;
+        Card card;
+        switch (view) {
+        case PanelLanLVGLUI::View::Preset:
+            card.layout = Layout::Preset;
+            // Slot identity is independent of the active selection and its color.
+            shortName(card.name, sizeof(card.name), HardwarePresetNames::label(snapshot.hardwarePresetNames, display));
+            if (!card.name[0]) strcpy(card.name, "UNKNOWN");
+            if (snapshot.pendingHardwarePreset) { card.accent = amber; card.mark = Mark::Dots; }
+            else if (snapshot.presetActionFailed) { card.accent = red; card.mark = Mark::Bang; }
+            else if (snapshot.sparkStateStale || !snapshot.confirmedHardwarePreset) {
+                card.accent = amber;
+            } else if (snapshot.confirmedHardwarePreset == display) {
+                card.accent = amber; card.filled = true; card.mark = Mark::Wave;
+            } else { card.accent = muted; card.mark = Mark::Dash; }
+            break;
+        case PanelLanLVGLUI::View::Fx: {
+            card.layout = Layout::Gate;
+            strcpy(card.name, i == 0 ? "GATE" : "COMP");
+            const ControllerFxSlot &slot = snapshot.fxSlots[i];
+            const uint16_t fxAccent = i == 0 ? gateGreen : compTeal;
+            if (slot.pending) { card.accent = amber; card.mark = Mark::Dots; }
+            else if (slot.actionFailed) { card.accent = red; card.mark = Mark::Bang; }
+            else if (snapshot.sparkStateStale || !slot.known) card.accent = amber;
+            else {
+                strcpy(card.status, slot.enabled ? "ON" : "OFF");
+                card.accent = slot.enabled ? fxAccent : muted;
+                card.filled = true;
             }
             break;
         }
-        break;
-    }
-    char key[sizeof(lastCard_)];
-    // Include all visible fields. Length prefixes prevent delimiter collisions
-    // in Spark-provided names; every field fits in the mini-only cache buffer.
-    snprintf(key, sizeof(key), "%02u:%s|%s|%u|%u|%u|%u", static_cast<unsigned>(strlen(card.name)),
-             card.name, card.status, card.accent, static_cast<unsigned>(card.layout),
-             static_cast<unsigned>(card.mark), card.filled);
-    if (cardDrawn_ && view == lastView_ && !strcmp(key, lastCard_)) return;
-    for (uint8_t i = 0; i < 2; ++i) {
-        const uint8_t display = i + 1;
+        case PanelLanLVGLUI::View::Looper:
+            strcpy(card.name, "LOOPER"); strcpy(card.status, "UNWIRED");
+            card.accent = muted; break;
+        case PanelLanLVGLUI::View::Tuner:
+            strcpy(card.name, "TUNER");
+            if (!snapshot.tunerActive) card.accent = muted;
+            else if (snapshot.sparkStateStale || !snapshot.tunerSampleFresh || !snapshot.tunerSampleKnown) card.accent = amber;
+            else if (snapshot.tunerNote.empty() || snapshot.tunerNote == " ") card.accent = muted;
+            else {
+                char note[12]{};
+                shortName(note, sizeof(note), snapshot.tunerNote);
+                note[4] = '\0';
+                if (note[0]) {
+                    snprintf(card.name, sizeof(card.name), "%s", note);
+                    snprintf(card.status, sizeof(card.status), "%+dc", snapshot.tunerOffsetCents);
+                    card.accent = green; card.filled = true;
+                }
+            }
+            break;
+        case PanelLanLVGLUI::View::Device:
+            strcpy(card.name, "SPARK");
+            switch (snapshot.connectionPhase) {
+            case ControllerConnectionPhase::Scanning: strcpy(card.status, "SEARCHING"); break;
+            case ControllerConnectionPhase::Reconnecting: strcpy(card.status, "LINKING"); break;
+            case ControllerConnectionPhase::Identifying:
+            case ControllerConnectionPhase::Syncing: card.mark = Mark::Dots; break;
+            case ControllerConnectionPhase::Ready:
+                if (!snapshot.sparkStateStale) {
+                    strcpy(card.status, "LINKED"); card.accent = green; card.filled = true;
+                }
+                break;
+            }
+            break;
+        }
+        char key[sizeof(lastCard_[i])];
+        // Include all visible fields. Length prefixes prevent delimiter collisions
+        // in Spark-provided names; every field fits in the mini-only cache buffer.
+        snprintf(key, sizeof(key), "%02u:%s|%s|%u|%u|%u|%u", static_cast<unsigned>(strlen(card.name)),
+                 card.name, card.status, card.accent, static_cast<unsigned>(card.layout),
+                 static_cast<unsigned>(card.mark), card.filled);
+        if (cardDrawn_[i] && view == lastView_[i] && !strcmp(key, lastCard_[i])) continue;
         if (!miniSelect.select(display)) {
             miniSelect.deselect();
             miniRetryAt_ = millis() + 1000;
@@ -270,12 +275,12 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
             Serial.printf("ST7735S: MCP23017 deselect failed; TFT%u draw will retry\n", display);
             return;
         }
+        lastView_[i] = view;
+        strcpy(lastCard_[i], key);
+        cardDrawn_[i] = true;
+        if (view == PanelLanLVGLUI::View::Preset)
+            Serial.printf("ST7735S TFT%u preset card sent (no readback): slot=%u name=%s active=%u\n",
+                          display, display, card.name, snapshot.confirmedHardwarePreset);
     }
-    if (view == PanelLanLVGLUI::View::Preset)
-        Serial.printf("ST7735S TFT1/TFT2 preset cards sent (no readback): slot=1 name=%s active=%u\n",
-                      card.name, snapshot.confirmedHardwarePreset);
-    lastView_ = view;
-    strcpy(lastCard_, key);
-    cardDrawn_ = true;
 }
 #endif

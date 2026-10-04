@@ -4,10 +4,11 @@
 
 void PanelLanDisplay::begin() {
     tft_.begin();
-    // The controller will be installed with the long edge horizontal. LovyanGFX
+    // The enclosure requires the landscape display rotated 180 degrees from
+    // the previous orientation. LovyanGFX
     // applies this rotation to both the ST7789 frame buffer and FT5x06 touch
     // coordinates, so all UI hit targets below use the 320x240 landscape view.
-    tft_.setRotation(1);
+    tft_.setRotation(3);
     tft_.fillScreen(TFT_BLACK);
     tft_.fillRect(0, 0, tft_.width(), 42, TFT_NAVY);
     tft_.setTextColor(TFT_WHITE, TFT_NAVY);
