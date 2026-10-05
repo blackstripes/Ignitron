@@ -646,6 +646,21 @@ Serialization, correlated complete replies, and semantic confirmation are unchan
 This is evidence-based recovery tuning, not hardware soak acceptance; repeat the
 soak to validate it.
 
+Follow-up soak on the connected Spark NEO Core, using the 1500 ms 02/01 and
+02/10 deadlines and a 3.5 s command interval, ended when the BLE link dropped.
+The trace identified this amp as a four-slot device: requested slots 5–8 were
+rejected as out of range and were not sent to Spark. Before link loss, 78
+accepted requests reached renderer-facing `Ready`; their full-sync latency
+distribution was mean 1334 ms, p50 962 ms, p95 2974 ms, p99 4165 ms, max 5081 ms.
+There were 14 full-preset timeouts followed by 16 dispatched retries, no
+hardware-number timeout, and no controller action failure before the disconnect.
+The trace repeatedly showed initial multipart responses stopping at 13/16 or
+16/17 chunks; retries recovered. The operator reports finding the amp powered
+down after these long runs and restoring it by powering it back on; the serial
+trace itself establishes only the BLE disconnect, not the amp's internal cause.
+This was not a 500-selection acceptance run. After the test, normal firmware
+was restored and the controller reconnected when the amp was powered back on.
+
 FX follow-up on the same normal firmware with the 1500 ms non-EE 02/01 lane:
 the six-slot hardware harness completed both directions on all slots (12 actions).
 Every FX action was confirmed by a matching full-preset response, including the
