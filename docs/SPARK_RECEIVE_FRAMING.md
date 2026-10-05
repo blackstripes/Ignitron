@@ -32,6 +32,7 @@ Host-only regression (no device build or flash):
 
 ```sh
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc tools/test_spark_receive_assembly.cpp -o /tmp/test_spark_receive_assembly && /tmp/test_spark_receive_assembly
+g++ -std=c++17 -Wall -Wextra -Werror -DPANELAN_PRESET_TRACE -Isrc tools/test_spark_receive_assembly.cpp -o /tmp/test_spark_receive_trace && /tmp/test_spark_receive_trace
 python3 tools/test_spark_receive_batch.py
 ```
 
@@ -40,5 +41,17 @@ host observation hook instead of Arduino preset parsing; it checks both
 preset-then-notification and notification-then-preset delivery and verifies
 the consumer's per-item handling order.
 
-`PANELAN_PRESET_TRACE` parse-rejection diagnostics remain opt-in and report
-frame metadata only, never preset payload bytes.
+`PANELAN_PRESET_TRACE` is opt-in. In addition to parse rejections it reports
+`frame_discard` (checksum, invalid wire, malformed start, overflow/recovery or incomplete reset;
+checksum and invalid-wire resync are reported even when a later frame is recovered)
+and `multipart_start`, `multipart_progress`, `multipart_complete`, and
+`multipart_discard` (invalid frame/shape, single preset, duplicate/new start,
+identity mismatch, out of order, missing start or reset). Each event carries
+time, reason, message number, command/subcommand, expected and received chunk
+counts; frame events use received as buffered wire bytes and expected as zero.
+An `incoming_reject` event reports invalid frame or preset shape even with no
+pending multipart response; a separate `multipart_discard` reports any pending
+response discarded by that rejection. Incoming rejection counts are zero.
+No device identity or payload bytes are logged. A pending response on parser/link
+reset emits its incomplete chunk count. These observations do not change what
+the receiver accepts or publishes.

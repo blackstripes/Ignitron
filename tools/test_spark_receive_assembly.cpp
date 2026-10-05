@@ -3,6 +3,21 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#ifdef PANELAN_PRESET_TRACE
+#include <string>
+#include <vector>
+static std::vector<SparkReceiveTraceEvent> events;
+static void collect(const SparkReceiveTraceEvent &event) { events.push_back(event); }
+static void expect(const char *name, const char *reason, uint8_t msg,
+                   size_t expected, size_t received) {
+    assert(events.size() == 1);
+    const auto &e = events.front();
+    assert(std::string(e.event) == name && std::string(e.reason) == reason);
+    assert(e.message == msg && e.command == 3 && e.subcommand == 1);
+    assert(e.expected == expected && e.received == received);
+    events.clear();
+}
+#endif
 
 using Frame = SparkReceiveAssembly::Frame;
 using Frames = SparkReceiveAssembly::Frames;
@@ -46,6 +61,10 @@ static Frame presetPayload(const Frames &frames) {
 int main() {
     SparkReceiveFrames fragments;
     SparkReceiveAssembly assembler;
+#ifdef PANELAN_PRESET_TRACE
+    fragments.setTrace(collect);
+    assembler.setTrace(collect);
+#endif
     Frames output;
     auto feed = [&](const Frame &fragment) {
         bool published = false;
@@ -130,5 +149,83 @@ int main() {
     assert(feed(part(17, 3, 17, 16, 7)));
     assert(output.size() == 17 && presetPayload(output).size() == 407);
     for (int i = 0; i < 17; ++i) assert(output[i][2] == 17);
+#ifdef PANELAN_PRESET_TRACE
+    events.clear();
+    auto bad = one;
+    bad[3] ^= 1;
+    assert(fragments.accept(bad).empty());
+    expect("frame_discard", "checksum", 9, 0, bad.size());
+    assert(!assembler.accept(part(30, 3, 3, 0), output));
+    assert(events.size() == 2);
+    assert(std::string(events[0].event) == "multipart_start");
+    assert(std::string(events[1].event) == "multipart_progress");
+    assert(events[0].message == 30 && events[0].expected == 3 && events[0].received == 0);
+    assert(events[1].received == 1);
+    events.clear();
+    assert(!assembler.accept(part(30, 3, 3, 2, 7), output));
+    expect("multipart_discard", "out_of_order", 30, 3, 1);
+    assert(!assembler.accept(part(31, 3, 2, 0), output));
+    events.clear();
+    assembler.reset();
+    expect("multipart_discard", "reset", 31, 2, 1);
+    assert(!assembler.accept(part(32, 3, 2, 0), output));
+    events.clear();
+    assert(assembler.accept(part(32, 3, 2, 1, 7), output));
+    expect("multipart_complete", "none", 32, 2, 2);
+    assert(!assembler.accept(part(33, 3, 2, 0), output));
+    events.clear();
+    assert(!assembler.accept(part(33, 3, 2, 0), output));
+    expect("multipart_discard", "duplicate_start", 33, 2, 1);
+    fragments.accept(Frame(one.begin(), one.begin() + 6));
+    events.clear();
+    fragments.reset();
+    expect("frame_discard", "reset", 9, 0, 6);
+
+    // A bad candidate before a good start is discarded even when recovery succeeds.
+    Frame invalidHeader(one.begin(), one.begin() + 6);
+    invalidHeader[4] |= 0x80;
+    invalidHeader.insert(invalidHeader.end(), one.begin(), one.end());
+    assert(fragments.accept(invalidHeader) == Frames({one}));
+    assert(events.size() == 1 && std::string(events[0].event) == "frame_discard" &&
+           std::string(events[0].reason) == "invalid_wire_resync" &&
+           events[0].message == 9 && events[0].command == 0x83 &&
+           events[0].received == invalidHeader.size());
+    events.clear();
+    Frame invalidData(one.begin(), one.begin() + 6);
+    invalidData.push_back(0x80);
+    invalidData.insert(invalidData.end(), one.begin(), one.end());
+    assert(fragments.accept(invalidData) == Frames({one}));
+    expect("frame_discard", "invalid_wire_resync", 9, 0, invalidData.size());
+
+    // Rejection belongs to the incoming frame; an existing assembly has its
+    // own, separate discard event, and neither is required for the other.
+    auto malformed = one;
+    malformed.back() = 0;
+    assert(!assembler.accept(malformed, output));
+    expect("incoming_reject", "invalid_frame", 9, 0, 0);
+    const auto badShape = wire(41, 3, 1, {3, 0, 25, 0x80});
+    assert(!assembler.accept(badShape, output));
+    expect("incoming_reject", "invalid_shape", 41, 0, 0);
+    assert(!assembler.accept(part(40, 3, 2, 0), output));
+    events.clear();
+    assert(!assembler.accept(badShape, output));
+    assert(events.size() == 2);
+    assert(std::string(events[0].event) == "incoming_reject" &&
+           std::string(events[0].reason) == "invalid_shape" && events[0].message == 41);
+    assert(std::string(events[1].event) == "multipart_discard" &&
+           std::string(events[1].reason) == "invalid_shape" && events[1].message == 40);
+    events.clear();
+
+    assert(fragments.accept({0xF0, 0x02}).empty());
+    assert(events.size() == 1);
+    assert(std::string(events[0].event) == "frame_discard" &&
+           std::string(events[0].reason) == "malformed_start");
+    events.clear();
+    assert(fragments.accept({0xF0, 0xF0}).empty());
+    assert(events.size() == 1 && std::string(events[0].reason) == "malformed_start");
+    events.clear();
+    assert(fragments.accept(Frame(one.begin() + 1, one.end())) == Frames({one}));
+    assert(events.empty());
+#endif
     std::cout << "Spark receive framing: PASS\n";
 }

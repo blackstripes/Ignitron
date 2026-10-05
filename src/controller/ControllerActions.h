@@ -86,6 +86,13 @@ private:
     uint32_t presetTraceFailedFullId_ = 0;
     uint32_t presetTraceFailedFullRevision_ = 0;
     uint8_t presetTracePhase_ = 0;
+    uint32_t presetTraceQueryId_ = 0;
+    uint8_t presetTraceQueryTarget_ = 0;
+    uint8_t presetTraceQueryMsg_ = 0;
+    uint32_t presetTraceQueryRevision_ = 0;
+    bool presetTraceNotified_ = false;
+    bool presetTraceReady_ = false;
+    uint32_t presetTraceReadyId_ = 0;
 #endif
     bool currentPresetQueryIssued_ = false;
     uint32_t currentPresetQueryAtMs_ = 0;

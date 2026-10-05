@@ -1,9 +1,45 @@
 import unittest
 
-from stress_panelan_presets import final_confirmed_target, final_synced_target, record_trace, status_is_ready
+from stress_panelan_presets import (final_confirmed_target, final_synced_target, record_trace,
+                                    request_latency, request_summary, status_is_ready)
 
 
 class TraceTest(unittest.TestCase):
+    def test_summary_requires_matching_parsed_response_and_ready(self):
+        lines = [
+            "PRESET_TRACE t=100 event=accept id=4 target=2",
+            "PRESET_TRACE t=140 event=sent id=4 target=2",
+            "PRESET_TRACE t=250 event=number_confirm id=4 target=2",
+            "PRESET_TRACE t=260 event=full_query id=4 target=2 sent=1 msg=16",
+            "PRESET_TRACE t=400 event=full_result id=4 target=2 msg=15 match=0",
+            "PRESET_TRACE t=500 event=ready id=4 target=2 msg=16",
+        ]
+        records, _ = self.parse(lines)
+        self.assertEqual(request_latency(records['4']['accept'], records['_trace']), (150, '-'))
+        record_trace("PRESET_TRACE t=1200 event=full_result id=4 target=2 msg=16 match=1", records, [])
+        record_trace("PRESET_TRACE t=1201 event=ready id=4 target=2 msg=16", records, [])
+        self.assertEqual(request_latency(records['4']['accept'], records['_trace']), (150, 1101))
+        self.assertIn('slow_full_sync=True', request_summary('4', records['4']['accept'], records))
+
+    def test_threshold_retry_and_wrap(self):
+        lines = [
+            "PRESET_TRACE t=4294967200 event=accept id=8 target=3",
+            "PRESET_TRACE t=4294967290 event=number_confirm id=8 target=3",
+            "PRESET_TRACE t=5 event=full_query id=8 target=3 sent=1 msg=20",
+            "PRESET_TRACE t=10 event=full_result id=8 target=3 msg=20 match=1",
+            "PRESET_TRACE t=20 event=full_data_timeout id=8 target=3 msg=20",
+            "PRESET_TRACE t=30 event=startup_full_query id=8 target=3 sent=1 msg=21",
+            "PRESET_TRACE t=40 event=startup_full_result id=8 target=3 msg=20 match=1 ready=1",
+            "PRESET_TRACE t=50 event=ready id=8 target=3 msg=20",
+            "PRESET_TRACE t=904 event=startup_full_result id=8 target=3 msg=21 match=1 ready=1",
+            "PRESET_TRACE t=904 event=ready id=8 target=3 msg=21",
+        ]
+        records, _ = self.parse(lines)
+        self.assertEqual(request_latency(records['8']['accept'], records['_trace']), (90, 1000))
+        self.assertIn('slow_full_sync=False', request_summary('8', records['8']['accept'], records))
+        record_trace("PRESET_TRACE t=905 event=ready id=8 target=3 msg=21", records, [])
+        self.assertIn('slow_full_sync=True', request_summary('8', records['8']['accept'], records))
+
     def test_ready_requires_link_identity_and_preset_data(self):
         self.assertFalse(status_is_ready(["Spark connected: yes", "Preset name: CLEAN"]))
         self.assertFalse(status_is_ready([
@@ -44,6 +80,7 @@ class TraceTest(unittest.TestCase):
         ])
         self.assertEqual(len(outcomes), 1)
         self.assertEqual(final_confirmed_target([3], records, outcomes), 3)
+        self.assertEqual(request_latency(records["7"]["accept"], records["_trace"]), ("-", "-"))
 
     def test_confirmed_then_overridden(self):
         records, outcomes = self.parse([

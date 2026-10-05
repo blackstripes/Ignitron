@@ -353,8 +353,9 @@ neither wait for nor release the ordinary owner. AMP-mode `notifyClients` sends
 in the opposite direction; there is no other active direct Spark BLE writer.
 
 The owner rejects busy submissions synchronously without advancing the request
-cursor. One successfully written 02 query owns the receive lane for 5000 ms
-(wrap-safe), until a **complete parsed** 03 response has the same message
+cursor. One successfully written 02 query owns the receive lane until its
+wrap-safe deadline (originally 5000 ms for all queries; see Phase 6 below),
+or until a **complete parsed** 03 response has the same message
 number and subcommand, or until revoke, ingress invalidation, or link reset.
 Expiry/invalidation/link reset also clear the matching PanelLan full-preset
 publication gate before any orphaned late reply can publish active state.
@@ -372,7 +373,7 @@ number is eventually reused after a full wrap or a repeated reserved EE read;
 hardware validation/correlation remains necessary.
 
 The controller's two-second preset retry check does **not** revoke a still-
-owned fragmented response: the five-second transport deadline wins. A busy
+owned fragmented response: the transport deadline wins. A busy
 replacement (including unrelated response ownership) retains the old semantic
 and publication gates and does not count as a failed replacement attempt.
 Only after that owner expires/completes, or on a successfully dispatched
@@ -514,9 +515,11 @@ Its per-request latency is primarily based on:
 
 That measures authoritative hardware-slot confirmation, but not completion of the
 subsequent full-preset synchronization. A transition can therefore be reported as
-fast even while the UI remains stale/Syncing for another few seconds. A slow
-full-preset response that completes before the five-second deadline can also produce
-no timeout or parser-reject event, despite being plainly visible to the user.
+fast even while the UI remains stale/Syncing for another few seconds. Before the
+Phase 6 tuning below, a slow full-preset response that completed before the
+five-second deadline could produce no timeout or parser-reject event, despite being
+plainly visible to the user. Normal-sequence controller 02/01 and hardware-number
+02/10 reads now use a 1500 ms response-lane deadline; other queries retain 5000 ms.
 
 For reliability work, track both of these separately:
 
@@ -579,8 +582,8 @@ The next captured slow transition should distinguish these cases:
    logic is the likely bottleneck.
 
 Do not tune around the symptom until one or more visibly slow transitions have been
-captured with these phase timings. Preserve the existing five-second response-lane
-deadline while collecting this evidence.
+captured with these phase timings. The five-second response-lane deadline was
+preserved while collecting this evidence; see the Phase 6 result below.
 
 ### Phase 6 - tune only after data exists
 
@@ -594,6 +597,62 @@ After the scheduler is stable, use hardware traces to revisit:
 - Spark-2 80 ms BLE pacing
 
 Do not shorten these merely to make the UI look faster. Tune from measured completion distributions.
+
+Phase 6 response-lane tuning (hardware trace with `PANELAN_PRESET_TRACE`):
+several controller full-preset replies delivered multipart chunks 1..16 of
+expected 17 and then stalled. At the five-second lane expiry/retry, a stale
+invalid frame was discarded, the old 16/17 assembly was discarded on the new
+start, and the retry completed all 17 chunks in about 0.4 seconds. Other full
+responses completed in about 0.5 seconds; preset-number confirmation remained
+about 0.4 seconds. The observed roughly six-second UI delay was the five-second
+response wait plus retry, not slow preset-number confirmation. No queue drops
+or ingress invalidation were observed in this trace.
+
+The initial Phase 6 tuning set only the normal-sequence controller full-preset
+02/01 response lane to 2500 ms (wrap-safe). Other 02 queries, including the
+reserved EE background slot read, retain 5000 ms. The existing two-second
+retry cadence still waits for the lane to release before sending another query;
+expiry clears the owner
+and matching publication gate, and complete parsed replies still require
+message-number/subcommand correlation. ControllerActions' semantic confirmation
+gates are unchanged. This narrows the wait on the observed stalled 16/17 case
+by about 2.5 seconds without intentionally overlapping responses. It is a
+targeted recovery adjustment, not hardware soak acceptance or evidence that
+all future full responses complete within 2500 ms.
+
+Follow-up hardware test at 2500 ms: of seven requested selections, five reached
+Ready in 0.89–0.98 seconds. Two stalled at 16/17 response chunks and recovered
+at 3.43–3.47 seconds: the existing two-second FullPresetRetry cadence could not
+send its retry until after the 2500 ms lane expired. Normal non-EE 02/01 lane
+expiry is therefore tightened to 1500 ms, before the existing retry cadence;
+ordinary full replies measured about 0.5–1.0 seconds end-to-end through parse,
+leaving headroom. Other query deadlines remain 5000 ms. The lane still prevents
+overlapping queries, expiry clears the matching publication gate, and correlated
+complete replies and controller semantic gates remain required. This is targeted
+recovery tuning, not reliability acceptance; continue hardware validation.
+
+Subsequent preset soak stopped on failure at action id78 (`number_timeout` at
+5.16 s); this is not an acceptance run. The preset mutation was sent and ACKed,
+and a correlated 02/10 verification query was sent 244 ms later. The frame parser
+saw a three-byte invalid-wire fragment, but no correlated 03/10 reply arrived.
+Every 500 ms number poll attempt was rejected Busy while that 02/10 owned the
+response lane for 5000 ms. A later 03/10 observation during reconciliation showed
+slot 6, suggesting the amp applied the target, but it did not semantically confirm
+the timed-out action. Measured typical number responses were under 500 ms, so
+normal (non-EE) 02/10 queries now release the lane after 1500 ms, allowing the
+existing poll cadence to retry before the 5000 ms action deadline. Normal 02/01
+remains at 1500 ms; all other queries, including reserved EE, remain at 5000 ms.
+Serialization, correlated complete replies, and semantic confirmation are unchanged.
+This is evidence-based recovery tuning, not hardware soak acceptance; repeat the
+soak to validate it.
+
+FX follow-up on the same normal firmware with the 1500 ms non-EE 02/01 lane:
+the six-slot hardware harness completed both directions on all slots (12 actions).
+Every FX action was confirmed by a matching full-preset response, including the
+Spark pedal `Name`/`IsOn` observation; busy duplicate toggles were rejected. No
+transport retry/timeout or FX failure was recorded during this run. This validates
+the short full-preset fallback path used by FX, but is not a 500-action FX soak or
+audio verification; keep the longer FX soak as open reliability acceptance.
 
 ## UI behavior during this work
 

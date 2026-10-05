@@ -8,6 +8,8 @@
 class SparkResponseLane {
 public:
     static constexpr uint32_t deadlineMs = 5000;
+    static constexpr uint32_t controllerFullPresetDeadlineMs = 1500;
+    static constexpr uint32_t hardwareNumberDeadlineMs = 1500;
 
     static bool supported(uint8_t cmd, uint8_t subcmd) {
         if (cmd != 0x02) return true;
@@ -21,7 +23,13 @@ public:
 
     bool busy(uint32_t now) { expire(now); return active_; }
     bool expire(uint32_t now) {
-        if (!active_ || static_cast<uint32_t>(now - sentAt_) < deadlineMs) return false;
+        // EE is the reserved background slot read, not a normal controller
+        // query. Keep its original window along with all other query types.
+        const uint32_t limit = msgNum_ == 0xEE ? deadlineMs
+                               : subcmd_ == 0x01 ? controllerFullPresetDeadlineMs
+                               : subcmd_ == 0x10 ? hardwareNumberDeadlineMs
+                                                 : deadlineMs;
+        if (!active_ || static_cast<uint32_t>(now - sentAt_) < limit) return false;
         reset();
         return true;
     }

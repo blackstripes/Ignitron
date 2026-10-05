@@ -26,6 +26,7 @@ def record_trace(text, records, outcomes):
         accepted["event"] = "accept"
         outcomes.append(accepted)
         records["_outcome_ids"].add(fields["id"])
+        records.setdefault(fields["id"], {}).setdefault("accept", accepted)
         records.setdefault("_timeline", []).append(accepted)
     if event == "number":
         records.setdefault("_timeline", []).append(fields)
@@ -159,6 +160,47 @@ def status_is_ready(lines):
             values.get("Preset name") not in (None, "(unknown)"))
 
 
+def request_latency(accepted, trace):
+    """Return number/Ready milliseconds, requiring this request's matching query.
+
+    A first notification is diagnostic only; it does not prove a matching reply.
+    A retry replaces the earlier query, and a revoked query cannot provide Ready.
+    """
+    id_, target = accepted.get("id"), accepted.get("target")
+    if not id_ or "t" not in accepted:
+        return "-", "-"
+    number, full, msg, parsed = "-", "-", None, False
+    for event in trace:
+        if event.get("id") != id_ or event.get("target") != target:
+            continue
+        kind = event.get("event")
+        if kind == "number_confirm" and "t" in event:
+            number = (int(event["t"]) - int(accepted["t"])) & 0xffffffff
+        if kind in ("full_query", "startup_full_query"):
+            msg = event.get("msg") if event.get("sent") == "1" else None
+            parsed = False
+        if kind in ("full_data_timeout", "full_data_conflict", "startup_full_timeout") and event.get("msg") == msg:
+            msg, parsed = None, False
+        if msg and event.get("msg") == msg:
+            if kind == "full_result" and event.get("match") == "1":
+                parsed = True
+            if kind == "startup_full_result" and event.get("match") == "1" and event.get("ready") == "1":
+                parsed = True
+            if kind == "ready" and parsed and "t" in event:
+                full = (int(event["t"]) - int(accepted["t"])) & 0xffffffff
+    return number, full
+
+
+def request_summary(id_, accepted, records):
+    events = records[id_]
+    number, full = request_latency(accepted, records.get("_trace", []))
+    slow = isinstance(full, int) and full > 1000
+    return (f"id={id_} target={accepted['target']} sent={bool(events.get('sent'))} "
+            f"observed={bool(events.get('number_confirm') or events.get('satisfied'))} "
+            f"number_confirm_ms={number} full_sync_ms={full} slow_full_sync={slow} "
+            f"failed={bool(events.get('fail'))}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True, help="trace-firmware USB serial device")
@@ -253,15 +295,7 @@ def main():
         accepted = events.get("accept")
         if not accepted:
             continue
-        target = accepted["target"]
-        confirmed = events.get("number_confirm")
-        sent = events.get("sent")
-        observed = events.get("number_confirm") or events.get("satisfied")
-        if confirmed:
-            latency = (int(confirmed["t"]) - int(accepted["t"])) & 0xffffffff
-        else:
-            latency = "-"
-        print(f"id={id_} target={target} sent={bool(sent)} observed={bool(observed)} latency_ms={latency} failed={bool(events.get('fail'))}")
+        print(request_summary(id_, accepted, records))
     print(f"final_synced_target={final or 'none'}")
 
 

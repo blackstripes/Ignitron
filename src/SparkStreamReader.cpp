@@ -10,6 +10,16 @@
 #include <utility>
 
 SparkStreamReader::SparkStreamReader() : message{}, unstructuredData{}, msgData{}, msgPos(0) {
+#ifdef PANELAN_PRESET_TRACE
+    const auto trace = +[](const SparkReceiveTraceEvent &event) {
+        Serial.printf("PRESET_TRACE t=%lu event=%s reason=%s msg=%u cmd=%02X sub=%02X expected=%u received=%u\n",
+                      static_cast<unsigned long>(millis()), event.event, event.reason,
+                      event.message, event.command, event.subcommand,
+                      static_cast<unsigned>(event.expected), static_cast<unsigned>(event.received));
+    };
+    frameReader_.setTrace(trace);
+    assembly_.setTrace(trace);
+#endif
 }
 
 string SparkStreamReader::getJson() {

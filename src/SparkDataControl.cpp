@@ -31,6 +31,7 @@ uint32_t SparkDataControl::presetTelemetryId_ = 0, SparkDataControl::fxTelemetry
 uint32_t SparkDataControl::busySince_[2] = {};
 bool SparkDataControl::busySeen_[2] = {};
 atomic_uint32_t SparkDataControl::firstNotificationAt_{UINT32_MAX};
+uint8_t SparkDataControl::notificationQueryMessageNumber_ = 0;
 atomic_bool SparkDataControl::notificationArmed_{false};
 atomic_uint32_t SparkDataControl::ingressHighWater_{0};
 SparkRetainedIntents SparkDataControl::retainedIntents_;
@@ -770,10 +771,11 @@ bool SparkDataControl::triggerCommand(vector<CmdData> &msg) {
     writeTelemetryId_ = id;
     if (query) {
         firstNotificationAt_.store(UINT32_MAX);
+        notificationQueryMessageNumber_ = msg.front().msgNum;
         notificationArmed_.store(true);
     }
     if (!currentCommand.start(msg, writeRequest)) {
-        if (query) notificationArmed_.store(false);
+        if (query) { notificationArmed_.store(false); notificationQueryMessageNumber_ = 0; }
         writeTelemetryId_ = 0;
         lastSubmissionStatus_ = SparkSubmission::Failed;
         return false;
@@ -1390,6 +1392,14 @@ uint32_t SparkDataControl::fullPresetObservationRevision() {
 
 uint8_t SparkDataControl::fullPresetObservationMessageNumber() {
     return fullPresetObservationMessageNumber_;
+}
+
+bool SparkDataControl::firstQueryNotification(uint8_t messageNumber, uint32_t &atMs) {
+    if (messageNumber == 0 || notificationQueryMessageNumber_ != messageNumber) return false;
+    const uint32_t at = firstNotificationAt_.load();
+    if (at == UINT32_MAX) return false;
+    atMs = at;
+    return true;
 }
 
 void SparkDataControl::expectControllerFullPreset(uint8_t messageNumber) {

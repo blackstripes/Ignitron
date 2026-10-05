@@ -43,7 +43,7 @@ int main() {
     assert(send(2, 1, UINT32_MAX - 100));
     uint8_t publicationGate = static_cast<uint8_t>(next - 1);
     bool owned = lane.owns(publicationGate, 1);
-    assert(!lane.expire(4898) && lane.expire(4899) && !lane.expire(4900));
+    assert(!lane.expire(1398) && lane.expire(1399) && !lane.expire(1400));
     if (owned) publicationGate = 0;
     assert(publicationGate == 0 && !lane.complete(static_cast<uint8_t>(next - 1), 3, 1));
     uint8_t old = static_cast<uint8_t>(next - 1);
@@ -168,26 +168,59 @@ int main() {
     const SparkSubmission secondPart = SparkSubmission::Failed;
     assert(firstButtonPartSent && !keepQueuedSparkIntent(secondPart));
 
-    // Two-second controller retry cadence cannot replace the old 5-second
-    // transport owner or revoke its publication gate. Busy due another owner
-    // likewise preserves the attempted query's semantic correlation.
+    // The controller full-preset owner expires before the two-second retry
+    // cadence. An earlier attempt cannot replace it or revoke its gate; busy
+    // due another owner likewise preserves semantic correlation.
     SparkResponseLane retryLane;
     assert(retryLane.acquire(2, 1, 31, 100));
     uint8_t controllerGate = 31;
     uint8_t stateGate = 31;
-    assert(retryLane.owns(31, 1) && !retryLane.expire(2100));
+    assert(retryLane.owns(31, 1) && !retryLane.expire(1599));
     assert(controllerGate == 31 && stateGate == 31);
-    assert(!retryLane.acquire(2, 1, 32, 2100));
-    assert(retryLane.complete(31, 3, 1));
+    assert(!retryLane.acquire(2, 1, 32, 1599));
+    assert(retryLane.expire(1600));
+    if (controllerGate == 31) controllerGate = 0;
+    assert(controllerGate == 0 && !retryLane.complete(31, 3, 1));
+    assert(retryLane.acquire(2, 1, 32, 2100));
+    controllerGate = stateGate = 32;
+    assert(retryLane.complete(32, 3, 1));
     assert(retryLane.acquire(2, 0x10, 33, 2200));
     assert(!retryLane.acquire(2, 1, 34, 2200));
-    assert(controllerGate == 31 && stateGate == 31); // busy, no attemptedAt
+    assert(controllerGate == 32 && stateGate == 32); // busy, no attemptedAt
     retryLane.reset();
     assert(retryLane.acquire(2, 1, 34, 2300));
     controllerGate = stateGate = 34;
-    assert(!retryLane.expire(7299));
+    assert(!retryLane.expire(3799));
     bool wasControllerOwner = retryLane.owns(controllerGate, 1);
-    assert(retryLane.expire(7300));
+    assert(retryLane.expire(3800));
     if (wasControllerOwner) controllerGate = 0;
     assert(controllerGate == 0 && !retryLane.complete(34, 3, 1));
+
+    // Both normal controller preset queries release at 1.5 seconds across
+    // millis() wrap. A busy poll cannot replace the owner before expiry;
+    // an expired reply cannot complete the replacement query.
+    SparkResponseLane otherLane;
+    const uint32_t sentAt = UINT32_MAX - 100;
+    for (uint8_t sub : {0x01, 0x10}) {
+        assert(otherLane.acquire(2, sub, 40, sentAt));
+        assert(!otherLane.expire(1398) && otherLane.busy(1398));
+        assert(!otherLane.acquire(2, sub, 41, 1398));
+        assert(otherLane.expire(1399) && !otherLane.expire(1400));
+        assert(!otherLane.complete(40, 3, sub));
+        assert(otherLane.acquire(2, sub, 41, 1399));
+        assert(!otherLane.complete(40, 3, sub));
+        assert(otherLane.complete(41, 3, sub));
+    }
+    // All other queries and reserved EE retain five seconds, including wrap.
+    for (uint8_t sub : {0x11, 0x23, 0x2a, 0x2b, 0x2f, 0x71, 0x75, 0x76, 0x78}) {
+        assert(otherLane.acquire(2, sub, 40, sentAt));
+        assert(!otherLane.expire(1399) && otherLane.busy(4898));
+        assert(!otherLane.acquire(2, 0x10, 41, 4898));
+        assert(otherLane.expire(4899) && !otherLane.expire(4900));
+    }
+    for (uint8_t sub : {0x01, 0x10}) {
+        assert(otherLane.acquire(2, sub, 0xEE, sentAt));
+        assert(!otherLane.expire(1399) && otherLane.busy(4898));
+        assert(otherLane.expire(4899));
+    }
 }

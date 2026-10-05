@@ -203,9 +203,22 @@ on the first four slots. The normal non-trace firmware was then restored and
 reported Spark connected, preset 1 CLEAN. The host harness still cannot prove
 audio output; it verifies Spark-owned protocol state.
 
+Follow-up after the controller full-preset response-lane deadline was shortened
+to 1500 ms: a paced run on normal firmware completed all six FX slots in both
+directions. All 12 actions were confirmed by a matching full-preset response
+(the returned pedal `Name`/`IsOn` matched the requested direction); the harness's
+duplicate-toggle busy probes were rejected. The amp remained connected, and
+device diagnostics showed 18 lifetime FX sends / 18 confirmations, zero FX
+failures, and zero transport retries/timeouts. This is a focused 12-action
+verification of the full-preset fallback path, not a long FX soak or audio-output
+test. The normal non-trace firmware remains installed.
+
 The stdlib-only script does not flash or auto-detect hardware. It prints each
-trace line and per-request acceptance-to-number-confirmation latency, sent and
-failed status, rejects, and `final_synced_target`; `none` means the final
+trace line and per-accepted-request `number_confirm_ms` (accept to correlated
+slot reply) and `full_sync_ms` (accept to matching parsed full response and
+renderer-facing Ready); missing milestones print `-`. `slow_full_sync=True`
+flags Ready after more than 1000 ms even on successful selections. It also
+prints sent and failed status, rejects, and `final_synced_target`; `none` means the final
 accepted selection/no-op lacks authoritative number evidence and a matching
 full refresh (or ready, matching startup full result), or a later number reports
 another slot. A timed-out query does not count, but a subsequent query and
@@ -536,7 +549,16 @@ For slow or apparently failed preset switches, build and flash the opt-in
 milestones for accepted/rejected requests, send, ACK, transient connection
 phase, observed hardware-preset number, full-preset verification, and final
 confirmation/failure (including elapsed time and request ID). It logs no preset
-names, amp serials, or raw BLE payloads. Drive it with the existing serial
+names, amp serials, or raw BLE payloads.
+`full_first_notification` carries `at=<ms>` (callback enqueue timestamp),
+`id`, and query `msg`; it is the first notification after dispatch, not
+necessarily a reply to that query. `full_result`/`startup_full_result` report
+parsed responses; `ready` is emitted once per current query when the snapshot
+published by ControllerState is actually Ready for the matching response and
+slot. Startup retries following a confirmed selection retain its trace ID;
+unrelated startup synchronization uses id=0. Compare `at` against the query
+dispatch `t` to avoid controller-loop sampling delay. Trace timestamps wrap at
+32 bits. Drive it with the existing serial
 `preset <n>` CLI command; this exercises the same `ControllerActions` path as a
 touch selection. The serial `touch x y` injection can separately exercise the
 touchscreen callback. Keep one serial session open during a cycle because

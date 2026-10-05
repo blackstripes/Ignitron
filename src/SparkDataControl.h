@@ -71,6 +71,9 @@ public:
     // Protocol message number paired with the most recently applied,
     // non-background full-preset observation.
     static uint8_t fullPresetObservationMessageNumber();
+    // First queued BLE notification after the latest successfully dispatched
+    // query (not necessarily a reply to it). Valid even after lane completion.
+    static bool firstQueryNotification(uint8_t messageNumber, uint32_t &atMs);
     // PanelLan active-preset refresh barrier; zero revokes older replies.
     static void expectControllerFullPreset(uint8_t messageNumber);
     // Incoming Spark looper observations only. These never advance for an
@@ -303,6 +306,7 @@ private:
     static uint32_t busySince_[2];
     static bool busySeen_[2];
     static atomic_uint32_t firstNotificationAt_;
+    static uint8_t notificationQueryMessageNumber_;
     static atomic_bool notificationArmed_;
     static atomic_uint32_t ingressHighWater_;
     static SparkRetainedIntents retainedIntents_;

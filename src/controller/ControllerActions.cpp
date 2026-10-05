@@ -54,6 +54,7 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
     presetTraceSatisfiedTarget_ = 0;
     presetTraceStartupId_ = 0;
     presetTraceStartupTarget_ = 0;
+    presetTraceQueryMsg_ = 0; // A new intent revokes old readiness correlation.
     // Keep a timed-out refresh's message id for a late diagnostic response.
 #endif
     PRESET_TRACE("event=accept id=%lu target=%u confirmed=%u", static_cast<unsigned long>(id),
@@ -232,6 +233,7 @@ void ControllerActions::onAmpDisconnected() {
     presetTraceStartupId_ = 0;
     presetTraceStartupTarget_ = 0;
     presetTraceSatisfiedTarget_ = 0;
+    presetTraceQueryMsg_ = 0;
 #endif
     state_.expectStartupFullPreset(0);
     if (presetTargets_.queued() != 0) {
@@ -298,6 +300,15 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     }
 #ifdef PANELAN_PRESET_TRACE
     presetTraceConnectionObserved_ = true;
+    if (presetTraceQueryMsg_ != 0 && !presetTraceNotified_) {
+        uint32_t at = 0;
+        if (SparkDataControl::firstQueryNotification(presetTraceQueryMsg_, at)) {
+            PRESET_TRACE("event=full_first_notification id=%lu target=%u msg=%u at=%lu",
+                         static_cast<unsigned long>(presetTraceQueryId_), presetTraceQueryTarget_,
+                         presetTraceQueryMsg_, static_cast<unsigned long>(at));
+            presetTraceNotified_ = true;
+        }
+    }
     // Snapshot changes are Spark observations, not locally inferred success.
     // Retain the most recent failed target to label a later observation as late,
     // never as a successful controller confirmation.
@@ -310,6 +321,32 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                      SparkDataControl::fullPresetObservationMessageNumber(), match,
                      match && snapshot.fullPresetObservedForLink &&
                          snapshot.confirmedHardwarePreset == presetTraceStartupTarget_);
+    }
+    if (awaitingPresetFullResponse_ &&
+        SparkDataControl::fullPresetObservationRevision() != presetTraceFullRevision_) {
+        presetTraceFullRevision_ = SparkDataControl::fullPresetObservationRevision();
+        PRESET_TRACE("event=full_result id=%lu target=%u msg=%u match=%u confirmed=%u elapsed=%lu",
+                     static_cast<unsigned long>(presetTraceId_), presetFullTarget_,
+                     SparkDataControl::fullPresetObservationMessageNumber(),
+                     SparkDataControl::fullPresetObservationMessageNumber() == presetFullQueryMessageNumber_,
+                     snapshot.confirmedHardwarePreset,
+                     static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+    }
+    // refreshFromSpark() has already published this snapshot to both renderers.
+    // A parsed response alone is insufficient: require the current query's
+    // observation and the actual Ready snapshot, once per request.
+    if (presetTraceQueryMsg_ != 0 && !presetTraceReady_ &&
+        (presetTraceQueryId_ == 0 || presetTraceReadyId_ != presetTraceQueryId_) &&
+        SparkDataControl::fullPresetObservationRevision() != presetTraceQueryRevision_ &&
+        SparkDataControl::fullPresetObservationMessageNumber() == presetTraceQueryMsg_ &&
+        snapshot.connectionPhase == ControllerConnectionPhase::Ready &&
+        snapshot.fullPresetObservedForLink && snapshot.confirmedHardwarePreset == presetTraceQueryTarget_) {
+        PRESET_TRACE("event=ready id=%lu target=%u msg=%u elapsed=%lu",
+                     static_cast<unsigned long>(presetTraceQueryId_), presetTraceQueryTarget_, presetTraceQueryMsg_,
+                     static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+        presetTraceReady_ = true;
+        presetTraceReadyId_ = presetTraceQueryId_;
+        if (presetTraceQueryId_ != 0) presetTraceSatisfiedTarget_ = 0;
     }
     if (SparkDataControl::isAmpConnected() && snapshot.confirmedHardwarePreset != presetTraceObserved_) {
         PRESET_TRACE("event=number id=%lu target=%u confirmed=%u", static_cast<unsigned long>(presetTraceId_),
@@ -570,6 +607,18 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             if (startupFullPresetQueryIssued_) {
                 state_.expectStartupFullPreset(startupFullPresetQueryMessageNumber_);
                 SparkDataControl::expectControllerFullPreset(startupFullPresetQueryMessageNumber_);
+#ifdef PANELAN_PRESET_TRACE
+                presetTraceQueryId_ = presetTraceStartupId_;
+                presetTraceQueryTarget_ = snapshot.confirmedHardwarePreset;
+                presetTraceQueryMsg_ = startupFullPresetQueryMessageNumber_;
+                presetTraceQueryRevision_ = revisionBeforeSend;
+                presetTraceNotified_ = false;
+                presetTraceReady_ = false;
+#endif
+            } else {
+#ifdef PANELAN_PRESET_TRACE
+                presetTraceQueryMsg_ = 0;
+#endif
             }
             Serial.printf("Controller: requesting startup full preset (%s)\n",
                           startupFullPresetQueryIssued_ ? "sent" : "send failed");
@@ -634,6 +683,12 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 SparkDataControl::expectControllerFullPreset(presetFullQueryMessageNumber_);
 #ifdef PANELAN_PRESET_TRACE
                 presetTraceFullRevision_ = revisionBeforeSend;
+                presetTraceQueryId_ = presetTraceId_;
+                presetTraceQueryTarget_ = presetFullTarget_;
+                presetTraceQueryMsg_ = presetFullQueryMessageNumber_;
+                presetTraceQueryRevision_ = revisionBeforeSend;
+                presetTraceNotified_ = false;
+                presetTraceReady_ = false;
 #endif
             } else {
                 PRESET_TRACE("event=full_query_send_failed id=%lu target=%u elapsed=%lu",
@@ -643,6 +698,9 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             Serial.printf("Controller: preset %u number confirmed; refreshing full preset\n", sentPreset_);
             sentPreset_ = 0;
             numberVerification_.reset();
+#ifdef PANELAN_PRESET_TRACE
+            presetTraceSatisfiedTarget_ = presetFullTarget_; // also label startup retry of this refresh
+#endif
         } else if (snapshot.confirmedHardwarePreset != 0 && snapshot.confirmedHardwarePreset != presetBeforeRequest_ &&
                    snapshot.confirmedHardwarePreset != sentPreset_) {
             PRESET_TRACE("event=fail id=%lu target=%u reason=conflict_number confirmed=%u elapsed=%lu",
@@ -725,17 +783,6 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     }
 
     if (awaitingPresetFullResponse_) {
-#ifdef PANELAN_PRESET_TRACE
-        if (SparkDataControl::fullPresetObservationRevision() != presetTraceFullRevision_) {
-            presetTraceFullRevision_ = SparkDataControl::fullPresetObservationRevision();
-            PRESET_TRACE("event=full_result id=%lu target=%u msg=%u match=%u confirmed=%u elapsed=%lu",
-                         static_cast<unsigned long>(presetTraceId_), presetFullTarget_,
-                         SparkDataControl::fullPresetObservationMessageNumber(),
-                         SparkDataControl::fullPresetObservationMessageNumber() == presetFullQueryMessageNumber_,
-                         snapshot.confirmedHardwarePreset,
-                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
-        }
-#endif
         if (fullPresetRetry_.matches(SparkDataControl::fullPresetObservationMessageNumber(),
                                      SparkDataControl::fullPresetObservationRevision()) &&
             snapshot.confirmedHardwarePreset == presetFullTarget_) {
@@ -762,6 +809,9 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             presetTraceFailedFullId_ = presetTraceId_;
 #endif
             awaitingPresetFullResponse_ = false;
+#ifdef PANELAN_PRESET_TRACE
+            presetTraceQueryMsg_ = 0;
+#endif
             if (conflict) fullPresetRetry_.reset();
             else fullPresetRetry_.revoke();
             // Both gates must be revoked before startup sync can issue a new
