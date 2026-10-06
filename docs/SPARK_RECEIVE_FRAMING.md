@@ -142,8 +142,8 @@ There were zero incomplete multipart responses, frame discards, multipart
 discards, or valid partial-final-frame headers without a completed frame.
 No `startup_full_timeout`, full-query send failure, or retry event was logged.
 
-For all 24 accepted actions, `ready.elapsed` full-sync latency was (nearest-rank
-percentiles, milliseconds): p50 **1067**, p95 **1119**, p99 **1194**, max
+For all 24 accepted actions, `ready.elapsed` full-sync latency was (median p50,
+nearest-rank p95/p99, milliseconds): p50 **1067**, p95 **1119**, p99 **1194**, max
 **1194**. To match the 12 NEO Core actions that had been accepted for preset
 numbers 1–4, the Spark 2 subset of those same 12 actions measured p50 **1077.5**,
 p95 **1194**, p99 **1194**, max **1194**. The earlier NEO Core four-second
