@@ -12,8 +12,10 @@ include <../enclosure-v2/ignitron-enclosure-v2.scad>;
 // the main display and the two mini-display/switch rows.
 case_d = 185;
 
-// Four perimeter-corner mounting holes; the centre pair from V2 is omitted.
-boss_xy = [[-103,-84],[103,-84],[-103,84],[103,84]];
+// Perimeter-corner mounting holes plus midpoints on the left, right and
+// bottom/front edges. Omit the top/rear midpoint because the display occupies it.
+boss_xy = [[-103,-84],[103,-84],[-103,84],[103,84],
+           [-103,0],[103,0],[0,-84]];
 
 // Three display/switch pairs in each lower row.  The mini display's viewing
 // aperture is offset +2 mm from its PCB centre, so shift each switch +2 mm to
@@ -26,6 +28,12 @@ switches = [[-68,-72], [2,-72], [72,-72],
 
 // Main 2.8in display is centred horizontally in the top row.
 main_pos = [0,60];
+
+// Match the latest reinforced V2 display seat. The through-opening itself is
+// inherited unchanged from V2 (68 x 48 mm, offset +1.875 mm in X).
+main_pocket_h = 53.65;
+main_pocket_radius = 1.5;
+main_recess_depth = 1.45;
 
 // V3 rear reinforcement.  The lattice is positioned around the V3 openings,
 // rather than reusing V2's fixed-coordinate lattice.
@@ -50,43 +58,49 @@ module v3_rib_ring(cx,cy,w,h,r=5) {
 module v3_reinforcement() {
   panel_plane() translate([0,0,-panel_t-rib_depth])
     linear_extrude(height=rib_depth+rib_overlap)
-      union() {
-        // Each rib frame surrounds one display and its switch, leaving the
-        // display/header and switch openings clear. Raise only the top edge
-        // 2 mm: its inner edge now clears the header relief by 0.78 mm.
-        for (x=[-70,0,70], y=[-52,8])
-          v3_rib_ring(x,y-9,40,50);
+      difference() {
+        union() {
+          // Each rib frame surrounds one display and its switch, leaving the
+          // display/header and switch openings clear. Raise only the top edge
+          // 2 mm: its inner edge now clears the header relief by 0.78 mm.
+          for (x=[-70,0,70], y=[-52,8])
+            v3_rib_ring(x,y-9,40,50);
 
-        // Tie adjacent display/switch frames across each row and between rows.
-        // Land on rib centrelines, not outer edges or rounded corner voids.
-        for (y=[-62,-2]) {
-          v3_rib_path([-51.5,y],[-18.5,y]);
-          v3_rib_path([18.5,y],[51.5,y]);
-        }
-        for (x=[-70,0,70]) v3_rib_path([x,-37.5],[x,-24.5]);
-
-        // Main-display frame: the lower rail joins the centre mini frame
-        // without crossing the recess (rail edge 32.5, recess edge 33.425).
-        v3_rib_path([-42,31],[-42,89]);
-        v3_rib_path([42,31],[42,89]);
-        v3_rib_path([-42,89],[42,89]);
-        v3_rib_path([-42,31],[42,31]);
-        // Join the upper mini-display frames to the main-display support, and
-        // connect the main frame directly to the MODE/TUNER collars.
-        v3_rib_path([-55,22.5],[-42,31]);
-        v3_rib_path([0,22.5],[0,31]);
-        v3_rib_path([55,22.5],[42,31]);
-        // Stop in each collar's display-facing wall, never across its bore.
-        // Rounded caps overlap the annulus by 2 mm and clear the bore by 1 mm.
-        v3_rib_path([-42,60],[-56,60]);
-        v3_rib_path([42,60],[60,60]);
-        for (x=[-68,72])
-          translate([x,60]) difference() {
-            // 19 mm clear bore leaves extra clearance around switch hardware;
-            // the 3 mm annulus increases bearing area under the panel.
-            circle(r=12.5);
-            circle(r=9.5);
+          // Tie adjacent display/switch frames across each row and between rows.
+          // Land on rib centrelines, not outer edges or rounded corner voids.
+          for (y=[-62,-2]) {
+            v3_rib_path([-51.5,y],[-18.5,y]);
+            v3_rib_path([18.5,y],[51.5,y]);
           }
+          for (x=[-70,0,70]) v3_rib_path([x,-37.5],[x,-24.5]);
+
+          // Main-display frame stays inside the rear enclosure cavity.
+          // Its upper rail and side-rib ends stop at y=86, inside the y~=88.1 rim.
+          v3_rib_path([-42,31],[-42,86]);
+          v3_rib_path([42,31],[42,86]);
+          v3_rib_path([-42,86],[42,86]);
+          v3_rib_path([-42,31],[42,31]);
+          // Join the upper mini-display frames to the main-display support, and
+          // connect the main frame directly to the MODE/TUNER collars.
+          v3_rib_path([-55,22.5],[-42,31]);
+          v3_rib_path([0,22.5],[0,31]);
+          v3_rib_path([55,22.5],[42,31]);
+          // Stop in each collar's display-facing wall, never across its bore.
+          // Rounded caps overlap the annulus by 2 mm and clear the bore by 1 mm.
+          v3_rib_path([-42,60],[-56,60]);
+          v3_rib_path([42,60],[60,60]);
+          for (x=[-68,72])
+            translate([x,60]) difference() {
+              // 19 mm clear bore leaves extra clearance around switch hardware;
+              // the 3 mm annulus increases bearing area under the panel.
+              circle(r=12.5);
+              circle(r=9.5);
+            }
+        }
+
+        // Keep reinforcement clear around every panel fastener. In particular,
+        // this separates the bottom-centre insert boss from the lower mini-frame rail.
+        for (p=boss_xy) translate([p[0],p[1]]) circle(d=m3_boss_d+2);
       }
 }
 
