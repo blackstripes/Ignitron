@@ -130,3 +130,40 @@ bytes for a would-be final frame reached callback/queue and remained
 unterminated. This conclusion uses lengths, validated headers, ID spans and
 terminator placement only; no payload bytes are captured. This remains
 diagnostic evidence only; transport configuration and behavior were not tuned.
+
+## Spark 2 comparison run (2026-10-06)
+
+Using the same controller, flashed `panelan-lvgl-controller-preset-trace`
+image, serial CLI, 1–8 cycling order, and four-second interval between preset
+requests, the controller reported `Amp: Spark 2` and remained connected. All
+24 requests were accepted. Each produced a matching full-preset result and
+`ready` observation; all multipart assemblies completed (17/17 or 18/18).
+There were zero incomplete multipart responses, frame discards, multipart
+discards, or valid partial-final-frame headers without a completed frame.
+No `startup_full_timeout`, full-query send failure, or retry event was logged.
+
+For all 24 accepted actions, `ready.elapsed` full-sync latency was (nearest-rank
+percentiles, milliseconds): p50 **1067**, p95 **1119**, p99 **1194**, max
+**1194**. To match the 12 NEO Core actions that had been accepted for preset
+numbers 1–4, the Spark 2 subset of those same 12 actions measured p50 **1077.5**,
+p95 **1194**, p99 **1194**, max **1194**. The earlier NEO Core four-second
+capture had 12 accepted requests and 12 CLI rejections (`Preset request
+rejected; wait for synchronization to finish`); it contained one 17-part
+incomplete response (message 57, 16/17), followed by a fresh response start.
+Its output filter did not retain controller `ready` events, so NEO Core
+full-sync percentiles and exact controller timeout/retry counts are unavailable
+from that capture. No ingress busy/full-drop, trace-loss, or disconnect event
+appeared in the NEO Core capture; interval-scoped diagnostic counters were not
+collected there.
+
+During the Spark 2 measurement window there were no disconnect events, callback
+queue busy/full drops, ingress trace losses, frame discards, or multipart
+discards. The follow-up since-boot diagnostic reported ingress busy=0 and
+full=0 (high-water mark 12). It also reported one BLE disconnect/reconnect and
+one generic transport retry/timeout since boot; those counters are not
+time-scoped and cannot be attributed to this Spark 2 measurement window.
+This is strong evidence that the truncated final-frame case was specific to the
+observed NEO Core run, not a demonstrated Spark 2 behavior. It does not by
+itself establish the amp as the cause: the NEO Core sample had one incomplete
+response among 12 accepted actions, and this Spark 2 sample had zero among 24.
+No transport, parser, retry, deadline, or queue behavior was changed.
