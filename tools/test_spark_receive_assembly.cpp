@@ -153,8 +153,19 @@ int main() {
     events.clear();
     auto bad = one;
     bad[3] ^= 1;
-    assert(fragments.accept(bad).empty());
+    assert(fragments.accept(bad, 70).empty());
     expect("frame_discard", "checksum", 9, 0, bad.size());
+    // The complete event identifies the actual candidate rather than the
+    // aggregate buffer, and retains both IDs across notification boundaries.
+    assert(fragments.accept(Frame(one.begin(), one.begin() + 6), 71).empty());
+    assert(fragments.accept(Frame(one.begin() + 6, one.end()), 72) == Frames({one}));
+    assert(events.size() == 1);
+    assert(std::string(events[0].event) == "frame_span_complete" && events[0].message == 9);
+    assert(events[0].firstIngressId == 71 && events[0].lastIngressId == 72);
+    assert(events[0].partialBytes == one.size() && events[0].received == one.size());
+    assert(events[0].validStart && events[0].headerValid && events[0].terminatorSeen &&
+           events[0].frameSpanExact);
+    events.clear();
     assert(!assembler.accept(part(30, 3, 3, 0), output));
     assert(events.size() == 2);
     assert(std::string(events[0].event) == "multipart_start");
@@ -176,26 +187,63 @@ int main() {
     events.clear();
     assert(!assembler.accept(part(33, 3, 2, 0), output));
     expect("multipart_discard", "duplicate_start", 33, 2, 1);
-    fragments.accept(Frame(one.begin(), one.begin() + 6));
+    fragments.accept(Frame(one.begin(), one.begin() + 6), 73);
     events.clear();
     fragments.reset();
     expect("frame_discard", "reset", 9, 0, 6);
+    assert(fragments.accept(Frame(one.begin(), one.begin() + 1), 74).empty());
+    assert(fragments.accept(Frame(one.begin() + 1, one.begin() + 5), 75).empty());
+    events.clear();
+    fragments.reset();
+    assert(events.size() == 1 && events[0].firstIngressId == 74 &&
+           events[0].lastIngressId == 75 && events[0].partialBytes == 5 &&
+           events[0].validStart && !events[0].headerValid && !events[0].terminatorSeen &&
+           !events[0].frameSpanExact);
+    events.clear();
 
     // A bad candidate before a good start is discarded even when recovery succeeds.
     Frame invalidHeader(one.begin(), one.begin() + 6);
     invalidHeader[4] |= 0x80;
     invalidHeader.insert(invalidHeader.end(), one.begin(), one.end());
-    assert(fragments.accept(invalidHeader) == Frames({one}));
-    assert(events.size() == 1 && std::string(events[0].event) == "frame_discard" &&
+    assert(fragments.accept(Frame(invalidHeader.begin(), invalidHeader.begin() + 6), 76).empty());
+    assert(fragments.accept(Frame(invalidHeader.begin() + 6, invalidHeader.end()), 77) == Frames({one}));
+    assert(events.size() == 2 && std::string(events[0].event) == "frame_discard" &&
            std::string(events[0].reason) == "invalid_wire_resync" &&
-           events[0].message == 9 && events[0].command == 0x83 &&
+           !events[0].headerValid && events[0].validStart && !events[0].frameSpanExact &&
+           events[0].firstIngressId == 76 && events[0].lastIngressId == 77 &&
            events[0].received == invalidHeader.size());
+    assert(std::string(events[1].event) == "frame_span_complete" && events[1].frameSpanExact &&
+           events[1].firstIngressId == 77 && events[1].lastIngressId == 77 &&
+           events[1].partialBytes == one.size() && events[1].message == 9);
     events.clear();
     Frame invalidData(one.begin(), one.begin() + 6);
     invalidData.push_back(0x80);
     invalidData.insert(invalidData.end(), one.begin(), one.end());
     assert(fragments.accept(invalidData) == Frames({one}));
-    expect("frame_discard", "invalid_wire_resync", 9, 0, invalidData.size());
+    assert(events.size() == 2 && std::string(events[0].reason) == "invalid_wire_resync" &&
+           events[0].received == invalidData.size() && !events[0].frameSpanExact &&
+            std::string(events[1].event) == "frame_span_complete");
+    events.clear();
+    assert(fragments.accept(Frame(bad.begin(), bad.begin() + 6), 78).empty());
+    assert(fragments.accept(Frame(bad.begin() + 6, bad.end()), 81).empty());
+    assert(events.size() == 1 && std::string(events[0].reason) == "checksum" &&
+           events[0].firstIngressId == 78 && events[0].lastIngressId == 81 &&
+           events[0].partialBytes == bad.size() && events[0].terminatorSeen &&
+           !events[0].frameSpanExact);
+    events.clear();
+    // Overflow retains only the most recent start. Its new ingress range
+    // must not include the bytes erased during recovery.
+    Frame overflow = {0xF0, 0x01};
+    overflow.insert(overflow.end(), 1017, 0x02);
+    overflow.insert(overflow.end(), one.begin(), one.begin() + 6);
+    assert(fragments.accept(overflow, 79).empty());
+    assert(events.size() == 1 && std::string(events[0].reason) == "overflow_resync" &&
+           events[0].partialBytes == 1019 && !events[0].frameSpanExact);
+    events.clear();
+    assert(fragments.accept(Frame(one.begin() + 6, one.end()), 80) == Frames({one}));
+    assert(events.size() == 1 && events[0].firstIngressId == 79 &&
+           events[0].lastIngressId == 80 && events[0].partialBytes == one.size());
+    events.clear();
 
     // Rejection belongs to the incoming frame; an existing assembly has its
     // own, separate discard event, and neither is required for the other.
@@ -225,7 +273,8 @@ int main() {
     assert(events.size() == 1 && std::string(events[0].reason) == "malformed_start");
     events.clear();
     assert(fragments.accept(Frame(one.begin() + 1, one.end())) == Frames({one}));
-    assert(events.empty());
+    assert(events.size() == 1 && std::string(events[0].event) == "frame_span_complete" &&
+           events[0].firstIngressId == 0 && events[0].lastIngressId == 0);
 #endif
     std::cout << "Spark receive framing: PASS\n";
 }

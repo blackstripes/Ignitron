@@ -45,7 +45,10 @@ the consumer's per-item handling order.
 callback `ingress_seen` (monotonic notification ID, millisecond timestamp and
 length), `ingress_enqueue`/`ingress_drop`/`ingress_drop_full`/`ingress_skip`,
 `ingress_dequeue` (including original callback timestamp), `process_block`,
-`frame_complete` and `assembly_result`. Server/app queue writes and serial
+`frame_complete`, trace-only `frame_span_complete`, and `assembly_result`.
+`frame_complete` retains its existing validated-header/count/part record;
+`frame_span_complete` records the contributing ingress-ID range for that
+checksum-valid wire frame. Server/app queue writes and serial
 inputs use ID zero (not a BLE notification). Frame logs contain only validated
 wire header identity, length, and, for identifiable preset multipart frames,
 count and part. Assembly results report whether a logical message was completed
@@ -66,7 +69,9 @@ An invalidated dequeue is recorded but has no `process_block` event.
 Existing framing events include
 `frame_discard` (checksum, invalid wire, malformed start, overflow/recovery or incomplete reset;
 checksum and invalid-wire resync are reported even when a later frame is recovered)
-and `multipart_start`, `multipart_progress`, `multipart_complete`, and
+and `frame_span_complete` (accepted candidate provenance; `frame_span_exact=1`
+means the ID and byte span is the exact completed frame), plus
+`multipart_start`, `multipart_progress`, `multipart_complete`, and
 `multipart_discard` (invalid frame/shape, single preset, duplicate/new start,
 identity mismatch, out of order, missing start or reset). Each event carries
 time, reason, message number, command/subcommand, expected and received chunk
@@ -77,3 +82,51 @@ response discarded by that rejection. Incoming rejection counts are zero.
 No device identity or payload bytes are logged. A pending response on parser/link
 reset emits its incomplete chunk count. These observations do not change what
 the receiver accepts or publishes.
+
+## NEO Core incomplete-response trace (2026-10-06)
+
+On a connected Spark NEO Core, repeated normal hardware
+preset selections reproduced an incomplete `03/01` full-preset response. At
+`t=1832533`, message 43 (17 parts) completed part 15, with multipart progress
+at 16/17. Ingress IDs 1704 and 1706 were seen, enqueued, and dequeued while
+completing parts 14 and 15. The next logged notification blocks, IDs 1707 and
+1708, were also seen, enqueued, and dequeued. At `t=1834181`, framing logged
+`frame_discard reason=invalid_wire_resync ... received=45`, then completed the
+valid part 0 for message 44. The new start discarded message 43 with
+`expected=17 received=16`; no valid message-43 part 16 frame was observed.
+
+This establishes that the receiver dequeued bytes after part 15, but the old
+trace could not tie the rejected 45-byte candidate to its contributing BLE
+notification IDs. It therefore did not distinguish absent callback bytes from
+a truncated or invalid would-be final frame. The serial observation is
+preserved here by event identity, timestamps, IDs, and lengths; no payload
+bytes were recorded. Subsequent trace-only frame provenance is intended to
+resolve this gap. No transport, queue, response-lane, parser, retry, or timing
+behavior was changed during this reproduction.
+
+## NEO Core provenance-trace reproduction (2026-10-06)
+
+After flashing `panelan-lvgl-controller-preset-trace` with framing provenance,
+the connected NEO Core reproduced a second 17-part stall: message 57 completed
+parts 0–15, reaching 16/17. Part 15 completed as a valid 39-byte frame with
+`id=654`. The later notification IDs 655 and 656 were both seen, enqueued, and
+dequeued. At `t=136953`, the reader reported:
+
+```text
+event=frame_discard reason=invalid_wire_resync msg=57 cmd=03 sub=01 expected=0 received=45 first_id=654 last_id=656 partial_bytes=45 start=1 header=1 f7=1 frame_span_exact=0
+event=frame_span_complete reason=none msg=58 cmd=03 sub=01 expected=0 received=39 first_id=655 last_id=656 partial_bytes=39 start=1 header=1 f7=1 frame_span_exact=1
+event=frame_complete id=656 len=39 msg=58 cmd=03 sub=01 count=17 part=0
+event=multipart_discard reason=new_start msg=57 cmd=03 sub=01 expected=17 received=16
+```
+
+Thus bytes from IDs 654–656 did reach the queue consumer, but no valid
+message-57 part 16 was produced. The 45-byte resync buffer contains a
+six-byte message-57 start/header prefix followed by the exact 39-byte valid
+message-58 part-0 span (IDs 655–656). The message-57 prefix has no payload or
+own `F7` before the next valid start; the logged `f7=1` is the end of the
+recovered message-58 frame. This is consistent with a would-be final frame
+truncated after its header, followed by the next response. It answers case 2:
+bytes for a would-be final frame reached callback/queue and remained
+unterminated. This conclusion uses lengths, validated headers, ID spans and
+terminator placement only; no payload bytes are captured. This remains
+diagnostic evidence only; transport configuration and behavior were not tuned.

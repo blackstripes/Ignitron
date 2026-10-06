@@ -12,10 +12,14 @@
 SparkStreamReader::SparkStreamReader() : message{}, unstructuredData{}, msgData{}, msgPos(0) {
 #ifdef PANELAN_PRESET_TRACE
     const auto trace = +[](const SparkReceiveTraceEvent &event) {
-        Serial.printf("PRESET_TRACE t=%lu event=%s reason=%s msg=%u cmd=%02X sub=%02X expected=%u received=%u\n",
-                      static_cast<unsigned long>(millis()), event.event, event.reason,
-                      event.message, event.command, event.subcommand,
-                      static_cast<unsigned>(event.expected), static_cast<unsigned>(event.received));
+        Serial.printf("PRESET_TRACE t=%lu event=%s reason=%s msg=%u cmd=%02X sub=%02X expected=%u received=%u first_id=%lu last_id=%lu partial_bytes=%u start=%u header=%u f7=%u frame_span_exact=%u\n",
+                       static_cast<unsigned long>(millis()), event.event, event.reason,
+                       event.message, event.command, event.subcommand,
+                       static_cast<unsigned>(event.expected), static_cast<unsigned>(event.received),
+                       static_cast<unsigned long>(event.firstIngressId),
+                       static_cast<unsigned long>(event.lastIngressId),
+                       static_cast<unsigned>(event.partialBytes), event.validStart,
+                       event.headerValid, event.terminatorSeen, event.frameSpanExact);
     };
     frameReader_.setTrace(trace);
     assembly_.setTrace(trace);
@@ -951,7 +955,11 @@ MessageProcessStatus SparkStreamReader::processBlock(ByteVector &blk) {
     // FROM HERE NO HEADER IS PRESENT ANYMORE and blk should start with F001 (after preprocessing)
 
     // Cut blk into chunks and append to response
-    for (const auto &frame : frameReader_.accept(blk)) {
+    for (const auto &frame : frameReader_.accept(blk
+#ifdef PANELAN_PRESET_TRACE
+                                                    , traceIngressId_
+#endif
+                                                    )) {
 #ifdef PANELAN_PRESET_TRACE
         // Header fields are safe only on checksum-valid complete wire frames.
         // A multipart prefix is meaningful only for a preset with valid shape.

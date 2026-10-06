@@ -11,6 +11,20 @@ struct SparkReceiveTraceEvent {
     const char *reason;
     uint8_t message, command, subcommand;
     size_t expected, received;
+    // Frame-reader only. IDs bound the retained byte range, not necessarily a
+    // single wire frame (resync may have accumulated multiple candidates).
+    uint32_t firstIngressId = 0, lastIngressId = 0;
+    size_t partialBytes = 0;
+    bool validStart = false, headerValid = false, terminatorSeen = false;
+    bool frameSpanExact = false;
+
+    SparkReceiveTraceEvent(const char *eventName, const char *eventReason,
+                           uint8_t eventMessage, uint8_t eventCommand,
+                           uint8_t eventSubcommand, size_t eventExpected,
+                           size_t eventReceived)
+        : event(eventName), reason(eventReason), message(eventMessage),
+          command(eventCommand), subcommand(eventSubcommand),
+          expected(eventExpected), received(eventReceived) {}
 };
 using SparkReceiveTraceSink = void (*)(const SparkReceiveTraceEvent &);
 #endif
@@ -29,22 +43,31 @@ public:
 #endif
     void reset() {
 #ifdef PANELAN_PRESET_TRACE
-        if (!partial_.empty()) trace("frame_discard", "reset");
+        if (!partial_.empty()) trace("frame_discard", "reset", 0, partial_.size());
+        ingress_.clear();
 #endif
         partial_.clear();
     }
-    Frames accept(const Frame &fragment) {
+    Frames accept(const Frame &fragment
+#ifdef PANELAN_PRESET_TRACE
+                  , uint32_t ingressId = 0
+#endif
+                  ) {
         Frames ready;
         for (uint8_t value : fragment) {
             if (partial_.empty() && value != 0xF0) continue;
             if (partial_.size() == 1 && value != 0x01) {
 #ifdef PANELAN_PRESET_TRACE
-                trace("frame_discard", "malformed_start");
+                trace("frame_discard", "malformed_start", 0, partial_.size());
+                ingress_.clear();
 #endif
                 partial_.clear();
                 if (value != 0xF0) continue;
             }
             partial_.push_back(value);
+#ifdef PANELAN_PRESET_TRACE
+            ingress_.push_back(ingressId);
+#endif
             if (value == 0xF7) {
                 // A stale incomplete frame may precede a fresh frame in this
                 // buffer. Prefer the earliest valid candidate; only seek a
@@ -53,6 +76,7 @@ public:
                 bool rejectedChecksum = false;
                 bool rejectedInvalidWire = false;
                 bool found = false;
+                size_t acceptedPos = partial_.size();
 #endif
                 for (size_t pos = 0; pos + 6 < partial_.size(); ++pos) {
                     if (partial_[pos] != 0xF0 || partial_[pos + 1] != 0x01) continue;
@@ -78,13 +102,21 @@ public:
                     ready.emplace_back(partial_.begin() + pos, partial_.end());
 #ifdef PANELAN_PRESET_TRACE
                     found = true;
+                    acceptedPos = pos;
 #endif
                     break;
                 }
 #ifdef PANELAN_PRESET_TRACE
-                if (rejectedChecksum) trace("frame_discard", found ? "checksum_resync" : "checksum");
+                // A rejected candidate was checked against the aggregate up
+                // to F7. It can overlap the recovered frame: do not label its
+                // ingress range as an exact rejected frame span.
+                if (rejectedChecksum) trace("frame_discard", found ? "checksum_resync" : "checksum",
+                                            0, partial_.size());
                 if (rejectedInvalidWire || (!found && !rejectedChecksum))
-                    trace("frame_discard", found ? "invalid_wire_resync" : "invalid_wire");
+                    trace("frame_discard", found ? "invalid_wire_resync" : "invalid_wire",
+                          0, partial_.size());
+                if (found) trace("frame_span_complete", "none", acceptedPos, partial_.size(), true);
+                ingress_.clear();
 #endif
                 partial_.clear();
             } else if (partial_.size() > 1024) {
@@ -95,12 +127,14 @@ public:
                     if (partial_[i] == 0xF0 && partial_[i + 1] == 0x01) start = i;
                 if (start < partial_.size()) {
 #ifdef PANELAN_PRESET_TRACE
-                    trace("frame_discard", "overflow_resync");
+                    trace("frame_discard", "overflow_resync", 0, start);
+                    ingress_.erase(ingress_.begin(), ingress_.begin() + start);
 #endif
                     partial_.erase(partial_.begin(), partial_.begin() + start);
                 } else {
 #ifdef PANELAN_PRESET_TRACE
-                    trace("frame_discard", "overflow");
+                    trace("frame_discard", "overflow", 0, partial_.size());
+                    ingress_.clear();
 #endif
                     partial_.clear();
                 }
@@ -113,12 +147,26 @@ private:
     Frame partial_;
 #ifdef PANELAN_PRESET_TRACE
     SparkReceiveTraceSink trace_ = nullptr;
-    void trace(const char *event, const char *reason) const {
+    // Parallel only in trace builds, bounded by the same 1024-byte recovery
+    // limit as partial_. No payload data is passed to the sink.
+    std::vector<uint32_t> ingress_;
+    void trace(const char *event, const char *reason, size_t begin, size_t end,
+               bool exact = false) const {
         if (!trace_) return;
-        const bool header = partial_.size() >= 6 && partial_[0] == 0xF0 && partial_[1] == 0x01;
-        trace_({event, reason, header ? partial_[2] : uint8_t(0),
-                header ? partial_[4] : uint8_t(0), header ? partial_[5] : uint8_t(0),
-                0, partial_.size()});
+        const bool start = end - begin >= 2 && partial_[begin] == 0xF0 && partial_[begin + 1] == 0x01;
+        const bool header = start && end - begin >= 6 &&
+                            !(partial_[begin + 4] & 0x80) && !(partial_[begin + 5] & 0x80);
+        SparkReceiveTraceEvent info{event, reason, header ? partial_[begin + 2] : uint8_t(0),
+                                    header ? partial_[begin + 4] : uint8_t(0),
+                                    header ? partial_[begin + 5] : uint8_t(0), 0, end - begin};
+        info.firstIngressId = ingress_[begin];
+        info.lastIngressId = ingress_[end - 1];
+        info.partialBytes = end - begin;
+        info.validStart = start;
+        info.headerValid = header;
+        info.terminatorSeen = partial_[end - 1] == 0xF7;
+        info.frameSpanExact = exact;
+        trace_(info);
     }
 #endif
 };
