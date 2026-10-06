@@ -106,7 +106,11 @@ public:
 
     static void queueMessage(ByteVector &blk);
     // methods to process any data from Spark (process with SparkStreamReader and send ack if required)
+#ifdef PANELAN_PRESET_TRACE
+    static void processSparkData(ByteVector &blk, uint32_t ingressId = 0);
+#else
     static void processSparkData(ByteVector &blk);
+#endif
 
     // Check if a preset has been updated (via ack or from Spark)
     void checkForUpdates();
@@ -294,7 +298,17 @@ private:
     static uint32_t pendingHWPresetChecksums_;
 
     static byte nextMessageNum;
+#ifdef PANELAN_PRESET_TRACE
+    struct QueuedIngress {
+        ByteVector bytes;
+        uint32_t id, atMs;
+    };
+    static atomic_uint32_t nextIngressId_;
+    static void queueNotification(ByteVector &blk, uint32_t id, uint32_t atMs);
+    static queue<QueuedIngress> msgQueue;
+#else
     static queue<ByteVector> msgQueue;
+#endif
     static SemaphoreHandle_t msgQueueMutex;
     static constexpr size_t kMaxQueuedNotifications = 32;
     static atomic_bool ingressInvalidated_;
@@ -338,7 +352,11 @@ private:
     static atomic_uint32_t controllerFxFailureCount_;
 
     static bool sendMessageToBT(ByteVector &msg, size_t *chunks = nullptr);
+#ifdef PANELAN_PRESET_TRACE
+    static bool takeQueuedMessage(ByteVector &message, uint32_t &id, uint32_t &atMs);
+#else
     static bool takeQueuedMessage(ByteVector &message);
+#endif
     static void clearQueuedMessages();
     static bool triggerCommand(vector<CmdData> &msg);
     static void serviceRetainedIntents();

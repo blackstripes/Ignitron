@@ -47,6 +47,9 @@ private:
     bool parseValid_ = true;
     SparkReceiveAssembly assembly_;
     SparkReceiveFrames frameReader_;
+#ifdef PANELAN_PRESET_TRACE
+    uint32_t traceIngressId_ = 0;
+#endif
     vector<ByteVector> response;
     // Completed logical messages waiting for the receive consumer. Parse on
     // dequeue so lastMessage(), SparkStatus and trace frames refer to the
@@ -105,6 +108,10 @@ public:
 
     tuple<boolean, byte, byte> needsAck(const ByteVector &block);
     MessageProcessStatus processBlock(ByteVector &block);
+#ifdef PANELAN_PRESET_TRACE
+    // ID of the block currently feeding framing (zero for non-notification input).
+    void setTraceIngress(uint32_t id) { traceIngressId_ = id; }
+#endif
     // Drain any further complete logical messages from the same block.
     MessageProcessStatus nextMessage();
     AckData getLastAckAndEmpty();

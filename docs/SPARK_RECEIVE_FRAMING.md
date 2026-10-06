@@ -42,6 +42,28 @@ preset-then-notification and notification-then-preset delivery and verifies
 the consumer's per-item handling order.
 
 `PANELAN_PRESET_TRACE` is opt-in. In addition to parse rejections it reports
+callback `ingress_seen` (monotonic notification ID, millisecond timestamp and
+length), `ingress_enqueue`/`ingress_drop`/`ingress_drop_full`/`ingress_skip`,
+`ingress_dequeue` (including original callback timestamp), `process_block`,
+`frame_complete` and `assembly_result`. Server/app queue writes and serial
+inputs use ID zero (not a BLE notification). Frame logs contain only validated
+wire header identity, length, and, for identifiable preset multipart frames,
+count and part. Assembly results report whether a logical message was completed
+and its frame count. The ID denotes the block that produced the completed
+frame/assembly result: split frames and multipart presets may have started in
+earlier notifications; coalesced frames share the producing block's ID. These
+logs are diagnostic only. Callback/queue trace events are copied into a
+64-entry fixed-size ring without serial I/O or waiting on a trace mutex, then
+printed in bounded batches from `checkForUpdates()` on the controller task.
+The existing ingress queue locking and drop behavior are unchanged. If the
+trace ring fills, newer trace events are omitted (not notifications); a
+subsequent `ingress_trace_lost count=N` reports the saturated loss count for
+that drain. Its timestamp is the drain time, not the lost events' times.
+Because draining and processing run independently of callbacks, use IDs and
+timestamps rather than printed line order to correlate events.
+An invalidated dequeue is recorded but has no `process_block` event.
+
+Existing framing events include
 `frame_discard` (checksum, invalid wire, malformed start, overflow/recovery or incomplete reset;
 checksum and invalid-wire resync are reported even when a later frame is recovered)
 and `multipart_start`, `multipart_progress`, `multipart_complete`, and

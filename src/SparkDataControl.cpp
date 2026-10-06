@@ -9,6 +9,81 @@
 #include "PersistentEventLog.h"
 #include "SparkMessageSequence.h"
 
+#ifdef PANELAN_PRESET_TRACE
+namespace {
+// Fixed-size, payload-free observation ring. Producers only copy a small record
+// under the spinlock; Serial output belongs exclusively to the controller task.
+enum class IngressTraceKind : uint8_t { Seen, Enqueue, Skip, DropBusy, DropFull };
+struct IngressTraceEvent {
+    uint32_t atMs, id;
+    size_t length;
+    IngressTraceKind kind;
+};
+constexpr size_t kIngressTraceCapacity = 64;
+IngressTraceEvent ingressTraceRing[kIngressTraceCapacity];
+size_t ingressTraceRead = 0, ingressTraceWrite = 0, ingressTraceSize = 0;
+uint32_t ingressTraceLost = 0;
+portMUX_TYPE ingressTraceMux = portMUX_INITIALIZER_UNLOCKED;
+
+void recordIngressTrace(IngressTraceKind kind, uint32_t id, uint32_t atMs, size_t length) {
+    portENTER_CRITICAL(&ingressTraceMux);
+    if (ingressTraceSize == kIngressTraceCapacity) {
+        if (ingressTraceLost != UINT32_MAX) ++ingressTraceLost;
+    } else {
+        ingressTraceRing[ingressTraceWrite] = {atMs, id, length, kind};
+        ingressTraceWrite = (ingressTraceWrite + 1) % kIngressTraceCapacity;
+        ++ingressTraceSize;
+    }
+    portEXIT_CRITICAL(&ingressTraceMux);
+}
+
+void flushIngressTrace() {
+    // Snapshot at most one ring's worth per controller pass, then print outside
+    // the critical section. Producers never wait for slow serial output.
+    IngressTraceEvent events[kIngressTraceCapacity];
+    size_t count;
+    uint32_t lost;
+    portENTER_CRITICAL(&ingressTraceMux);
+    count = ingressTraceSize;
+    for (size_t i = 0; i < count; ++i) {
+        events[i] = ingressTraceRing[ingressTraceRead];
+        ingressTraceRead = (ingressTraceRead + 1) % kIngressTraceCapacity;
+    }
+    ingressTraceSize = 0;
+    lost = ingressTraceLost;
+    ingressTraceLost = 0;
+    portEXIT_CRITICAL(&ingressTraceMux);
+
+    if (lost) Serial.printf("PRESET_TRACE t=%lu event=ingress_trace_lost count=%lu\n",
+                            (unsigned long)millis(), (unsigned long)lost);
+    for (size_t i = 0; i < count; ++i) {
+        const auto &event = events[i];
+        switch (event.kind) {
+        case IngressTraceKind::Seen:
+            Serial.printf("PRESET_TRACE t=%lu event=ingress_seen id=%lu len=%u\n",
+                          (unsigned long)event.atMs, (unsigned long)event.id, (unsigned)event.length);
+            break;
+        case IngressTraceKind::Enqueue:
+        case IngressTraceKind::DropFull:
+            Serial.printf("PRESET_TRACE t=%lu event=ingress_%s id=%lu len=%u\n",
+                          (unsigned long)event.atMs,
+                          event.kind == IngressTraceKind::Enqueue ? "enqueue" : "drop_full",
+                          (unsigned long)event.id, (unsigned)event.length);
+            break;
+        case IngressTraceKind::Skip:
+        case IngressTraceKind::DropBusy:
+            Serial.printf("PRESET_TRACE t=%lu event=ingress_%s id=%lu reason=%s\n",
+                          (unsigned long)event.atMs,
+                          event.kind == IngressTraceKind::Skip ? "skip" : "drop",
+                          (unsigned long)event.id,
+                          event.kind == IngressTraceKind::Skip ? "empty_or_unready" : "busy");
+            break;
+        }
+    }
+}
+} // namespace
+#endif
+
 SparkBTControl *SparkDataControl::bleControl = nullptr;
 SparkStreamReader SparkDataControl::sparkSsr;
 SparkStatus &SparkDataControl::statusObject = SparkStatus::getInstance();
@@ -19,7 +94,12 @@ SparkKeyboardControl *SparkDataControl::keyboardControl = nullptr;
 SparkLooperControl SparkDataControl::looperControl_;
 SparkBLEKeyboard SparkDataControl::bleKeyboard = SparkBLEKeyboard();
 
+#ifdef PANELAN_PRESET_TRACE
+queue<SparkDataControl::QueuedIngress> SparkDataControl::msgQueue;
+atomic_uint32_t SparkDataControl::nextIngressId_{0};
+#else
 queue<ByteVector> SparkDataControl::msgQueue;
+#endif
 SemaphoreHandle_t SparkDataControl::msgQueueMutex = nullptr;
 atomic_bool SparkDataControl::ingressInvalidated_{false};
 SparkOutbound<CmdData> SparkDataControl::currentCommand;
@@ -442,6 +522,9 @@ void SparkDataControl::readPresetChecksums() {
 
 void SparkDataControl::checkForUpdates() {
 
+#ifdef PANELAN_PRESET_TRACE
+    flushIngressTrace();
+#endif
     expireResponseOwner();
     ByteVector queuedMessage;
     while (true) {
@@ -458,9 +541,19 @@ void SparkDataControl::checkForUpdates() {
             const uint32_t at = firstNotificationAt_.load();
             if (at != UINT32_MAX) telemetry_.notification(queryTelemetryId_, at);
         }
+#ifdef PANELAN_PRESET_TRACE
+        uint32_t ingressId = 0, ingressAt = 0;
+        if (!takeQueuedMessage(queuedMessage, ingressId, ingressAt)) {
+#else
         if (!takeQueuedMessage(queuedMessage)) {
+#endif
             break;
         }
+#ifdef PANELAN_PRESET_TRACE
+        Serial.printf("PRESET_TRACE t=%lu event=ingress_dequeue id=%lu seen=%lu len=%u\n",
+                      (unsigned long)millis(), (unsigned long)ingressId,
+                      (unsigned long)ingressAt, (unsigned)queuedMessage.size());
+#endif
         if (ingressInvalidated_.exchange(false)) {
             persistentEventLog.record(PersistentEvent::IngressInvalidated, 0, true);
             clearQueuedMessages();
@@ -468,7 +561,11 @@ void SparkDataControl::checkForUpdates() {
             invalidateResponseOwner();
             break;
         }
+#ifdef PANELAN_PRESET_TRACE
+        processSparkData(queuedMessage, ingressId);
+#else
         processSparkData(queuedMessage);
+#endif
     }
 
     SparkPresetControl::getInstance().checkForUpdates(operationMode_);
@@ -542,7 +639,14 @@ void SparkDataControl::checkForUpdates() {
     }
 }
 
-void SparkDataControl::processSparkData(ByteVector &blk) {
+void SparkDataControl::processSparkData(ByteVector &blk
+#ifdef PANELAN_PRESET_TRACE
+                                        , uint32_t ingressId
+#endif
+                                        ) {
+#ifdef PANELAN_PRESET_TRACE
+    sparkSsr.setTraceIngress(ingressId);
+#endif
 
     /*DEBUG_PRINT("Received data: ");
     DEBUG_PRINTVECTOR(blk);
@@ -1493,20 +1597,39 @@ void SparkDataControl::bleNotificationCallback(
 
     // Triggered when data is received from Spark Amp in APP mode
     //  Transform data into ByteVetor and process
-    ByteVector chunk(&pData[0], &pData[length]);
+#ifdef PANELAN_PRESET_TRACE
+    const uint32_t id = ++nextIngressId_;
+    const uint32_t atMs = millis();
+    recordIngressTrace(IngressTraceKind::Seen, id, atMs, length);
+#endif
+    ByteVector chunk(pData, pData + length);
     // DEBUG_PRINT("Incoming block: ");
     // DEBUG_PRINTVECTOR(chunk);
     // DEBUG_PRINTLN();
     //  DEBUG_PRINTF("Is notify: %s\n", isNotify ? "true" : "false");
     //   Add incoming data to message queue for processing
+#ifdef PANELAN_PRESET_TRACE
+    queueNotification(chunk, id, atMs);
+#else
     queueMessage(chunk);
+#endif
     // DEBUG_PRINTF("Seding back data via notify.");
     // vector<ByteVector> notifyVector = { chunk };
     // bleControl->writeBLE(notifyVector, false, false);
 }
 
 void SparkDataControl::queueMessage(ByteVector &blk) {
+#ifdef PANELAN_PRESET_TRACE
+    // Server/app writes use the same queue but are not BLE notifications.
+    queueNotification(blk, 0, millis());
+}
+
+void SparkDataControl::queueNotification(ByteVector &blk, uint32_t id, uint32_t atMs) {
+#endif
     if (blk.empty() || !msgQueueMutex) {
+#ifdef PANELAN_PRESET_TRACE
+        recordIngressTrace(IngressTraceKind::Skip, id, millis(), blk.size());
+#endif
         return;
     }
 
@@ -1514,19 +1637,31 @@ void SparkDataControl::queueMessage(ByteVector &blk) {
     // avoids losing a one-shot Spark response while the controller loop is
     // popping/resetting the queue; it never waits through protocol parsing.
     if (xSemaphoreTake(msgQueueMutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+#ifdef PANELAN_PRESET_TRACE
+        recordIngressTrace(IngressTraceKind::DropBusy, id, millis(), blk.size());
+#endif
         recordIngressDropBusy();
         ingressInvalidated_.store(true);
+#ifndef PANELAN_PRESET_TRACE
         Serial.println("Dropping Spark notification: ingress queue busy");
+#endif
         return;
     }
 
-    if (msgQueue.size() >= kMaxQueuedNotifications) {
+    const bool full = msgQueue.size() >= kMaxQueuedNotifications;
+    if (full) {
         recordIngressDropFull();
         msgQueue = {};
         ingressInvalidated_.store(true);
+#ifndef PANELAN_PRESET_TRACE
         Serial.println("Dropping Spark notification: ingress queue full");
+#endif
     } else {
+#ifdef PANELAN_PRESET_TRACE
+        msgQueue.push({blk, id, atMs});
+#else
         msgQueue.push(blk);
+#endif
         if (notificationArmed_.load()) {
             uint32_t unset = UINT32_MAX;
             firstNotificationAt_.compare_exchange_strong(unset, millis());
@@ -1536,16 +1671,30 @@ void SparkDataControl::queueMessage(ByteVector &blk) {
         while (depth > high && !ingressHighWater_.compare_exchange_weak(high, depth)) {}
     }
     xSemaphoreGive(msgQueueMutex);
+#ifdef PANELAN_PRESET_TRACE
+    recordIngressTrace(full ? IngressTraceKind::DropFull : IngressTraceKind::Enqueue,
+                       id, millis(), blk.size());
+#endif
 }
 
-bool SparkDataControl::takeQueuedMessage(ByteVector &message) {
+bool SparkDataControl::takeQueuedMessage(ByteVector &message
+#ifdef PANELAN_PRESET_TRACE
+                                         , uint32_t &id, uint32_t &atMs
+#endif
+                                         ) {
     if (!msgQueueMutex || xSemaphoreTake(msgQueueMutex, portMAX_DELAY) != pdTRUE) {
         return false;
     }
 
     const bool hasMessage = !msgQueue.empty();
     if (hasMessage) {
+#ifdef PANELAN_PRESET_TRACE
+        id = msgQueue.front().id;
+        atMs = msgQueue.front().atMs;
+        message = std::move(msgQueue.front().bytes);
+#else
         message = std::move(msgQueue.front());
+#endif
         msgQueue.pop();
     }
     xSemaphoreGive(msgQueueMutex);

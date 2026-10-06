@@ -927,6 +927,10 @@ AckData SparkStreamReader::getLastAckAndEmpty() {
 }
 
 MessageProcessStatus SparkStreamReader::processBlock(ByteVector &blk) {
+#ifdef PANELAN_PRESET_TRACE
+    Serial.printf("PRESET_TRACE t=%lu event=process_block id=%lu len=%u\n",
+                  (unsigned long)millis(), (unsigned long)traceIngressId_, (unsigned)blk.size());
+#endif
 
     /*
         DEBUG_PRINTLN("Processing block");
@@ -948,8 +952,30 @@ MessageProcessStatus SparkStreamReader::processBlock(ByteVector &blk) {
 
     // Cut blk into chunks and append to response
     for (const auto &frame : frameReader_.accept(blk)) {
+#ifdef PANELAN_PRESET_TRACE
+        // Header fields are safe only on checksum-valid complete wire frames.
+        // A multipart prefix is meaningful only for a preset with valid shape.
+        const bool preset = (frame[4] == 0x01 || frame[4] == 0x03) && frame[5] == 0x01;
+        uint8_t count = 0, part = 0;
+        if (preset) {
+            const auto data = SparkReceiveAssembly::decoded(frame);
+            if (SparkReceiveAssembly::presetShape(frame, data) == 2) {
+                count = data[0];
+                part = data[1];
+            }
+        }
+        Serial.printf("PRESET_TRACE t=%lu event=frame_complete id=%lu len=%u msg=%u cmd=%02X sub=%02X count=%u part=%u\n",
+                      (unsigned long)millis(), (unsigned long)traceIngressId_, (unsigned)frame.size(),
+                      frame[2], frame[4], frame[5], count, part);
+#endif
         SparkReceiveAssembly::Frames complete;
-        if (!assembly_.accept(frame, complete)) continue;
+        const bool assembled = assembly_.accept(frame, complete);
+#ifdef PANELAN_PRESET_TRACE
+        Serial.printf("PRESET_TRACE t=%lu event=assembly_result id=%lu msg=%u cmd=%02X sub=%02X count=%u part=%u complete=%u frames=%u\n",
+                      (unsigned long)millis(), (unsigned long)traceIngressId_, frame[2], frame[4], frame[5],
+                      count, part, assembled, (unsigned)complete.size());
+#endif
+        if (!assembled) continue;
         pendingMessages_.push_back(std::move(complete));
     }
 
