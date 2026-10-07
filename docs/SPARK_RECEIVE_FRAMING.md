@@ -153,6 +153,54 @@ diagnostic evidence only; transport configuration and behavior were not tuned.
 
 ## Spark 2 comparison run (2026-10-06)
 
+For a future event-driven Spark 2 trace soak (not a hardware run), use
+`python3 tools/diagnose_panelan_presets.py --port /dev/ttyACM0` with the
+`panelan-lvgl-controller-preset-trace` firmware. Opening CDC may reset the
+controller. The tool opens the explicit port once at 115200, polls only `status`
+until a complete status block reports connected, `Amp: Spark 2`, known serial
+and preset name **and** a matching startup `id=0` full-query/`Ready` trace
+establishes the confirmed hardware slot and current-link full observation. It
+sends **no preset commands** on readiness timeout or on a
+different identified amp. CLI status reports the active preset number, but by
+itself does not prove current-link full-preset readiness. The tool requires
+that slot to agree with startup `Ready`; a matching `already_current` rejection
+or an action's matching `Ready` updates the tracked slot. A known preset name
+alone does not prove current-link full readiness; subsequent actions require
+their own trace-correlated full query and `Ready`. Do not use a mixed/incomplete
+status block as readiness evidence.
+
+It cycles slots 1–8 until 150 accepted *changing* requests (configurable with
+`--count`), waiting for the current action's matching query/Ready before the
+next command; a no-op moves to the next slot without counting. `--cadence` is a
+minimum three-second spacing, not a timer that releases an outstanding action.
+`--action-timeout` (default 15 seconds) bounds silence. A controller failure,
+full timeout/retry, current-query send failure, relevant incomplete/discarded
+response, parse rejection, parsed response without a published observation at
+response-lane completion, identifiable frame rejection, disconnect or status
+connection loss, trace-event loss, serial error/EOF or missing required trace
+fields stops the run.
+Superseded query messages and unrelated generic traffic are not current-query
+failures. The `sent=0` trace does **not** include submission status, unsent
+command parts or response-lane owner/acquisition state; the tool reports this
+limit rather than assigning a cause. Every raw serial line is timestamped and
+flushed to `/tmp/opencode/panelan_preset_diagnostic_*.log`; the terminal summary includes
+stop reason, counts, last Ready, current action/query, 50 recent trace events,
+nearby raw context and log path. Host-only tests:
+`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools -p test_diagnose_panelan_presets.py`.
+
+Hardware startup-gate attempt (2026-10-07): `/dev/ttyACM0` status reported
+`Spark connected: yes`, `Amp: Spark 2`, a known serial, and current preset 3.
+Neither of two 30-second startup windows observed the required correlated
+startup full-query/Ready trace, so the diagnostic correctly sent zero preset
+commands and did not start an action run. This is not evidence of a preset
+transport failure or a Spark 2 disconnect. Captures:
+`/tmp/opencode/panelan_preset_diagnostic_20261007_065013.log` (initial capture;
+its chunk-timestamp formatting was subsequently corrected) and
+`/tmp/opencode/panelan_preset_diagnostic_20261007_065127.log` (corrected raw
+line capture). Do not infer the cause of the missing startup trace from these
+captures; no current startup full-query message number or Ready action exists.
+
+
 Using the same controller, flashed `panelan-lvgl-controller-preset-trace`
 image, serial CLI, 1–8 cycling order, and four-second interval between preset
 requests, the controller reported `Amp: Spark 2` and remained connected. All
