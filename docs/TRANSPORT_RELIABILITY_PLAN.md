@@ -833,3 +833,73 @@ Recommended first implementation commit:
 After that, implement the scheduler incrementally. Preserve ControllerActions and ControllerState behavior unless a failing regression proves a change is required.
 
 The success criterion is not "fewer visible errors." It is deterministic command ownership, truthful state, measurable latency, and zero incorrect final state across long hardware soak runs.
+
+## Spark 2 preset soak attempt (2026-10-06; stopped early)
+
+Run conditions: `main` at `f9c748c`, canonical PlatformIO 6.2.0, connected
+Spark 2, `panelan-lvgl-controller-preset-trace`, existing
+`tools/stress_panelan_presets.py`, 1–8 cycling at a two-second interval. The
+sequence included repeated-current probes. The controller initially reported
+slot 8 after the pre-run status had reported slot 4; the first scripted slot-4
+selection was therefore a changing action, not a no-op.
+
+The run was stopped for review before completing 500 actions. The full serial
+trace is retained in the session capture at
+`/tmp/opencode/spark2_soak500.log` (50,645 lines at capture). The client had
+issued through `command step=212`; trace review found earlier full-preset
+readiness failures, so the soak was not continued and no firmware behavior was
+changed. The rapid/latest-wins phase was not run.
+
+Partial-run counts and observations:
+
+- **211 accepted changing actions were dispatched** (`sent` events, action IDs
+  49–259); one additional repeated-current request was rejected as
+  `already_current`; no synchronization-busy CLI rejections were recorded.
+  The stress tool uses `queued` as a fallback when an `accept` trace line is
+  missing, so the lower raw `accept` line count is not the action denominator.
+- 210 actions had `number_confirm`; 206 reached `ready`. Four number-confirmed
+  actions had no corresponding `ready` in the captured run: IDs 95, 131, 179,
+  and 239. ID 131's full query reported `sent=0`; IDs 95, 179, and 239 had
+  `sent=1` full queries. ID 239's 17/17 multipart assembly completed, but no
+  matching controller `full_result`/`ready` followed before a later action.
+  No explicit controller `fail`, `full_data_timeout`, or
+  `startup_full_timeout` event was logged for these cases. No successful
+  same-action recovery to `Ready` was observed for those four IDs.
+- Among observed confirmations, `number_confirm_ms` (median p50, nearest-rank
+  p95/p99) was p50 **329 ms**, p95 **424 ms**, p99 **508 ms**, max **546 ms**.
+  Among the 206 `ready` results, `full_sync_ms` was p50 **1059 ms**, p95
+  **1169 ms**, p99 **1255 ms**, max **1269 ms**; **206/206** exceeded 1000 ms.
+- Explicit full-preset timeout events: **0**. Explicit dispatched full-query
+  retry events: **0**. The since-boot transport diagnostic later reported
+  retry=1 and timeout=3, but these counters span earlier activity and cannot
+  be attributed to this measurement window.
+- `frame_discard`: **34**, all `invalid_wire`, three buffered bytes, no safe
+  header identity. They occurred in two bursts (17 each) after full queries
+  for IDs 95 and 179. For ID 95, query message 247 had a first-notification
+  trace, followed by ingress IDs 3677–3710 being seen/enqueued/dequeued; the
+  17 three-byte discards used odd IDs 3677–3709. No valid frame with message
+  247, no multipart start, and no `ready` for action 95 were logged. This is
+  not the NEO Core final-header signature: `header=0`, message/command identity
+  is unavailable, and no N-1/N multipart assembly was observed.
+- `multipart_discard`: **0**; incomplete multipart assembly count: **0**. Every
+  multipart assembly that actually started completed. Valid partial-final-frame
+  headers without completion: **0**. No NEO Core 16/17-with-valid-final-header
+  signature was observed in the captured trace.
+- Ingress busy/full drops: **0**; trace-ring losses: **0**; since-boot ingress
+  queue high-water mark: **16**. No disconnect event occurred in the captured
+  window; the later since-boot diagnostic showed one disconnect/reconnect,
+  which is not time-attributable to this run.
+- No wrong-target authoritative confirmation or explicit controller action
+  failure was logged. The test was manually stopped with action ID 259 (target
+  6) in flight before its number confirmation appeared in the saved trace; a
+  subsequent status showed preset 2. Therefore final-target correctness for
+  that interrupted action was **not verified** and the soak does **not** pass
+  the 500-action acceptance gate.
+
+The Spark 2 trace does not reproduce the NEO Core's valid partial-final-header
+followed by a missing frame remainder. It instead shows missing full-sync
+readiness after dispatched queries, including one query with no valid frame
+and one complete multipart response without a matching `Ready`. This is a
+reliability failure requiring diagnosis; preserve the trace and do not tune
+transport, parser, queue, deadline, retry, or controller behavior from this
+run alone. No firmware was changed during the attempt.
