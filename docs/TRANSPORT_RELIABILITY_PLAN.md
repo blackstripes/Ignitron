@@ -879,8 +879,11 @@ Partial-run counts and observations:
   trace, followed by ingress IDs 3677–3710 being seen/enqueued/dequeued; the
   17 three-byte discards used odd IDs 3677–3709. No valid frame with message
   247, no multipart start, and no `ready` for action 95 were logged. This is
-  not the NEO Core final-header signature: `header=0`, message/command identity
-  is unavailable, and no N-1/N multipart assembly was observed.
+  not the NEO Core N-1/N final-header signature: `header=0`, message/command
+  identity is unavailable, and no multipart assembly was observed. A later
+  correlation follow-up identified the separate sequence-number/terminator
+  collision responsible for these exact three-byte discards; see the F7
+  framing follow-up below.
 - `multipart_discard`: **0**; incomplete multipart assembly count: **0**. Every
   multipart assembly that actually started completed. Valid partial-final-frame
   headers without completion: **0**. No NEO Core 16/17-with-valid-final-header
@@ -902,4 +905,41 @@ readiness after dispatched queries, including one query with no valid frame
 and one complete multipart response without a matching `Ready`. This is a
 reliability failure requiring diagnosis; preserve the trace and do not tune
 transport, parser, queue, deadline, retry, or controller behavior from this
-run alone. No firmware was changed during the attempt.
+  run alone. No firmware was changed during the attempt.
+
+## F7 sequence-number framing fix and post-reconnect verification (2026-10-06)
+
+The follow-up correlation confirmed that actions 95 and 179 had full-preset
+queries with message number 247 (`0xF7`), each followed by 17 `invalid_wire`
+three-byte discards. `SparkReceiveFrames::accept()` had treated the sequence
+byte as the terminator, cleared the partial buffer at `F0 01 F7`, and discarded
+the actual frame remainder. The frame reader now waits for the minimum seven
+wire bytes before treating `F7` as a possible terminator. The trace and normal
+host regressions demonstrate the previous 3-byte discard and cover sequence
+`0xF7`, multipart preset assembly, split/coalesced input, checksum/7-bit
+validation, resynchronization, short-frame reset, and message-number wrap.
+Normal and trace PlatformIO builds passed; the trace firmware was flashed.
+
+The operator reported that Spark 2 was physically powered off during this
+validation, then powered it back on. Treat the captures as separate link
+segments; do not combine them into one continuous soak.
+`SparkDataControl::resetStatus()` resets `nextMessageNum` to `0x01` when a BLE
+reconnect request is consumed. A subsequent controller boot trace began at
+action ID 1 and showed the initial command/number/full-query messages 10/11/12
+after startup traffic. A USB-UART controller reset was also observed while
+reopening serial, so the captured message reset cannot be attributed solely to
+the physical amp reconnect.
+
+In the post-power-on Spark 2 capture at
+`/tmp/opencode/spark2_after_reconnect_q247_proof.log`, action 203 sent full
+query message 247. All valid frames for parts 0–16 completed and the assembler
+reported `expected=17 received=17`; there was no three-byte invalid-wire
+discard burst. But action 203 logged `full_data_timeout` at 2412 ms. A retry
+queried message 249, whose full response matched and reached `Ready`. Thus the
+framing collision is fixed at frame/multipart assembly, while this run did not
+show a matching `Ready` on the first message-247 query. This remains an
+application-level timeout/recovery observation for review, not evidence that
+the framing fix explains the separate soak actions 131 (`full_query sent=0`)
+or 239 (17/17 multipart assembly but no matching Ready). Those two earlier
+cases remain unresolved. No deadline, retry, parser, queue, transport, or
+controller behavior was tuned, and the 500-action soak was not restarted.

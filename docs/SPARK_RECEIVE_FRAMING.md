@@ -162,8 +162,76 @@ discards. The follow-up since-boot diagnostic reported ingress busy=0 and
 full=0 (high-water mark 12). It also reported one BLE disconnect/reconnect and
 one generic transport retry/timeout since boot; those counters are not
 time-scoped and cannot be attributed to this Spark 2 measurement window.
-This is strong evidence that the truncated final-frame case was specific to the
-observed NEO Core run, not a demonstrated Spark 2 behavior. It does not by
-itself establish the amp as the cause: the NEO Core sample had one incomplete
-response among 12 accepted actions, and this Spark 2 sample had zero among 24.
+This comparison found no valid partial-final-frame header on Spark 2. A later
+Spark 2 follow-up identified the separate `0xF7` sequence-number/terminator
+collision described below; that is not the NEO Core final-frame-remainder
+signature. The comparison does not by itself establish the amp as the cause:
+the NEO Core sample had one incomplete response among 12 accepted actions, and
+this Spark 2 sample had zero among 24 for that specific signature.
 No transport, parser, retry, deadline, or queue behavior was changed.
+
+## Sequence-number/terminator collision (2026-10-06)
+
+The stopped Spark 2 soak capture (`/tmp/opencode/spark2_soak500.log`) confirms
+the message-number collision. Both action 95 and action 179 issued a full-preset
+query with `msg=247` (`0xF7`); each was followed by a burst of 17
+`frame_discard reason=invalid_wire received=3` events. For action 95, the
+first query notification was observed at `t=2325664`, and invalid three-byte
+candidates were reported for ingress IDs 3677 through 3709. The surrounding
+full-query progression was 244, 247, 250, 253, then 1 after message-number
+wrap. Action 179 repeated query message 247 and the same 17-candidate pattern.
+
+Root cause: `SparkReceiveFrames::accept()` treated every `0xF7` byte as a
+terminator, including byte 3 (`F0 01 F7`) where it is the legal sequence byte.
+That prematurely validated/rejected and cleared the partial frame before the
+remainder arrived. The frame reader now only considers `F7` a possible
+terminator after the minimum seven-byte wire-frame size (six-byte header plus
+terminator). It still validates checksum and seven-bit payload, and retains
+the existing resynchronization and provenance paths; no message number is
+avoided or special-cased.
+
+The host regression constructs valid wire frames with sequence `0xF7` and
+demonstrates the old failure (`frame_discard reason=invalid_wire received=3`).
+It also covers ordinary sequence numbers, `0xF0`, all split positions,
+coalesced frames, a true short `F0 01 F7` prefix, `0xFF` to `0x01` sequence
+wrap, and a full 17-part preset using sequence `0xF7`. Both normal and trace
+host builds pass; the receive-batch and preset-stress host suites pass. Both
+normal and trace PlatformIO targets build, and the trace target was flashed.
+
+### Post-power-on Spark 2 q=0xF7 trace
+
+Treat the operator-reported amp power-off and manual power-on as a hard
+measurement boundary. The pre-boundary capture is
+`/tmp/opencode/spark2_query247_action.log`; the separate post-power-on trace is
+`/tmp/opencode/spark2_after_reconnect_q247_proof.log`. The Spark 2 was connected
+in the post-power-on segment. The q=0xF7 full-preset response completed normal
+valid wire frames for parts 0–16 and `multipart_complete expected=17 received=17`;
+no three-byte invalid-wire burst occurred. However, action 203's full query
+`msg=247` timed out at 2412 ms before the controller observed a matching full
+result. The controller retried as message 249 and reached `Ready` only on that
+retry (`startup_full_result ... msg=249 match=1 ready=1`). Thus the frame
+delimiter fix is confirmed at framing/multipart assembly, but the q=0xF7
+transaction did **not** produce a matching Ready on its first query. This
+application-level timeout/recovery remains unresolved and is not evidence
+that IDs 131 or 239 share the framing root cause.
+
+`SparkDataControl::resetStatus()` resets `nextMessageNum` to `0x01` when the
+BLE reconnect request is consumed. The post-boundary controller boot trace
+started its first preset action at action ID 1; the first observed command,
+number response, and full query used messages 10, 11, and 12 after startup
+traffic. A USB-UART controller reset was also observed while reopening serial.
+Because the filtered capture did not retain the exact BLE disconnect event,
+the runtime message-number reset cannot be attributed solely to the physical
+amp power cycle. Keep the pre-boundary and post-boundary captures separate.
+
+The first complete post-boundary action trace subsequently crossed the actual
+full-query `msg=247` (`0xF7`) on action 203. Ingress provenance and frame events
+showed exact valid frame spans for every part 0–16, followed by
+`multipart_complete expected=17 received=17`; there was no byte-three discard.
+However, the matching full-preset observation did not arrive before the
+controller's 2412 ms full-data timeout. It retried as message 249, and only that
+response produced a matching `startup_full_result`/`ready`. Therefore the
+framing fix is validated for the sequence-byte collision, but a first-query
+`Ready` for `msg=247` is **not** established. This application-level retry
+remains for review and must not be conflated with the separately unresolved
+IDs 131 (`sent=0`) and 239 (17/17 assembly without a matching Ready).

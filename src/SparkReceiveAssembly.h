@@ -68,7 +68,10 @@ public:
 #ifdef PANELAN_PRESET_TRACE
             ingress_.push_back(ingressId);
 #endif
-            if (value == 0xF7) {
+            // F7 is also a legal sequence/checksum byte before the six-byte
+            // Spark header is complete. Only a byte at the minimum possible
+            // frame length can terminate a wire-frame candidate.
+            if (value == 0xF7 && partial_.size() >= 7) {
                 // A stale incomplete frame may precede a fresh frame in this
                 // buffer. Prefer the earliest valid candidate; only seek a
                 // later F0 01 if the earlier one fails its wire checksum.

@@ -1,5 +1,6 @@
 #include "SparkReceiveAssembly.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <iostream>
@@ -21,6 +22,15 @@ static void expect(const char *name, const char *reason, uint8_t msg,
 
 using Frame = SparkReceiveAssembly::Frame;
 using Frames = SparkReceiveAssembly::Frames;
+
+static Frames acceptWithIngressId(SparkReceiveFrames &reader, const Frame &fragment, uint32_t id) {
+#ifdef PANELAN_PRESET_TRACE
+    return reader.accept(fragment, id);
+#else
+    (void)id;
+    return reader.accept(fragment);
+#endif
+}
 
 // SparkMessage::splitDataToChunks / convertDataTo7Bit / buildChunkData wire
 // shape (25 decoded bytes per 03 chunk). Do not mistake bytes of an
@@ -74,6 +84,112 @@ int main() {
     };
 
     const auto one = wire(9, 3, 1, {0, 0, 0xD9, 3, 'a', 'b', 'c', 0xC3});
+
+    // F7 is legal in the sequence-number position. Before the minimum-frame
+    // length guard, the reader terminated this valid frame at byte three.
+    const auto sequenceF7 = wire(0xF7, 3, 1, {0, 0, 0xD9, 3, 'f', '7', 0xC3});
+    assert(sequenceF7[2] == 0xF7 && sequenceF7.back() == 0xF7);
+#ifdef PANELAN_PRESET_TRACE
+    events.clear();
+#endif
+    const Frames sequenceF7Result = acceptWithIngressId(fragments, sequenceF7, 77);
+    if (sequenceF7Result != Frames({sequenceF7})) {
+#ifdef PANELAN_PRESET_TRACE
+        for (const auto &event : events)
+            std::cerr << "observed " << event.event << " reason=" << event.reason
+                      << " received=" << event.received << " first_id=" << event.firstIngressId
+                      << " last_id=" << event.lastIngressId << '\n';
+#endif
+        std::cerr << "sequence 0xF7 did not produce its complete Spark frame\n";
+    }
+    assert(sequenceF7Result == Frames({sequenceF7}));
+#ifdef PANELAN_PRESET_TRACE
+    assert(events.size() == 1 && std::string(events[0].event) == "frame_span_complete");
+    assert(events[0].firstIngressId == 77 && events[0].lastIngressId == 77 &&
+           events[0].partialBytes == sequenceF7.size() && events[0].validStart &&
+           events[0].headerValid && events[0].terminatorSeen && events[0].frameSpanExact);
+    events.clear();
+#endif
+
+    // A true short F0 01 F7 sequence is not a complete frame. It remains
+    // partial until reset; it must never be published as a wire message.
+    SparkReceiveFrames shortReader;
+#ifdef PANELAN_PRESET_TRACE
+    shortReader.setTrace(collect);
+    events.clear();
+#endif
+    assert(acceptWithIngressId(shortReader, {0xF0, 0x01, 0xF7}, 78).empty());
+#ifdef PANELAN_PRESET_TRACE
+    assert(events.empty());
+#endif
+    shortReader.reset();
+#ifdef PANELAN_PRESET_TRACE
+    assert(events.size() == 1 && std::string(events[0].event) == "frame_discard" &&
+           std::string(events[0].reason) == "reset" && events[0].received == 3 &&
+           events[0].firstIngressId == 78 && events[0].lastIngressId == 78 &&
+           events[0].validStart && !events[0].headerValid && events[0].terminatorSeen);
+    events.clear();
+#endif
+
+    // The same sequence-position delimiter must work across every possible
+    // notification split, including a fragment ending immediately after F7.
+    for (size_t cut = 1; cut < sequenceF7.size(); ++cut) {
+        SparkReceiveFrames splitReader;
+#ifdef PANELAN_PRESET_TRACE
+        splitReader.setTrace(collect);
+        events.clear();
+#endif
+        assert(acceptWithIngressId(splitReader,
+                                   Frame(sequenceF7.begin(), sequenceF7.begin() + cut), 79).empty());
+        assert(acceptWithIngressId(splitReader,
+                                   Frame(sequenceF7.begin() + cut, sequenceF7.end()), 80) ==
+               Frames({sequenceF7}));
+#ifdef PANELAN_PRESET_TRACE
+        assert(events.size() == 1 && std::string(events[0].event) == "frame_span_complete" &&
+               events[0].firstIngressId == 79 && events[0].lastIngressId == 80 &&
+               events[0].partialBytes == sequenceF7.size());
+        events.clear();
+#endif
+    }
+
+    // Preserve ordinary framing, sequence 0xF0, coalesced delivery, and the
+    // normal message-number wrap from 0xFF to 0x01.
+    const auto sequenceF0 = wire(0xF0, 3, 1, {0, 0, 0xD9, 3, 'f', '0', 0xC3});
+    assert(fragments.accept(one) == Frames({one}));
+    assert(fragments.accept(sequenceF0) == Frames({sequenceF0}));
+    assert(fragments.accept(wire(0xFF, 3, 0x38, {1})) ==
+           Frames({wire(0xFF, 3, 0x38, {1})}));
+    assert(fragments.accept(wire(0x01, 3, 0x38, {2})) ==
+           Frames({wire(0x01, 3, 0x38, {2})}));
+    Frame coalescedF7 = wire(0xFE, 3, 0x38, {3});
+    coalescedF7.insert(coalescedF7.end(), sequenceF7.begin(), sequenceF7.end());
+    assert(fragments.accept(coalescedF7) == Frames({wire(0xFE, 3, 0x38, {3}), sequenceF7}));
+
+    // A complete 17-part full-preset response with message number 0xF7 must
+    // survive framing and reach the multipart assembler as one response.
+    SparkReceiveFrames multipartReader;
+    SparkReceiveAssembly multipartAssembler;
+    Frames multipartOutput;
+#ifdef PANELAN_PRESET_TRACE
+    multipartReader.setTrace(collect);
+    multipartAssembler.setTrace(collect);
+#endif
+    bool multipartPublished = false;
+    for (uint8_t index = 0; index < 17; ++index) {
+        const Frame wirePart = part(0xF7, 3, 17, index, index == 16 ? 7 : 25);
+        for (const auto &completeFrame : acceptWithIngressId(multipartReader, wirePart, 100 + index))
+            multipartPublished |= multipartAssembler.accept(completeFrame, multipartOutput);
+    }
+    assert(multipartPublished && multipartOutput.size() == 17);
+    for (const auto &completeFrame : multipartOutput) assert(completeFrame[2] == 0xF7);
+#ifdef PANELAN_PRESET_TRACE
+    assert(std::any_of(events.begin(), events.end(), [](const SparkReceiveTraceEvent &event) {
+        return std::string(event.event) == "multipart_complete" && event.message == 0xF7 &&
+               event.expected == 17 && event.received == 17;
+    }));
+    events.clear();
+#endif
+
     const auto splitHeader = wire(0xF0, 3, 0x38, {1});
     assert(splitHeader[3] == 0x01);
     assert(fragments.accept(Frame(splitHeader.begin(), splitHeader.begin() + 2)).empty());
