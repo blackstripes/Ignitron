@@ -1,6 +1,8 @@
 """Host-only diagnostic state-machine tests; never open serial hardware."""
+from contextlib import redirect_stderr
+from io import StringIO
 import unittest
-from diagnose_panelan_presets import Soak, status, trace
+from diagnose_panelan_presets import Soak, parse_args, status, trace
 
 
 READY = ["--- Ignitron status ---", "Spark connected: yes", "Amp: Spark 2",
@@ -48,6 +50,13 @@ def parsed(s, msg=31):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_count_500_accepted_without_weakening_other_limits(self):
+        self.assertEqual(parse_args(["--port", "dummy", "--count", "500"]).count, 500)
+        for options in (["--count", "501"], ["--count", "0"], ["--cadence", "2"],
+                        ["--action-timeout", "0"], ["--ready-timeout", "0"]):
+            with self.subTest(options=options), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                parse_args(["--port", "dummy", *options])
+
     def test_trace_prompt_prefixes_normalize_only_at_line_start(self):
         plain = "PRESET_TRACE t=1 event=accept id=1 target=1 confirmed=3"
         expected = trace(plain)
@@ -247,6 +256,46 @@ class DiagnosticTests(unittest.TestCase):
         self.assertIn("'lastSubmissionStatus': 'Busy'", s.stop)
         self.assertIn("'currentCommandRemainingParts': '2'", s.stop)
         self.assertIn("'ownerMsg': '31'", s.stop)
+
+    def test_busy_number_query_retries_then_ready_and_counts_sent_polls(self):
+        s = Soak(count=1)
+        start(s)
+        event(s, "accept", id=7, target=1, confirmed=2)
+        for _ in range(2):
+            event(s, "number_query", id=7, target=1, sent=0, lastSubmissionStatus="Busy")
+            self.assertIsNone(s.stop)
+        for _ in range(2):
+            event(s, "number_query", id=7, target=1, sent=1, lastSubmissionStatus="Sent")
+        event(s, "number_confirm", id=7, target=1, confirmed=1)
+        event(s, "full_query", id=7, target=1, sent=1, msg=31)
+        parsed(s)
+        event(s, "preset_observation_publish", msg=31, slot=1, revision=2)
+        event(s, "ready", id=7, target=1, msg=31)
+        self.assertEqual(s.stop, "completed")
+        self.assertEqual(s.number_query_attempts, 4)
+        self.assertEqual(s.number_query_sent_zero["Busy"], 2)
+        self.assertEqual(s.number_query_by_action, {"7": {"attempts": 4, "sent": 2}})
+
+    def test_non_busy_or_missing_number_query_status_is_terminal(self):
+        for submission in ("Failed", "Sent", None):
+            with self.subTest(submission=submission):
+                s = Soak()
+                start(s)
+                event(s, "accept", id=7, target=1, confirmed=2)
+                fields = {} if submission is None else {"lastSubmissionStatus": submission}
+                event(s, "number_query", id=7, target=1, sent=0, **fields)
+                self.assertIn("number_query sent=0", s.stop)
+                self.assertEqual(s.number_query_sent_zero[submission or "(missing)"], 1)
+                self.assertEqual(s.number_query_attempts, 1)
+
+    def test_number_timeout_remains_terminal_after_busy_poll(self):
+        s = Soak()
+        start(s)
+        event(s, "accept", id=7, target=1, confirmed=2)
+        event(s, "number_query", id=7, target=1, sent=0, lastSubmissionStatus="Busy")
+        event(s, "fail", id=7, target=1, reason="number_timeout")
+        self.assertIn("number_timeout", s.stop)
+        self.assertEqual(s.number_query_by_action["7"], {"attempts": 1, "sent": 0})
 
     def test_complete_parsed_without_publish_not_premature(self):
         s = Soak()

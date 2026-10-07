@@ -187,7 +187,7 @@ their own trace-correlated full query and `Ready`. Do not use a mixed/incomplete
 status block as readiness evidence.
 
 It cycles slots 1–8 until 150 accepted *changing* requests (configurable with
-`--count`), waiting for the current action's matching query/Ready before the
+`--count` up to 500), waiting for the current action's matching query/Ready before the
 next command; a no-op moves to the next slot without counting. `--cadence` is a
 minimum three-second spacing, not a timer that releases an outstanding action.
 `--action-timeout` (default 15 seconds) bounds silence. A controller failure,
@@ -217,6 +217,19 @@ flushed to `/tmp/opencode/panelan_preset_diagnostic_*.log`; the terminal summary
 stop reason, counts, last Ready, current action/query, 50 recent trace events,
 nearby raw context and log path. Host-only tests:
 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools -p test_diagnose_panelan_presets.py`.
+
+The trace-only `number_query` event now includes the same seven transport
+snapshot fields as `full_query`, sampled immediately after
+`getCurrentPresetNum()` returns: `lastSubmissionStatus`,
+`currentCommandHasRemaining`, `currentCommandRemainingParts`,
+`responseLaneActive`, `ownerMsg`, `ownerSub` (hex), and
+`controllerFullPresetMessageNumber`. A matching action's `number_query sent=0`
+with `lastSubmissionStatus=Busy` is counted and may recover on a later poll;
+other statuses or a missing submission status stop the run. A number timeout
+still stops it. The terminal summary prints total number-query attempts,
+`sent=0` counts grouped by submission status (including missing), and accepted
+action IDs with more than one **sent** verification poll, showing each ID's
+attempts/sent counts. Attempts include refused Busy polls; sent polls do not.
 
 Hardware startup-gate attempt (2026-10-07): `/dev/ttyACM0` status reported
 `Spark connected: yes`, `Amp: Spark 2`, a known serial, and current preset 3.
@@ -284,6 +297,42 @@ reported separately from full-query retries/timeouts and is not assigned a
 root cause. Capture:
 `/tmp/opencode/panelan_preset_diagnostic_20261007_080021.log`. The run stopped
 at 150; the 500-action soak was not started.
+
+500-action acceptance attempt (2026-10-07): the trace firmware built/flashed,
+and authoritative Spark 2 Ready status passed the startup gate at hardware slot
+7. The run stopped on its first genuine anomaly after **78 accepted changing
+actions / 77 matching Ready actions**, at elapsed runtime **237.3 seconds**.
+Last Ready was action 77 / target 5 / msg 244 (`elapsed=1209` ms). Current action
+was id 78 / target 6; its sent full query was msg 247. No automatic reconnect or
+resume occurred. The controller had reported Spark connected at startup; no
+BLE `disconnect` or serial failure was observed before stopping, and physical
+amp power was not independently measured.
+
+For action 78, `number_query` sent successfully and confirmed slot 6. The
+subsequent full query also sent successfully with event-time status
+`lastSubmissionStatus=Sent`, `currentCommandHasRemaining=0`, remaining parts 0,
+response lane active with owner msg 247 / subcommand 01. `controller_full_expect`
+then installed msg 247. Receive tracing shows valid frame completions and
+multipart progress through part 16, followed by `multipart_complete` 17/17 for
+msg 247. However, there is **no** `preset_parse_complete`,
+`preset_parse_reject`, `preset_apply_gate`, or observation publish for msg 247.
+The next lane event was `response_lane_complete msg=246 cmd=00 sub=00` while the
+active owner was still msg 247 / subcommand 01 (`matched=0 released=0`). The
+owner then expired/revoked, followed by `full_data_timeout id=78 target=6
+msg=247 elapsed=2413`. No frame discard, multipart discard, incoming reject,
+trace loss, or disconnect was logged. This proves a complete assembly did not
+reach the parser/publication handoff evidenced by the expected preset events,
+but does **not** prove why; no firmware fix or root cause is assigned.
+
+Before stopping, number-query attempts totaled 78, with zero `sent=0`; no action
+required multiple sent verification polls. Full-query attempts totaled 78, all
+sent; one full-data timeout occurred and no retry was issued because the
+harness stopped immediately. The 500-action run remains incomplete. The
+trace-only number-query snapshot and harness Busy accounting are included in
+this commit; no controller decision, poll timing, timeout, or retry behavior
+was changed. Capture:
+`/tmp/opencode/panelan_preset_diagnostic_20261007_083123.log`. Stop for review;
+do not continue directly to another soak.
 
 
 Using the same controller, flashed `panelan-lvgl-controller-preset-trace`

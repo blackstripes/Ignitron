@@ -761,10 +761,20 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 const uint32_t beforeQuery = SparkDataControl::hardwareNumberRevision();
                 uint8_t queryMessage = 0;
                 const bool querySent = dataControl.getCurrentPresetNum(&queryMessage);
+#ifdef PANELAN_PRESET_TRACE
+                const auto transport = SparkDataControl::presetTransportTrace();
+#endif
                 if (querySent && numberVerification_.queryDispatched()) SparkDataControl::recordTransportRetry();
-                PRESET_TRACE("event=number_query id=%lu target=%u sent=%u elapsed=%lu",
-                              static_cast<unsigned long>(presetTraceId_), sentPreset_, querySent,
-                              static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+#ifdef PANELAN_PRESET_TRACE
+                const char *submission = transport.submission == SparkSubmission::Sent ? "Sent" :
+                                         transport.submission == SparkSubmission::Busy ? "Busy" : "Failed";
+                PRESET_TRACE("event=number_query id=%lu target=%u sent=%u elapsed=%lu lastSubmissionStatus=%s currentCommandHasRemaining=%u currentCommandRemainingParts=%d responseLaneActive=%u ownerMsg=%u ownerSub=%02X controllerFullPresetMessageNumber=%u",
+                               static_cast<unsigned long>(presetTraceId_), sentPreset_, querySent,
+                               static_cast<unsigned long>(millis() - presetTraceStartedAtMs_), submission,
+                               transport.commandHasRemaining, transport.commandRemainingParts,
+                               transport.responseLaneActive, transport.ownerMessage, transport.ownerSubcommand,
+                               transport.controllerFullPresetMessageNumber);
+#endif
                 numberVerification_.attempted(querySent, queryMessage, beforeQuery, millis());
             }
             if (numberVerification_.expired(millis())) {

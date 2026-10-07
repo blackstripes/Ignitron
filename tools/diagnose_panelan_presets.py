@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Event-driven Spark 2 preset diagnostic; requires an explicit serial port."""
 import argparse
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime
 import os
 import re
@@ -103,6 +103,9 @@ class Soak:
         self.startup_ready = False
         self.current = None
         self.accepted = 0
+        self.number_query_attempts = 0
+        self.number_query_sent_zero = Counter()
+        self.number_query_by_action = {}
         self.last_ready = None
         self.next_slot = 1
         self.action = None
@@ -223,10 +226,25 @@ class Soak:
                     self.fail("accepted action not changing: " + str(e))
                 else:
                     self.accepted += 1
+                    self.number_query_by_action[e["id"]] = {"attempts": 0, "sent": 0}
             return
         if id_ is None:
             return
         owned = e.get("id") == id_ and e.get("target") == target
+        if kind == "number_query" and owned:
+            if not self.require(e, "sent"):
+                return
+            polls = self.number_query_by_action[id_]
+            polls["attempts"] += 1
+            self.number_query_attempts += 1
+            if e["sent"] == "1":
+                polls["sent"] += 1
+            else:
+                submission = e.get("lastSubmissionStatus", "(missing)")
+                self.number_query_sent_zero[submission] += 1
+                if e["sent"] != "0" or submission != "Busy":
+                    self.failed_query(kind, e)
+                    return
         if kind in ("fail", "full_data_timeout", "full_data_conflict", "startup_full_timeout") and owned:
             self.fail(f"{kind}: {e}; parsed={self.parsed}")
         if kind in ("full_query", "startup_full_query") and owned:
@@ -296,16 +314,21 @@ class Soak:
                     self.stop = "completed"
 
 
-def main():
+def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--port", required=True, help="trace firmware CDC port (115200; opening may reset controller)")
     p.add_argument("--count", type=int, default=150)
     p.add_argument("--cadence", type=float, default=3.0, help="minimum seconds between commands")
     p.add_argument("--action-timeout", type=float, default=15.0)
     p.add_argument("--ready-timeout", type=float, default=30.0)
-    args = p.parse_args()
-    if not 1 <= args.count <= 150 or args.cadence < 3 or args.action_timeout <= 0 or args.ready_timeout <= 0:
-        p.error("count must be 1..150, cadence >= 3, timeouts > 0 required")
+    args = p.parse_args(argv)
+    if not 1 <= args.count <= 500 or args.cadence < 3 or args.action_timeout <= 0 or args.ready_timeout <= 0:
+        p.error("count must be 1..500, cadence >= 3, timeouts > 0 required")
+    return args
+
+
+def main():
+    args = parse_args()
     soak = Soak(args.count, args.cadence, args.action_timeout)
     logpath = f"/tmp/opencode/panelan_preset_diagnostic_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     fd = None
@@ -377,6 +400,12 @@ def main():
             os.close(fd)
     print(f"stop={soak.stop} accepted_changing={soak.accepted} last_ready={soak.last_ready} "
           f"current={soak.action} full_msg={soak.full_msg} logfile={logpath}")
+    print(f"number_query attempts={soak.number_query_attempts} sent=0 by lastSubmissionStatus="
+          f"{dict(sorted(soak.number_query_sent_zero.items()))}")
+    repeated = {id_: f"{polls['attempts']}/{polls['sent']}" for id_, polls in soak.number_query_by_action.items()
+                if polls["sent"] > 1}
+    print(f"actions with >1 sent verification poll={len(repeated)} "
+          f"(accepted IDs; ID: attempts/sent): {repeated}")
     print("Last 50 trace events:")
     print("\n".join(soak.events))
     print("Nearby raw context:")
