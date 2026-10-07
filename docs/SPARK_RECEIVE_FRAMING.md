@@ -537,3 +537,42 @@ power was not independently measured. The 500-action run was therefore not
 started, and no reconnect/resume was attempted. Retry only after the Spark
 connection is available; do not infer a parser result from this startup-only
 capture.
+
+Subsequent focused proof and 500-action attempt (2026-10-07): with Spark 2
+connected, action 408 / target 2 produced full-preset query **msg 247**. Its
+event-time query snapshot was `sent=1`, `lastSubmissionStatus=Sent`, no remaining
+command parts, and lane owner msg 247 / subcommand 01. All 17 frame parts
+(0–16) completed; `multipart_complete` reported 17/17, then
+`preset_parse_complete msg=247`, `preset_apply_gate match=1 acceptedActive=1`,
+`preset_observation_publish msg=247`, `response_lane_complete released=1`, and
+`ready id=408 target=2 msg=247` followed. Ready latency was 1049 ms. No retry or
+timeout was required; no `stream_message_reject` or stale cmd 00/sub 00 lane
+completion occurred for msg 247. Focus capture:
+`/tmp/opencode/panelan_preset_diagnostic_20261007_180448.log`.
+
+Immediately afterward a fresh 500-action harness run passed the authoritative
+Ready startup gate and stopped on its first full-query send refusal after
+**231 accepted changing actions / 230 matching Ready actions**, at runtime
+**703.8 seconds**. Last Ready: action 730 / target 6 / msg 212. Current action:
+id 731 / target 7; its number query sent and `number_confirm` arrived at 409 ms.
+The subsequent full query returned `sent=0`, `lastSubmissionStatus=Busy`,
+`currentCommandHasRemaining=0`, remaining parts 0, `responseLaneActive=1`,
+owner msg 215 / subcommand 71 (hex). The serial stream immediately before that
+event printed `Reading current battery level`. Source confirms
+`SparkMessage::getAmpStatus()` is command 02/subcommand 71 and the periodic amp
+battery poll in `SparkDataControl::checkForUpdates()` submits that request. The
+event-time snapshot therefore proves the refused preset refresh collided with
+the active AmpStatus/battery response-lane owner; it was not blocked by unsent
+command parts. No production behavior was changed to avoid that collision.
+
+The 500 run logged no `disconnect`, serial failure, trace loss, frame/multipart
+discard, `stream_message_reject`, parse failure, or full-data timeout before
+stopping. The number query was successful; the failed full query was the first
+stop condition. No automatic reconnect/resume or further action was attempted.
+The log ends with a partial trailing trace line because the harness stopped
+immediately after recording `sent=0`; preserve the complete capture at
+`/tmp/opencode/panelan_preset_diagnostic_20261007_181300.log`. This run is
+incomplete (231/500), not a pass. It establishes the msg-247 downstream parser
+fix and separately captures the AmpStatus lane collision. The dedicated
+historical action 239 remains unresolved; this evidence does not prove that it
+used msg 247. Stop for review before further testing; do not start FX testing.
