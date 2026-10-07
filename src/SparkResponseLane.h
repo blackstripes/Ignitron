@@ -57,6 +57,10 @@ public:
     }
     void reset() { active_ = false; }
     bool active() const { return active_; }
+#ifdef PANELAN_PRESET_TRACE
+    uint8_t traceMessageNumber() const { return active_ ? msgNum_ : 0; }
+    uint8_t traceSubcommand() const { return active_ ? subcmd_ : 0; }
+#endif
     bool owns(uint8_t msgNum, uint8_t subcmd) const {
         return active_ && msgNum_ == msgNum && subcmd_ == subcmd;
     }

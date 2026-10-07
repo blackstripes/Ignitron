@@ -468,6 +468,13 @@ void SparkDataControl::resetStatus() {
     presetTelemetryId_ = fxTelemetryId_ = lastMutationTelemetryId_ = writeTelemetryId_ = 0;
     notificationArmed_.store(false);
     busySeen_[0] = busySeen_[1] = false;
+#ifdef PANELAN_PRESET_TRACE
+    if (controllerFullPresetMessageNumber_ != 0) {
+        Serial.printf("PRESET_TRACE t=%lu event=controller_full_revoke path=link_reset prior=%u owner_active=%u owner_msg=%u owner_sub=%02X\n",
+                      (unsigned long)millis(), controllerFullPresetMessageNumber_, responseLane_.active(),
+                      responseLane_.traceMessageNumber(), responseLane_.traceSubcommand());
+    }
+#endif
     responseLane_.reset();
     controllerFullPresetMessageNumber_ = 0;
     retainedIntents_.reset();
@@ -671,7 +678,21 @@ void SparkDataControl::processSparkData(ByteVector &blk
             handleAppModeResponse();
             // State processing and correlation gates see every complete message,
             // including unsolicited ones, before transport ownership is released.
-            if (responseLane_.complete(responseNumber, responseCmd, responseSubcmd)) {
+#ifdef PANELAN_PRESET_TRACE
+            const bool laneActive = responseLane_.active();
+            const uint8_t laneMsg = responseLane_.traceMessageNumber();
+            const uint8_t laneSub = responseLane_.traceSubcommand();
+#endif
+            const bool released = responseLane_.complete(responseNumber, responseCmd, responseSubcmd);
+#ifdef PANELAN_PRESET_TRACE
+            if ((responseCmd == 0x03 && responseSubcmd == 0x01) ||
+                (laneActive && laneSub == 0x01)) {
+                Serial.printf("PRESET_TRACE t=%lu event=response_lane_complete msg=%u cmd=%02X sub=%02X active_before=%u owner_msg=%u owner_sub=%02X matched=%u released=%u\n",
+                              (unsigned long)millis(), responseNumber, responseCmd, responseSubcmd,
+                              laneActive, laneMsg, laneSub, released, released);
+            }
+#endif
+            if (released) {
                 telemetry_.response(queryTelemetryId_, millis());
                 queryTelemetryId_ = 0;
                 notificationArmed_.store(false);
@@ -803,6 +824,19 @@ bool SparkDataControl::responseQueryPending(uint8_t messageNumber, uint8_t subcm
 }
 
 void SparkDataControl::invalidateResponseOwner() {
+#ifdef PANELAN_PRESET_TRACE
+    const bool ownedController = responseLane_.owns(controllerFullPresetMessageNumber_, 0x01);
+    const bool presetOwner = responseLane_.active() && responseLane_.traceSubcommand() == 0x01;
+    if (ownedController) {
+        Serial.printf("PRESET_TRACE t=%lu event=controller_full_revoke path=owner_invalidate prior=%u owner_msg=%u owner_sub=%02X\n",
+                      (unsigned long)millis(), controllerFullPresetMessageNumber_,
+                      responseLane_.traceMessageNumber(), responseLane_.traceSubcommand());
+    } else if (presetOwner || controllerFullPresetMessageNumber_ != 0) {
+        Serial.printf("PRESET_TRACE t=%lu event=response_owner_invalidate expected=%u owner_active=%u owner_msg=%u owner_sub=%02X\n",
+                      (unsigned long)millis(), controllerFullPresetMessageNumber_, responseLane_.active(),
+                      responseLane_.traceMessageNumber(), responseLane_.traceSubcommand());
+    }
+#endif
     telemetry_.ingressInvalidation(queryTelemetryId_);
     queryTelemetryId_ = 0;
     notificationArmed_.store(false);
@@ -813,7 +847,21 @@ void SparkDataControl::invalidateResponseOwner() {
 
 void SparkDataControl::expireResponseOwner() {
     const bool ownedController = responseLane_.owns(controllerFullPresetMessageNumber_, 0x01);
+#ifdef PANELAN_PRESET_TRACE
+    const bool laneActive = responseLane_.active();
+    const uint8_t laneMsg = responseLane_.traceMessageNumber();
+    const uint8_t laneSub = responseLane_.traceSubcommand();
+#endif
     if (responseLane_.expire(millis())) {
+#ifdef PANELAN_PRESET_TRACE
+        if (ownedController) {
+            Serial.printf("PRESET_TRACE t=%lu event=controller_full_revoke path=owner_expire prior=%u owner_msg=%u owner_sub=%02X\n",
+                          (unsigned long)millis(), controllerFullPresetMessageNumber_, laneMsg, laneSub);
+        } else if ((laneActive && laneSub == 0x01) || controllerFullPresetMessageNumber_ != 0) {
+            Serial.printf("PRESET_TRACE t=%lu event=response_owner_expire expected=%u owner_msg=%u owner_sub=%02X\n",
+                          (unsigned long)millis(), controllerFullPresetMessageNumber_, laneMsg, laneSub);
+        }
+#endif
         telemetry_.end(queryTelemetryId_, SparkTransportTelemetry::Reason::Timeout);
         queryTelemetryId_ = 0;
         notificationArmed_.store(false);
@@ -1155,6 +1203,14 @@ void SparkDataControl::handleAppModeResponse() {
             const auto hwChecksums = statusObject.hwChecksums();
             const int slot = received.presetNumber;
             SparkPresetControl &presets = SparkPresetControl::getInstance();
+#ifdef PANELAN_PRESET_TRACE
+            const uint8_t expectedPresetMsg = controllerFullPresetMessageNumber_;
+            const bool gateMatch = expectedPresetMsg != 0 && lastMessageNumber == expectedPresetMsg;
+            const uint32_t revisionBefore = fullPresetObservationRevision_;
+            const bool ownerActive = responseLane_.active();
+            const uint8_t ownerMsg = responseLane_.traceMessageNumber();
+            const uint8_t ownerSub = responseLane_.traceSubcommand();
+#endif
             const bool validCacheResponse = isSpecial && pendingHWPresetSlot_ != 0 &&
                 isAmpConnected() && pendingHWPresetLink_ == linkGeneration_ &&
                 !pendingHWPresetSerial_.empty() && pendingHWPresetSerial_ == statusObject.ampSerialNumber() &&
@@ -1194,10 +1250,25 @@ void SparkDataControl::handleAppModeResponse() {
                 // ACKs, and local pending mutations never advance it.
                 fullPresetObservationMessageNumber_ = lastMessageNumber;
                 ++fullPresetObservationRevision_;
+#ifdef PANELAN_PRESET_TRACE
+                Serial.printf("PRESET_TRACE t=%lu event=preset_observation_publish msg=%u slot=%d revision=%lu\n",
+                              (unsigned long)millis(), lastMessageNumber, slot,
+                              (unsigned long)fullPresetObservationRevision_);
+#endif
 #if defined(PANELAN_LVGL_UI_MODE)
+#ifdef PANELAN_PRESET_TRACE
+                Serial.printf("PRESET_TRACE t=%lu event=controller_full_revoke path=accepted_observation prior=%u\n",
+                              (unsigned long)millis(), controllerFullPresetMessageNumber_);
+#endif
                 controllerFullPresetMessageNumber_ = 0;
 #endif
             }
+#ifdef PANELAN_PRESET_TRACE
+            Serial.printf("PRESET_TRACE t=%lu event=preset_apply_gate msg=%u expected=%u match=%u owner_active=%u owner_msg=%u owner_sub=%02X slot=%d cache=%u acceptedActive=%u revision_before=%lu revision_after=%lu\n",
+                          (unsigned long)millis(), lastMessageNumber, expectedPresetMsg, gateMatch,
+                          ownerActive, ownerMsg, ownerSub, slot, validCacheResponse, acceptedActive,
+                          (unsigned long)revisionBefore, (unsigned long)fullPresetObservationRevision_);
+#endif
         }
 
         if (lastMessageType == MSG_TYPE_FX_ONOFF) {
@@ -1507,6 +1578,19 @@ bool SparkDataControl::firstQueryNotification(uint8_t messageNumber, uint32_t &a
 }
 
 void SparkDataControl::expectControllerFullPreset(uint8_t messageNumber) {
+#ifdef PANELAN_PRESET_TRACE
+    const bool ownedController = responseLane_.owns(controllerFullPresetMessageNumber_, 0x01);
+    if (messageNumber != 0) {
+        Serial.printf("PRESET_TRACE t=%lu event=controller_full_expect path=expect prior=%u msg=%u owner_active=%u owner_msg=%u owner_sub=%02X owned=%u\n",
+                      (unsigned long)millis(), controllerFullPresetMessageNumber_, messageNumber,
+                      responseLane_.active(), responseLane_.traceMessageNumber(), responseLane_.traceSubcommand(),
+                      ownedController);
+    } else if (controllerFullPresetMessageNumber_ != 0) {
+        Serial.printf("PRESET_TRACE t=%lu event=controller_full_revoke path=expect prior=%u owner_active=%u owner_msg=%u owner_sub=%02X owned=%u\n",
+                      (unsigned long)millis(), controllerFullPresetMessageNumber_, responseLane_.active(),
+                      responseLane_.traceMessageNumber(), responseLane_.traceSubcommand(), ownedController);
+    }
+#endif
     if (messageNumber == 0) {
         if (responseLane_.owns(controllerFullPresetMessageNumber_, 0x01)) {
             telemetry_.end(queryTelemetryId_, SparkTransportTelemetry::Reason::Revoked);

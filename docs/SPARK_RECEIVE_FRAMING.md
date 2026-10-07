@@ -83,6 +83,26 @@ No device identity or payload bytes are logged. A pending response on parser/lin
 reset emits its incomplete chunk count. These observations do not change what
 the receiver accepts or publishes.
 
+For full-preset handoff, `preset_parse_complete` (message/cmd/sub, slot,
+frame count and decoded length) follows successful preset parsing;
+`preset_parse_reject` includes message/cmd/sub and parse/tail/checksum
+diagnostics without payload. `preset_apply_gate` records the parsed message,
+controller expected message and match, response-lane owner at the time of
+state handling (active/message/subcommand), slot, cache acceptance,
+`acceptedActive`, and observation revision before/after. A successful active
+observation emits `preset_observation_publish` with message, slot and new
+revision. `response_lane_complete` records the received identity and lane
+state immediately **after** app state handling, before lane completion, plus
+whether it matched/released the owner. Thus the apply gate may see an active
+owner even when completion subsequently releases it. `controller_full_expect`
+records nonzero expectation installation; `controller_full_revoke` is emitted
+only when a nonzero expectation is actually cleared, with path (`expect`,
+`owner_expire`, `owner_invalidate`, `link_reset`, or `accepted_observation`).
+`response_owner_expire` and `response_owner_invalidate` record lane changes that
+leave the controller expectation intact. These are controller-task serial
+diagnostics only, not new correlation gates; message zero denotes no
+expectation/active owner.
+
 ## NEO Core incomplete-response trace (2026-10-06)
 
 On a connected Spark NEO Core, repeated normal hardware
@@ -235,3 +255,45 @@ framing fix is validated for the sequence-byte collision, but a first-query
 `Ready` for `msg=247` is **not** established. This application-level retry
 remains for review and must not be conflated with the separately unresolved
 IDs 131 (`sent=0`) and 239 (17/17 assembly without a matching Ready).
+
+### Full-preset handoff trace follow-up (2026-10-07)
+
+To distinguish assembly from parser/apply/ownership handling, trace-only
+`preset_parse_complete`, `preset_apply_gate`, `preset_observation_publish`,
+`response_lane_complete`, and controller full-query expectation/revoke events
+were added. The trace does not change message acceptance or retry policy. The
+six-change focused Spark 2 run is retained at
+`/tmp/opencode/spark2_preset_handoff_trace_final2.log`; it is not a 500-action
+soak. Opening the serial port reset the controller. The amp was not physically
+powered off during this capture.
+
+The run reproduced an assembled and parsed response that correctly did not
+become authoritative because a newer preset request had superseded its query:
+
+- At `t=7399`, startup query `msg=8` was expected for action 1 / target 2.
+- At `t=7479`, action 2 / target 3 revoked expected `msg=8` before its response
+  was handled. The response later reached `multipart_complete` at `t=8473` and
+  `preset_parse_complete` at `t=8483`; `preset_apply_gate` at `t=8484` showed
+  `expected=0 match=0`, with active lane owner `msg=10 sub=10`. It was rejected
+  (`acceptedActive=0`, revision unchanged) and did not release that other lane.
+- A later current query `msg=14` reached `multipart_complete` at `t=10311` and
+  parsed at `t=10322`. At `t=10323`, the gate showed `expected=14 match=1`,
+  published revision 1, and accepted the active preset. The lane released at
+  `t=10326`; `full_result` and `Ready` followed at `t=10328`.
+
+This demonstrates how a complete, parseable response can be intentionally
+excluded from active state: its expectation was revoked **before** parsing
+because a newer action took ownership. It is not evidence of a race between
+`handleAppModeResponse()` and response-lane completion; app handling precedes
+lane completion. `tools/test_preset_orchestration.cpp` already covers the
+matching stale-full-response rule (a new intent supersedes an old full query,
+and the old reply cannot refresh state).
+
+This mechanism explains the focused reproduction, but the older action-239
+trace and post-power-on action-203/msg-247 trace predate these handoff events and
+do not show whether their expectations were revoked. No root cause is assigned
+to either historical failure from this reproduction. No production acceptance,
+timeout, or retry code was changed. Action 131 (`full_query sent=0`) remains
+separate and unresolved. The reported physical Spark 2 power-off remains a
+separate unresolved observation; this controller-state trace is not evidence
+that it caused or was caused by the power-off.

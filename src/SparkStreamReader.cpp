@@ -361,8 +361,9 @@ void SparkStreamReader::readPreset() {
             (remaining == 11 && bodyEnd + 5 < msgData.size() &&
              msgData[bodyEnd] == 0xCA && msgData[bodyEnd + 5] == 0xCA);
         const bool checksumMatches = !msgData.empty() && sum == msgData.back();
-        Serial.printf("PRESET_TRACE t=%lu event=preset_parse_reject msg=%u bytes=%u body=%u remaining=%u parsed=%u shape=%u checksum=%u frames=%u\n",
-                      static_cast<unsigned long>(millis()), statusObject.lastMessageNum(),
+        Serial.printf("PRESET_TRACE t=%lu event=preset_parse_reject msg=%u cmd=%02X sub=%02X bytes=%u body=%u remaining=%u parsed=%u shape=%u checksum=%u frames=%u\n",
+                       static_cast<unsigned long>(millis()), statusObject.lastMessageNum(),
+                       message.empty() ? 0 : message.back().cmd, message.empty() ? 0 : message.back().subcmd,
                       static_cast<unsigned>(msgData.size()), static_cast<unsigned>(bodyEnd),
                       static_cast<unsigned>(remaining), parseValid_, tailShape, checksumMatches,
                       static_cast<unsigned>(response.size()));
@@ -395,6 +396,12 @@ void SparkStreamReader::readPreset() {
     statusObject.currentPreset() = currentPreset;
     statusObject.isPresetUpdated() = true;
     statusObject.lastMessageType() = MSG_TYPE_PRESET;
+#ifdef PANELAN_PRESET_TRACE
+    Serial.printf("PRESET_TRACE t=%lu event=preset_parse_complete msg=%u cmd=%02X sub=%02X slot=%d frames=%u bytes=%u\n",
+                  (unsigned long)millis(), statusObject.lastMessageNum(),
+                  message.empty() ? 0 : message.back().cmd, message.empty() ? 0 : message.back().subcmd,
+                  currentPreset.presetNumber, (unsigned)response.size(), (unsigned)msgData.size());
+#endif
 }
 
 void SparkStreamReader::readLooperSettings() {

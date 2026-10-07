@@ -943,3 +943,23 @@ the framing fix explains the separate soak actions 131 (`full_query sent=0`)
 or 239 (17/17 multipart assembly but no matching Ready). Those two earlier
 cases remain unresolved. No deadline, retry, parser, queue, transport, or
 controller behavior was tuned, and the 500-action soak was not restarted.
+
+### Full-preset handoff follow-up (2026-10-07)
+
+Trace-only handoff events were added and a six-change focused Spark 2 run was
+captured at `/tmp/opencode/spark2_preset_handoff_trace_final2.log`. It showed an
+expected stale-response case: startup full query msg=8 was revoked at t=7479
+when a newer target was accepted; its response later completed multipart at
+t=8473 and parsed at t=8483, but the t=8484 apply gate had `expected=0` and
+rejected it without advancing the observation. A current query msg=14 later
+passed the matching gate at t=10323, published the observation, released its
+lane, and reached Ready at t=10328. Existing
+`tools/test_preset_orchestration.cpp` covers rejecting
+an obsolete full response after a newer intent. No production acceptance or
+retry behavior changed.
+
+This confirms one legitimate way a 17/17 parsed response is not authoritative;
+it does not explain action 239 or action 203/msg=247, whose earlier captures do
+not include handoff events. Action 131 remains unresolved and was not pursued.
+The physical Spark 2 power-off remains a separate unresolved observation. The
+500-action soak remains stopped for review.
