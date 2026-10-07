@@ -34,12 +34,26 @@ Host-only regression (no device build or flash):
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc tools/test_spark_receive_assembly.cpp -o /tmp/test_spark_receive_assembly && /tmp/test_spark_receive_assembly
 g++ -std=c++17 -Wall -Wextra -Werror -DPANELAN_PRESET_TRACE -Isrc tools/test_spark_receive_assembly.cpp -o /tmp/test_spark_receive_trace && /tmp/test_spark_receive_trace
 python3 tools/test_spark_receive_batch.py
+python3 tools/test_spark_stream_structure.py
 ```
 
 The batch test compiles the production reader's receive/drain methods with a
 host observation hook instead of Arduino preset parsing; it checks both
 preset-then-notification and notification-then-preset delivery and verifies
-the consumer's per-item handling order.
+the consumer's per-item handling order. The structure/drain test compiles the
+production `structureData`, seven-bit decoder, `readMessage`, and `nextMessage`
+with a minimal host status/interpreter seam; it checks decoded data, 17-part
+concatenation, sequence values including `F7` and wrap, multiple frames,
+optional headers, malformed input, rejection, and subsequent queue draining.
+
+Assembly hands the downstream reader complete checksum-valid frame vectors.
+`structureData` validates each frame's minimum size, `F0 01` start and final
+`F7` before decoding; it does not concatenate and re-split on raw `F7`.
+Failed or empty structure results are rejected by `nextMessage`: message and
+last message number are cleared, and the consumer drains the next queued item
+without app-mode response handling or response-lane completion. In trace builds
+`stream_message_reject` marks this downstream rejection without payload bytes.
+Valid-message decoding and preset multipart concatenation are unchanged.
 
 `PANELAN_PRESET_TRACE` is opt-in. In addition to parse rejections it reports
 callback `ingress_seen` (monotonic notification ID, millisecond timestamp and
@@ -479,3 +493,47 @@ timeout, or retry code was changed. Action 131 (`full_query sent=0`) remains
 separate and unresolved. The reported physical Spark 2 power-off remains a
 separate unresolved observation; this controller-state trace is not evidence
 that it caused or was caused by the power-off.
+
+### Confirmed downstream F7 re-split (2026-10-07; host fix, hardware pending)
+
+The action-78/msg-247 capture above and the post-power-on msg-247 capture
+establish complete 17/17 assembly without preset parsing. Code inspection
+identifies a separate downstream defect after the wire-frame fix:
+`SparkStreamReader::structureData` concatenated the complete validated frames
+from `SparkReceiveAssembly`, then split on every raw `F7`. Sequence 247 is
+`F7` at frame offset 2, so each frame produced a three-byte candidate and
+failed the minimum-length check before updating `lastMessageNum`. The old
+`nextMessage` ignored `readMessage(false)` failure and reported COMPLETE;
+the consumer could then attempt response-lane completion using the prior
+message number and empty command/subcommand (the observed stale
+`msg=246 cmd=00 sub=00`). The fix consumes complete frame vectors directly,
+without treating sequence bytes as delimiters or excluding any sequence value;
+failure now returns REJECT and drains later queued messages without completion.
+The host structure test above exercises this handoff at production method
+level. No hardware result is claimed for this change.
+
+Focused hardware proof attempt after flashing the structure fix (2026-10-07):
+the 60-second startup window remained `Scanning`, with
+`Spark connected: no`, unknown amp identity, and no full-preset observation.
+It sent zero preset commands, so no msg-247 proof occurred and the 500-action
+run was not started. Physical Spark power was not independently measured; no
+automatic reconnect or resume was attempted. Capture:
+`/tmp/opencode/panelan_preset_diagnostic_20261007_151245.log`. Retry the focused
+proof only after the amp/link is explicitly available. Require the first msg-247
+query to show all parts and `multipart_complete`, then
+`preset_parse_complete`, matching `preset_apply_gate match=1`,
+`preset_observation_publish`, `response_lane_complete released=1`, and action
+`Ready`, with no query retry. Do not infer success from 17/17 assembly alone.
+Keep this downstream parser case distinct from the NEO Core truncated-final-frame
+observation and unrelated send failures.
+
+The focused proof was attempted again after the latest trace firmware flash
+(2026-10-07 15:15): the 60-second status gate again showed
+`Spark connected: no`, `Amp: (unknown)`, `identityKnown=false`, and
+`fullPresetObservedForLink=false`. It sent zero preset commands; no msg-247
+query or focused proof was observed. Capture:
+`/tmp/opencode/panelan_preset_diagnostic_20261007_151510.log`. Physical Spark
+power was not independently measured. The 500-action run was therefore not
+started, and no reconnect/resume was attempted. Retry only after the Spark
+connection is available; do not infer a parser result from this startup-only
+capture.

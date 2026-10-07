@@ -26,7 +26,8 @@ using ByteVector = vector<byte>;
 enum MessageProcessStatus {
     MSG_PROCESS_RES_COMPLETE,
     MSG_PROCESS_RES_INCOMPLETE,
-    MSG_PROCESS_RES_REQUEST
+    MSG_PROCESS_RES_REQUEST,
+    MSG_PROCESS_RES_REJECT
 };
 
 class SparkStreamReader {

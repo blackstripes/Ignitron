@@ -45,7 +45,7 @@ host = r'''
 using byte = uint8_t;
 using ByteVector = std::vector<byte>;
 using std::vector;
-enum MessageProcessStatus { MSG_PROCESS_RES_COMPLETE, MSG_PROCESS_RES_INCOMPLETE, MSG_PROCESS_RES_REQUEST };
+enum MessageProcessStatus { MSG_PROCESS_RES_COMPLETE, MSG_PROCESS_RES_INCOMPLETE, MSG_PROCESS_RES_REQUEST, MSG_PROCESS_RES_REJECT };
 class SparkStreamReader {
 public:
     SparkReceiveAssembly assembly_;
@@ -53,9 +53,10 @@ public:
     vector<ByteVector> response, unstructuredData;
     std::deque<vector<ByteVector>> pendingMessages_;
     vector<byte> lastData;
+    vector<byte> message;
     byte lastNumber = 0, lastCmd = 0, lastSub = 0;
-    void setMessage(const vector<ByteVector> &data) { unstructuredData = data; }
-    void readMessage(bool) {
+    void setMessage(const vector<ByteVector> &data) { unstructuredData = data; message.clear(); }
+    vector<byte> readMessage(bool) {
         assert(!unstructuredData.empty());
         lastData.clear();
         lastNumber = unstructuredData.back()[2];
@@ -67,7 +68,10 @@ public:
                 data.erase(data.begin(), data.begin() + 3);
             lastData.insert(lastData.end(), data.begin(), data.end());
         }
+        message = lastData;
+        return message;
     }
+    struct Status { byte number = 0; byte &lastMessageNum() { return number; } } statusObject;
     MessageProcessStatus processBlock(ByteVector &blk);
     MessageProcessStatus nextMessage();
 };
