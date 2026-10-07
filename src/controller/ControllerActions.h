@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include "ControllerState.h"
 #include "HardwarePresetScan.h"
 #include "PresetTargetQueue.h"
 #include "PresetTimeoutReconcile.h"
@@ -18,6 +19,8 @@ class SparkDataControl;
 class ControllerActions {
 public:
     explicit ControllerActions(ControllerState &state) : state_(state) {}
+
+    const ControllerSnapshot &snapshot() const { return state_.snapshot(); }
 
     bool requestHardwarePreset(uint8_t preset);
     // Queues one model-specific bypass/on-off request. Confirmation is based

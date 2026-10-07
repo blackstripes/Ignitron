@@ -818,6 +818,15 @@ void SparkDataControl::requestCurrentPresetRefresh() {
 
 SparkSubmission SparkDataControl::lastSubmissionStatus() { return lastSubmissionStatus_; }
 
+#ifdef PANELAN_PRESET_TRACE
+SparkDataControl::PresetTransportTrace SparkDataControl::presetTransportTrace() {
+    return {lastSubmissionStatus_, currentCommand.hasRemaining(),
+            static_cast<int>(currentCommand.remainingCount()), responseLane_.active(),
+            responseLane_.traceMessageNumber(), responseLane_.traceSubcommand(),
+            controllerFullPresetMessageNumber_};
+}
+#endif
+
 bool SparkDataControl::responseQueryPending(uint8_t messageNumber, uint8_t subcmd) {
     expireResponseOwner();
     return responseLane_.owns(messageNumber, subcmd);

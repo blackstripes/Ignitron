@@ -121,6 +121,16 @@ public:
     static void requestSerialNumber();
     static void requestCurrentPresetRefresh();
     static SparkSubmission lastSubmissionStatus();
+#ifdef PANELAN_PRESET_TRACE
+    struct PresetTransportTrace {
+        SparkSubmission submission;
+        bool commandHasRemaining;
+        int commandRemainingParts;
+        bool responseLaneActive;
+        uint8_t ownerMessage, ownerSubcommand, controllerFullPresetMessageNumber;
+    };
+    static PresetTransportTrace presetTransportTrace();
+#endif
     // Services the 5s transport deadline before testing this exact owner.
     static bool responseQueryPending(uint8_t messageNumber, uint8_t subcmd);
     static bool getFirmwareVersion();

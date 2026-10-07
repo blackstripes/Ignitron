@@ -4,7 +4,22 @@ from diagnose_panelan_presets import Soak, status
 
 
 READY = ["--- Ignitron status ---", "Spark connected: yes", "Amp: Spark 2",
-         "Serial: S123", "Bank: 0  Preset: 1", "Preset name: Clean", "Looper loops: 0"]
+         "Serial: S123", "Bank: 0  Preset: 1", "Active hardware slot: 1",
+         "Preset name: Clean", "Looper loops: 0"]
+
+
+def slot_lines(slot):
+    return [line.replace("Preset: 1", f"Preset: {(slot - 1) % 4 + 1}").replace(
+        "Active hardware slot: 1", f"Active hardware slot: {slot}") for line in READY]
+
+
+def snapshot_status(slot=2, **overrides):
+    fields = {"Controller phase": "Ready", "identityKnown": "true", "sparkStateStale": "false",
+              "fullPresetObservedForLink": "true", "confirmedHardwarePreset": str(slot),
+              "pendingHardwarePreset": "0", "presetActionFailed": "false"}
+    fields.update(overrides)
+    return status(slot_lines(slot)[:-1] +
+                   [f"{key}: {value}" for key, value in fields.items()] + [READY[-1]])
 
 
 def event(s, kind, **fields):
@@ -12,7 +27,7 @@ def event(s, kind, **fields):
 
 
 def start(s, current=2):
-    lines = [line.replace("Preset: 1", f"Preset: {current}") for line in READY]
+    lines = slot_lines(current)
     s.on_status(status(lines))
     event(s, "startup_full_query", id=0, target=current, sent=1, msg=10, retry=0)
     event(s, "ready", id=0, target=current, msg=10)
@@ -33,6 +48,126 @@ def parsed(s, msg=31):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_full_hardware_slot_snapshot_match_and_within_bank_mismatch(self):
+        for slot in (5, 8):
+            with self.subTest(slot=slot):
+                values = snapshot_status(slot)
+                self.assertEqual(values["Current preset"], str(slot))
+                self.assertEqual(values["Within-bank preset"], str((slot - 1) % 4 + 1))
+                s = Soak()
+                s.on_status(values)
+                self.assertTrue(s.started)
+                self.assertEqual(s.current, str(slot))
+                wrong = Soak()
+                wrong.on_status(snapshot_status(slot, confirmedHardwarePreset=str((slot - 1) % 4 + 1)))
+                self.assertIsNone(wrong.send_due(0))
+
+    def test_full_hardware_slot_trace_match_and_within_bank_mismatch(self):
+        for slot in (5, 8):
+            with self.subTest(slot=slot):
+                s = Soak()
+                start(s, current=slot)
+                self.assertEqual(s.current, str(slot))
+                wrong = Soak()
+                wrong.on_status(status(slot_lines(slot)))
+                event(wrong, "startup_full_query", id=0, target=(slot - 1) % 4 + 1, sent=1, msg=10)
+                event(wrong, "ready", id=0, target=(slot - 1) % 4 + 1, msg=10)
+                self.assertIsNone(wrong.send_due(0))
+
+    def test_legacy_bank_is_not_authoritative(self):
+        lines = [line for line in slot_lines(5) if not line.startswith("Active hardware slot:")]
+        # Even a UI Bank: 1 does not establish hardware slot 5.
+        lines = [line.replace("Bank: 0", "Bank: 1") for line in lines]
+        s = Soak()
+        s.on_status(status(lines[:-1] + ["Controller phase: Ready", "identityKnown: true",
+                                     "sparkStateStale: false", "fullPresetObservedForLink: true",
+                                     "confirmedHardwarePreset: 5", lines[-1]]))
+        self.assertIsNone(s.send_due(0))
+        event(s, "startup_full_query", id=0, target=5, sent=1, msg=10)
+        event(s, "ready", id=0, target=5, msg=10)
+        self.assertIsNone(s.send_due(0))
+        legacy = Soak()
+        legacy.on_status(status(lines[:-1] + ["Active hardware bank: 1", lines[-1]]))
+        event(legacy, "startup_full_query", id=0, target=5, sent=1, msg=10)
+        event(legacy, "ready", id=0, target=5, msg=10)
+        self.assertEqual(legacy.send_due(0), 1)
+
+    def test_explicit_slot_takes_precedence_over_bank(self):
+        s = Soak()
+        lines = slot_lines(8)
+        s.on_status(status(lines[:-1] + ["Active hardware bank: 0", lines[-1]]))
+        event(s, "startup_full_query", id=0, target=4, sent=1, msg=10)
+        event(s, "ready", id=0, target=4, msg=10)
+        self.assertIsNone(s.send_due(0))
+
+    def test_already_ready_before_attach_status_alone(self):
+        s = Soak()
+        s.on_status(snapshot_status())
+        self.assertTrue(s.started)
+        self.assertEqual(s.current, "2")
+        self.assertEqual(s.send_due(0), 1)
+
+    def test_syncing_cached_data_cannot_start_even_with_trace(self):
+        s = Soak()
+        s.on_status(snapshot_status(**{"Controller phase": "Syncing"}))
+        event(s, "startup_full_query", id=0, target=2, sent=1, msg=10)
+        event(s, "ready", id=0, target=2, msg=10)
+        self.assertIsNone(s.send_due(0))
+
+    def test_full_observation_false_cannot_start(self):
+        s = Soak()
+        s.on_status(snapshot_status(fullPresetObservedForLink="false"))
+        self.assertIsNone(s.send_due(0))
+
+    def test_stale_cannot_start(self):
+        s = Soak()
+        s.on_status(snapshot_status(sparkStateStale="true"))
+        self.assertIsNone(s.send_due(0))
+
+    def test_confirmed_mismatch_cannot_start(self):
+        s = Soak()
+        s.on_status(snapshot_status(confirmedHardwarePreset="3"))
+        self.assertIsNone(s.send_due(0))
+
+    def test_status_becomes_ready_after_reset(self):
+        s = Soak()
+        s.on_status(snapshot_status(**{"Spark connected": "no", "Controller phase": "Scanning"}))
+        self.assertIsNone(s.send_due(0))
+        s.on_status(snapshot_status(**{"Controller phase": "Syncing", "fullPresetObservedForLink": "false"}))
+        self.assertIsNone(s.send_due(1))
+        s.on_status(snapshot_status())
+        self.assertEqual(s.send_due(2), 1)
+
+    def test_startup_sent_zero_reports_transport_status(self):
+        s = Soak()
+        lines = slot_lines(2)[:-1]
+        lines += ["lastSubmissionStatus: Sent", "currentCommand hasRemaining: false  remainingParts: 0",
+                  "responseLane active: false  owner msg: 0  owner sub: 00",
+                  "controllerFullPresetMessageNumber: 0", READY[-1]]
+        s.on_status(status(lines))
+        event(s, "startup_full_query", id=0, target=2, sent=0, msg=0,
+              lastSubmissionStatus="Failed", currentCommandHasRemaining=1, currentCommandRemainingParts=3,
+              responseLaneActive=1, ownerMsg=12, ownerSub="01", controllerFullPresetMessageNumber=12)
+        self.assertIn("event transport=", s.stop)
+        self.assertIn("'lastSubmissionStatus': 'Failed'", s.stop)
+        self.assertIn("'currentCommandRemainingParts': '3'", s.stop)
+        self.assertIn("'ownerMsg': '12'", s.stop)
+        self.assertIn("'ownerSub': '01'", s.stop)
+        self.assertIn("latest status transport={'lastSubmissionStatus': 'Sent'", s.stop)
+        self.assertIsNone(s.send_due(0))
+
+    def test_startup_busy_waits_for_sync_retry(self):
+        s = Soak()
+        s.on_status(status(slot_lines(2)))
+        event(s, "startup_full_query", id=0, target=2, sent=0, msg=0,
+              lastSubmissionStatus="Busy", currentCommandHasRemaining=1,
+              currentCommandRemainingParts=2, responseLaneActive=1, ownerMsg=11, ownerSub="10",
+              controllerFullPresetMessageNumber=0)
+        self.assertIsNone(s.stop)
+        event(s, "startup_full_query", id=0, target=2, sent=1, msg=12, retry=0)
+        event(s, "ready", id=0, target=2, msg=12)
+        self.assertEqual(s.send_due(0), 1)
+
     def test_clean_ready_and_cadence(self):
         s = Soak(count=2)
         start(s)
@@ -60,8 +195,13 @@ class DiagnosticTests(unittest.TestCase):
         s = Soak()
         start(s)
         event(s, "accept", id=7, target=1, confirmed=2)
-        event(s, "full_query", id=7, target=1, sent=0, msg=0)
+        event(s, "full_query", id=7, target=1, sent=0, msg=0,
+              lastSubmissionStatus="Busy", currentCommandHasRemaining=1, currentCommandRemainingParts=2,
+              responseLaneActive=1, ownerMsg=31, ownerSub="01", controllerFullPresetMessageNumber=31)
         self.assertIn("sent=0", s.stop)
+        self.assertIn("'lastSubmissionStatus': 'Busy'", s.stop)
+        self.assertIn("'currentCommandRemainingParts': '2'", s.stop)
+        self.assertIn("'ownerMsg': '31'", s.stop)
 
     def test_complete_parsed_without_publish_not_premature(self):
         s = Soak()
@@ -128,7 +268,7 @@ class DiagnosticTests(unittest.TestCase):
         event(s, "startup_full_query", id=0, target=2, sent=1, msg=10)
         event(s, "ready", id=0, target=2, msg=10)
         self.assertIsNone(s.send_due(21))  # status slot must agree with startup Ready
-        s.on_status(status([*READY[:4], "Bank: 0  Preset: 2", *READY[5:]]))
+        s.on_status(status(slot_lines(2)))
         self.assertEqual(s.send_due(21), 1)
         wrong = Soak()
         wrong.on_status(status([x.replace("Spark 2", "Spark NEO") for x in READY]))

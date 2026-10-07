@@ -158,12 +158,29 @@ For a future event-driven Spark 2 trace soak (not a hardware run), use
 `panelan-lvgl-controller-preset-trace` firmware. Opening CDC may reset the
 controller. The tool opens the explicit port once at 115200, polls only `status`
 until a complete status block reports connected, `Amp: Spark 2`, known serial
-and preset name **and** a matching startup `id=0` full-query/`Ready` trace
-establishes the confirmed hardware slot and current-link full observation. It
+and preset name. The CLI status now includes snapshot-backed `Controller phase`
+(`Scanning`, `Reconnecting`, `Identifying`, `Syncing`, `Ready`), `identityKnown`,
+`sparkStateStale`, `fullPresetObservedForLink`, `confirmedHardwarePreset`,
+`pendingHardwarePreset`, and `presetActionFailed`. A complete status block can
+establish startup readiness without a witnessed startup trace: phase `Ready`,
+identity known, not stale, full preset observed for this link, and confirmed
+hardware preset 1–8 equal to the CLI active slot. A cached name/slot alone, a
+Syncing phase, false full-observed, stale state or slot mismatch cannot pass.
+`status` now prints `Active hardware slot: N` (1–8 on Spark 2), calculated
+from `activeHWBank() * PRESETS_PER_BANK + activePresetNum()`; the existing
+`Bank: ...  Preset: ...` line reports the UI bank and within-bank preset
+number (1–4), not the hardware slot. The diagnostic compares
+`confirmedHardwarePreset` with the full active hardware slot, not the
+within-bank number. On older status output without the explicit slot, only
+an authoritative `Active hardware bank` plus a valid within-bank preset can
+derive a full slot; `Bank:` and cached name/preset alone cannot, so startup
+remains blocked without that evidence.
+A witnessed startup `id=0` full-query/`Ready` pair with a matching active slot
+remains an alternative for older trace firmware without snapshot status; a
+present but not-ready snapshot cannot be overridden by that trace. The tool
 sends **no preset commands** on readiness timeout or on a
 different identified amp. CLI status reports the active preset number, but by
-itself does not prove current-link full-preset readiness. The tool requires
-that slot to agree with startup `Ready`; a matching `already_current` rejection
+itself does not prove current-link full-preset readiness. A matching `already_current` rejection
 or an action's matching `Ready` updates the tracked slot. A known preset name
 alone does not prove current-link full readiness; subsequent actions require
 their own trace-correlated full query and `Ready`. Do not use a mixed/incomplete
@@ -180,9 +197,22 @@ response-lane completion, identifiable frame rejection, disconnect or status
 connection loss, trace-event loss, serial error/EOF or missing required trace
 fields stops the run.
 Superseded query messages and unrelated generic traffic are not current-query
-failures. The `sent=0` trace does **not** include submission status, unsent
-command parts or response-lane owner/acquisition state; the tool reports this
-limit rather than assigning a cause. Every raw serial line is timestamped and
+failures. Trace-build status additionally shows `lastSubmissionStatus`
+(`Sent`/`Busy`/`Failed`), `currentCommand hasRemaining` and `remainingParts`,
+`responseLane active`, `owner msg`, `owner sub` (hex), and
+`controllerFullPresetMessageNumber`. Inactive lane owner fields are zero. These
+are read-only point-in-time diagnostics, not evidence of the owner at an earlier
+failed submission. In trace builds, `full_query` and `startup_full_query` include
+`lastSubmissionStatus`, `currentCommandHasRemaining` (0/1),
+`currentCommandRemainingParts`, `responseLaneActive` (0/1), `ownerMsg`,
+`ownerSub` (hex), and `controllerFullPresetMessageNumber`, sampled immediately
+after query submission. Startup Busy submissions also emit `sent=0` before
+returning to retry; the harness records and waits for that startup retry, while
+an action `full_query sent=0` is terminal. Other startup send failures remain
+terminal. The harness reports event-time fields directly on a terminal
+`sent=0`; its latest complete status transport fields are supplementary only
+and may not coincide with the submission. `Looper loops` remains the final
+status line. Every raw serial line is timestamped and
 flushed to `/tmp/opencode/panelan_preset_diagnostic_*.log`; the terminal summary includes
 stop reason, counts, last Ready, current action/query, 50 recent trace events,
 nearby raw context and log path. Host-only tests:
@@ -199,6 +229,25 @@ its chunk-timestamp formatting was subsequently corrected) and
 `/tmp/opencode/panelan_preset_diagnostic_20261007_065127.log` (corrected raw
 line capture). Do not infer the cause of the missing startup trace from these
 captures; no current startup full-query message number or Ready action exists.
+This outcome reflects the **previous trace-only startup gate**, before snapshot
+status readiness was available. The subsequent post-flash attempt is recorded
+below.
+
+Post-snapshot-status diagnostic attempt (2026-10-07): the updated trace firmware
+built and flashed successfully, but the 45-second startup window never reached
+Spark connected/identified state. Status remained `Scanning`,
+`identityKnown=false`, `sparkStateStale=true`,
+`fullPresetObservedForLink=false`, and `confirmedHardwarePreset=0`. No startup
+query/Ready message was observed, no preset command was sent, and zero changing
+actions were accepted. Trace transport status remained `lastSubmissionStatus=Failed`,
+no remaining command parts, no active response lane, and controller full-preset
+message 0; this is the idle scan state, not a failed full-query submission.
+Physical Spark power was not independently verified. The run was not resumed.
+Capture: `/tmp/opencode/panelan_preset_diagnostic_20261007_071758.log`.
+There is no preset anomaly or root-cause conclusion from this startup-only run.
+Afterward active hardware-slot reporting was corrected, rebuilt and flashed; no
+second diagnostic session was opened because Spark remained unavailable and
+the run must not resume automatically after startup failure.
 
 
 Using the same controller, flashed `panelan-lvgl-controller-preset-trace`

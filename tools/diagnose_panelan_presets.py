@@ -22,12 +22,34 @@ def status(lines):
         return None
     values = {}
     for line in lines:
-        for key in ("Spark connected", "Amp", "Serial", "Preset name"):
+        for key in ("Spark connected", "Amp", "Serial", "Preset name", "Controller phase",
+                    "identityKnown", "sparkStateStale", "fullPresetObservedForLink",
+                    "confirmedHardwarePreset", "pendingHardwarePreset", "presetActionFailed",
+                    "lastSubmissionStatus", "controllerFullPresetMessageNumber"):
             if line.startswith(key + ":"):
                 values[key] = line[len(key) + 1:].strip()
-        preset = re.match(r"Bank:\s*(-?\d+)\s+Preset:\s*(-?\d+)$", line)
+        command = re.fullmatch(r"currentCommand hasRemaining: (true|false)\s+remainingParts: (-?\d+)", line)
+        if command:
+            values["currentCommand hasRemaining"], values["remainingParts"] = command.groups()
+        lane = re.fullmatch(r"responseLane active: (true|false)\s+owner msg: (\d+)\s+owner sub: ([0-9A-Fa-f]+)", line)
+        if lane:
+            values["responseLane active"], values["owner msg"], values["owner sub"] = lane.groups()
+        slot = re.fullmatch(r"Active hardware slot: (\d+)", line)
+        if slot:
+            values["Active hardware slot"] = slot.group(1)
+        hw_bank = re.fullmatch(r"Active hardware bank: (\d+)", line)
+        if hw_bank:
+            values["Active hardware bank"] = hw_bank.group(1)
+        preset = re.fullmatch(r"Bank:\s*(-?\d+)\s+Preset:\s*(-?\d+)", line)
         if preset:
-            values["Current preset"] = preset.group(2)
+            values["Within-bank preset"] = preset.group(2)
+    # Bank is a UI bank, not the hardware bank. A legacy status without an
+    # authoritative hardware bank cannot establish a full slot from Preset.
+    if "Active hardware slot" in values:
+        values["Current preset"] = values["Active hardware slot"]
+    elif values.get("Active hardware bank") in {"0", "1"} and values.get("Within-bank preset") in {"1", "2", "3", "4"}:
+        values["Current preset"] = str(int(values["Active hardware bank"]) * 4 +
+                                       int(values["Within-bank preset"]))
     return values
 
 
@@ -35,7 +57,31 @@ def identity_ready(values):
     return (values.get("Spark connected") == "yes" and values.get("Amp") == "Spark 2" and
             all(values.get(key) not in (None, "", "(unknown)") for key in
                 ("Serial", "Preset name", "Current preset")) and
-            values.get("Current preset") in {str(slot) for slot in range(1, 9)})
+             values.get("Current preset") in {str(slot) for slot in range(1, 9)})
+
+
+def snapshot_ready(values):
+    """Only current-link ControllerSnapshot evidence, never cached CLI names alone."""
+    return (identity_ready(values) and values.get("Controller phase") == "Ready" and
+            values.get("identityKnown") == "true" and
+            values.get("sparkStateStale") == "false" and
+            values.get("fullPresetObservedForLink") == "true" and
+            values.get("confirmedHardwarePreset") == values.get("Current preset"))
+
+
+def trace_status_ready(values):
+    # Legacy trace builds lack the snapshot fields. If the snapshot is present,
+    # an explicit not-ready observation cannot be overridden by an old trace.
+    snapshot_keys = ("Controller phase", "identityKnown", "sparkStateStale",
+                     "fullPresetObservedForLink", "confirmedHardwarePreset")
+    return identity_ready(values) and (not any(key in values for key in snapshot_keys) or
+                                       snapshot_ready(values))
+
+
+TRANSPORT_KEYS = ("lastSubmissionStatus", "currentCommand hasRemaining", "remainingParts",
+                  "responseLane active", "owner msg", "owner sub", "controllerFullPresetMessageNumber")
+QUERY_TRANSPORT_KEYS = ("lastSubmissionStatus", "currentCommandHasRemaining", "currentCommandRemainingParts",
+                        "responseLaneActive", "ownerMsg", "ownerSub", "controllerFullPresetMessageNumber")
 
 
 class Soak:
@@ -45,6 +91,7 @@ class Soak:
         self.started = False
         self.status_ready = False
         self.status_preset = None
+        self.last_status = {}
         self.startup_query = None
         self.startup_ready = False
         self.current = None
@@ -66,6 +113,9 @@ class Soak:
             self.stop = reason
 
     def on_status(self, values):
+        if values is None:
+            return
+        self.last_status = values
         if values.get("Amp") not in (None, "", "(unknown)", "Spark 2"):
             self.fail("wrong amp: " + values["Amp"])
         else:
@@ -73,8 +123,11 @@ class Soak:
             self.status_preset = values.get("Current preset")
             if self.started and not self.status_ready:
                 self.fail("Spark connection/identity/readiness lost in status")
-            if self.status_ready and self.startup_ready:
-                self.started = self.status_preset == self.current
+            if not self.started and (snapshot_ready(values) or
+                                     (trace_status_ready(values) and self.startup_ready and
+                                      self.status_preset == self.current)):
+                self.current = self.status_preset
+                self.started = True
 
     def send_due(self, now):
         if self.stop or not self.started or self.action or self.accepted >= self.count:
@@ -100,6 +153,12 @@ class Soak:
             return False
         return True
 
+    def failed_query(self, kind, event):
+        at_event = {key: event[key] for key in QUERY_TRANSPORT_KEYS if key in event}
+        latest = {key: self.last_status[key] for key in TRANSPORT_KEYS if key in self.last_status}
+        self.fail(f"{kind} sent=0: event transport={at_event}; latest status transport={latest} "
+                  "(status poll may not coincide with failed submission)")
+
     def on_line(self, line):
         self.context.append(line)
         e = trace(line)
@@ -118,7 +177,11 @@ class Soak:
                 self.startup_query = (e["target"], e["msg"]) if e["sent"] == "1" else None
                 self.startup_ready = False
                 if e["sent"] != "1":
-                    self.fail(f"startup_full_query sent=0 (submission/owner unavailable): {e}")
+                    # Startup synchronization keeps its own bounded retry. A
+                    # Busy response means another command currently owns the
+                    # transport; retain the evidence and await that retry.
+                    if e.get("lastSubmissionStatus") != "Busy":
+                        self.failed_query(kind, e)
                 elif e.get("retry") == "1":
                     self.fail(f"startup_full_query retry: {e}")
         if not self.started and kind == "startup_full_timeout" and self.startup_query:
@@ -130,7 +193,7 @@ class Soak:
                 self.current = e["target"]
                 # Wait for a complete status poll whose reported active slot
                 # agrees with this current-link full-preset Ready observation.
-                self.started = self.status_ready and self.current == self.status_preset
+                self.started = trace_status_ready(self.last_status) and self.current == self.status_preset
         a = self.action
         if not a or self.stop:
             return
@@ -162,7 +225,7 @@ class Soak:
             if not self.require(e, "sent", "msg"):
                 return
             if e["sent"] != "1":
-                self.fail(f"{kind} sent=0 (submission/owner/currentCommand unavailable in firmware trace): {e}")
+                self.failed_query(kind, e)
                 return
             if e.get("retry") == "1":
                 self.fail(f"{kind} retry: {e}")
@@ -257,7 +320,8 @@ def main():
                 now = time.monotonic()
                 if not soak.started:
                     if now >= deadline:
-                        soak.fail("readiness timeout; zero preset commands sent")
+                        soak.fail(f"readiness timeout; zero preset commands sent; latest status={soak.last_status}; "
+                                  f"startup_query={soak.startup_query} trace_ready={soak.startup_ready}")
                         break
                     if now >= next_status:
                         os.write(fd, b"status\n")

@@ -26,6 +26,7 @@ template <typename Part>
 class SparkOutbound {
 public:
     bool hasRemaining() const { return !remaining_.empty(); }
+    size_t remainingCount() const { return remaining_.size(); }
     // Valid inside the write callback, before sendNext removes the part.
     bool writingLastPart() const { return remaining_.size() == 1; }
     void clear() { remaining_.clear(); lastWrittenValid_ = false; }

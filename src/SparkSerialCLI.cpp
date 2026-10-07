@@ -181,12 +181,43 @@ void SparkSerialCLI::printStatus() {
 
     Serial.printf("Mode: %d  Submode: %d\n", sparkDC_->operationMode(), sparkDC_->subMode());
     Serial.printf("Bank: %d  Preset: %d\n", presetControl.activeBank(), presetControl.activePresetNum());
+    Serial.printf("Active hardware slot: %d\n",
+                  presetControl.activeHWBank() * PRESETS_PER_BANK + presetControl.activePresetNum());
     Serial.printf("Preset name: %s\n", preset.name.empty() ? "(unknown)" : preset.name.c_str());
-    Serial.printf("Looper loops: %d\n", status.numberOfLoops());
-
     if (sparkDC_->subMode() == SUB_MODE_TUNER) {
         Serial.printf("Tuner: %s  %+d cents\n", status.noteString().c_str(), status.noteOffsetCents());
     }
+    if (controllerActions_) {
+        const ControllerSnapshot &snapshot = controllerActions_->snapshot();
+        const char *phase = "Unknown";
+        switch (snapshot.connectionPhase) {
+        case ControllerConnectionPhase::Scanning: phase = "Scanning"; break;
+        case ControllerConnectionPhase::Reconnecting: phase = "Reconnecting"; break;
+        case ControllerConnectionPhase::Identifying: phase = "Identifying"; break;
+        case ControllerConnectionPhase::Syncing: phase = "Syncing"; break;
+        case ControllerConnectionPhase::Ready: phase = "Ready"; break;
+        }
+        Serial.printf("Controller phase: %s\n", phase);
+        Serial.printf("identityKnown: %s\n", snapshot.identityKnown ? "true" : "false");
+        Serial.printf("sparkStateStale: %s\n", snapshot.sparkStateStale ? "true" : "false");
+        Serial.printf("fullPresetObservedForLink: %s\n", snapshot.fullPresetObservedForLink ? "true" : "false");
+        Serial.printf("confirmedHardwarePreset: %u\n", snapshot.confirmedHardwarePreset);
+        Serial.printf("pendingHardwarePreset: %u\n", snapshot.pendingHardwarePreset);
+        Serial.printf("presetActionFailed: %s\n", snapshot.presetActionFailed ? "true" : "false");
+    }
+#ifdef PANELAN_PRESET_TRACE
+    const auto transport = SparkDataControl::presetTransportTrace();
+    const char *submission = transport.submission == SparkSubmission::Sent ? "Sent" :
+                             transport.submission == SparkSubmission::Busy ? "Busy" : "Failed";
+    Serial.printf("lastSubmissionStatus: %s\n", submission);
+    Serial.printf("currentCommand hasRemaining: %s  remainingParts: %d\n",
+                  transport.commandHasRemaining ? "true" : "false", transport.commandRemainingParts);
+    Serial.printf("responseLane active: %s  owner msg: %u  owner sub: %02X\n",
+                  transport.responseLaneActive ? "true" : "false", transport.ownerMessage,
+                  transport.ownerSubcommand);
+    Serial.printf("controllerFullPresetMessageNumber: %u\n", transport.controllerFullPresetMessageNumber);
+#endif
+    Serial.printf("Looper loops: %d\n", status.numberOfLoops());
 }
 
 void SparkSerialCLI::printDiagnostics() {

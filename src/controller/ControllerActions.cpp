@@ -592,6 +592,17 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
             uint8_t newMessage = 0;
             const bool sent = dataControl.getCurrentPresetFromSpark(&newMessage);
+#ifdef PANELAN_PRESET_TRACE
+            const auto transport = SparkDataControl::presetTransportTrace();
+            const char *submission = transport.submission == SparkSubmission::Sent ? "Sent" :
+                                     transport.submission == SparkSubmission::Busy ? "Busy" : "Failed";
+            PRESET_TRACE("event=startup_full_query id=%lu target=%u msg=%u sent=%u match=0 ready=0 retry=%u lastSubmissionStatus=%s currentCommandHasRemaining=%u currentCommandRemainingParts=%d responseLaneActive=%u ownerMsg=%u ownerSub=%02X controllerFullPresetMessageNumber=%u",
+                         static_cast<unsigned long>(presetTraceStartupId_), snapshot.confirmedHardwarePreset,
+                         sent ? newMessage : 0, sent, retry, submission,
+                         transport.commandHasRemaining, transport.commandRemainingParts,
+                         transport.responseLaneActive, transport.ownerMessage, transport.ownerSubcommand,
+                         transport.controllerFullPresetMessageNumber);
+#endif
             if (!sent && keepQueuedSparkIntent(dataControl.lastSubmissionStatus())) return;
             if (sent && retry) SparkDataControl::recordTransportRetry();
             state_.expectStartupFullPreset(0);
@@ -600,10 +611,6 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             if (sent) startupFullPresetQueryMessageNumber_ = newMessage;
             fullPresetRetry_.attemptedAt(millis(), startupFullPresetQueryIssued_,
                                          startupFullPresetQueryMessageNumber_, revisionBeforeSend);
-            PRESET_TRACE("event=startup_full_query id=%lu target=%u msg=%u sent=%u match=0 ready=0 retry=%u",
-                         static_cast<unsigned long>(presetTraceStartupId_), snapshot.confirmedHardwarePreset,
-                         startupFullPresetQueryIssued_ ? startupFullPresetQueryMessageNumber_ : 0,
-                         startupFullPresetQueryIssued_, retry);
             if (startupFullPresetQueryIssued_) {
                 state_.expectStartupFullPreset(startupFullPresetQueryMessageNumber_);
                 SparkDataControl::expectControllerFullPreset(startupFullPresetQueryMessageNumber_);
@@ -672,12 +679,22 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             presetFullTarget_ = sentPreset_;
             const uint32_t revisionBeforeSend = SparkDataControl::fullPresetObservationRevision();
             awaitingPresetFullResponse_ = dataControl.getCurrentPresetFromSpark(&presetFullQueryMessageNumber_);
+#ifdef PANELAN_PRESET_TRACE
+            const auto transport = SparkDataControl::presetTransportTrace();
+#endif
             fullPresetRetry_.attemptedAt(millis(), awaitingPresetFullResponse_,
                                          presetFullQueryMessageNumber_, revisionBeforeSend);
-            PRESET_TRACE("event=full_query id=%lu target=%u sent=%u msg=%u elapsed=%lu",
+#ifdef PANELAN_PRESET_TRACE
+            const char *submission = transport.submission == SparkSubmission::Sent ? "Sent" :
+                                     transport.submission == SparkSubmission::Busy ? "Busy" : "Failed";
+            PRESET_TRACE("event=full_query id=%lu target=%u sent=%u msg=%u elapsed=%lu lastSubmissionStatus=%s currentCommandHasRemaining=%u currentCommandRemainingParts=%d responseLaneActive=%u ownerMsg=%u ownerSub=%02X controllerFullPresetMessageNumber=%u",
                          static_cast<unsigned long>(presetTraceId_), sentPreset_, awaitingPresetFullResponse_,
                          awaitingPresetFullResponse_ ? presetFullQueryMessageNumber_ : 0,
-                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_), submission,
+                         transport.commandHasRemaining, transport.commandRemainingParts,
+                         transport.responseLaneActive, transport.ownerMessage, transport.ownerSubcommand,
+                         transport.controllerFullPresetMessageNumber);
+#endif
             if (awaitingPresetFullResponse_) {
                 state_.expectStartupFullPreset(presetFullQueryMessageNumber_);
                 SparkDataControl::expectControllerFullPreset(presetFullQueryMessageNumber_);
