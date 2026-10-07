@@ -249,6 +249,42 @@ Afterward active hardware-slot reporting was corrected, rebuilt and flashed; no
 second diagnostic session was opened because Spark remained unavailable and
 the run must not resume automatically after startup failure.
 
+Prompt-prefixed trace parser correction and Spark 2 diagnostic (2026-10-07): an
+earlier rerun reached authoritative Ready and issued action 1, but the CLI
+printed its `accept` event as `> PRESET_TRACE ...`. The harness did not recognize
+that first line, then timed out internally although the controller trace showed
+action 1 / target 1 reaching matching `Ready` for full query msg 12 in 1194 ms.
+This was a harness correlation error, not a controller/transport failure. The
+parser now strips only recognized prompt markers at the beginning of parsed
+lines; the raw serial line is logged before this normalization. Host tests cover
+the unprefixed, single/repeated prompt, embedded-text rejection, status-block,
+and exact action-1 cases.
+
+With the parser correction, the explicit 150-action run passed the snapshot
+startup gate (`Spark 2`, phase Ready, current hardware slot 1, confirmed slot 1)
+and completed **150 accepted changing actions / 150 matching Ready events** in
+459.35 seconds. The first slot-1 request was rejected `already_current` and was
+not counted; accepted action IDs ran 2–151, with final action 151 / target 7 /
+msg 226 reaching Ready in 1073 ms. Full-query-to-Ready latency from each action's
+trace was p50 **1060.5 ms**, nearest-rank p95 **1135 ms**, max **2695 ms**. Each
+of 150 actions had one sent full query; all 150 current full responses completed
+multipart assembly (113 × 17/17, 37 × 18/18), parsed, published an observation,
+and completed the response lane. There were no full-query send failures,
+full-data/startup timeouts, explicit full-query retries, parse rejects,
+frame/multipart discards, incoming rejects, trace-ring losses or disconnect
+events.
+
+One action (id 75 / target 3) had two `number_query sent=0` poll attempts at
+elapsed 822 and 1322 ms. A later poll sent at elapsed 1907 ms and the matching
+number confirmation arrived at 1916 ms, followed by the full query and Ready.
+The number-query event does not include the event-time submission/owner fields,
+so this trace cannot prove why those two verification polls were refused. The
+action recovered and completed; no full-preset query was refused. This is
+reported separately from full-query retries/timeouts and is not assigned a
+root cause. Capture:
+`/tmp/opencode/panelan_preset_diagnostic_20261007_080021.log`. The run stopped
+at 150; the 500-action soak was not started.
+
 
 Using the same controller, flashed `panelan-lvgl-controller-preset-trace`
 image, serial CLI, 1–8 cycling order, and four-second interval between preset

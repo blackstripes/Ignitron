@@ -10,7 +10,13 @@ import termios
 import time
 
 
+def normalize_cli_line(line):
+    """Remove only one or more CLI prompts at the start of a serial line."""
+    return re.sub(r"^(?:\s*>\s*)+", "", line)
+
+
 def trace(line):
+    line = normalize_cli_line(line)
     if not line.startswith("PRESET_TRACE "):
         return None
     return dict(re.findall(r"(\w+)=([^\s]+)", line))
@@ -18,6 +24,7 @@ def trace(line):
 
 def status(lines):
     """Parse one complete CLI status block (not a mixture of successive polls)."""
+    lines = [normalize_cli_line(line) for line in lines]
     if not lines or lines[0] != "--- Ignitron status ---" or not lines[-1].startswith("Looper loops:"):
         return None
     values = {}
@@ -160,6 +167,7 @@ class Soak:
                   "(status poll may not coincide with failed submission)")
 
     def on_line(self, line):
+        line = normalize_cli_line(line)
         self.context.append(line)
         e = trace(line)
         if e is None:
@@ -344,7 +352,7 @@ def main():
                     raw_line = raw + b"\n"
                     log.write(datetime.now().isoformat(timespec="milliseconds").encode("ascii") + b" " + raw_line)
                     log.flush()
-                    line = raw.decode(errors="replace").strip()
+                    line = normalize_cli_line(raw.decode(errors="replace").strip())
                     soak.on_line(line)
                     if line == "--- Ignitron status ---":
                         blocks = [line]

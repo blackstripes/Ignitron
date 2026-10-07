@@ -1,6 +1,6 @@
 """Host-only diagnostic state-machine tests; never open serial hardware."""
 import unittest
-from diagnose_panelan_presets import Soak, status
+from diagnose_panelan_presets import Soak, status, trace
 
 
 READY = ["--- Ignitron status ---", "Spark connected: yes", "Amp: Spark 2",
@@ -48,6 +48,51 @@ def parsed(s, msg=31):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_trace_prompt_prefixes_normalize_only_at_line_start(self):
+        plain = "PRESET_TRACE t=1 event=accept id=1 target=1 confirmed=3"
+        expected = trace(plain)
+        self.assertIsNotNone(expected)
+        self.assertEqual(expected["event"], "accept")
+        self.assertEqual(trace("> PRESET_TRACE t=1 event=accept id=1 target=1 confirmed=3"), expected)
+        self.assertEqual(trace(">  PRESET_TRACE t=1 event=accept id=1 target=1 confirmed=3"), expected)
+        self.assertEqual(trace("> > PRESET_TRACE t=1 event=accept id=1 target=1 confirmed=3"), expected)
+        self.assertIsNone(trace("noise before PRESET_TRACE t=1 event=accept id=1 target=1"))
+
+    def test_prompt_prefixed_status_block_markers_parse(self):
+        # Build a complete block from actual line-oriented output; prompt syntax
+        # can prefix the block header and final marker as well as fields.
+        lines = ["> --- Ignitron status ---", "> Spark connected: yes", "Amp: Spark 2",
+                 "Serial: S123", "Bank: 0  Preset: 2", "Active hardware slot: 2",
+                 "Preset name: Clean", "Controller phase: Ready", "identityKnown: true",
+                 "sparkStateStale: false", "fullPresetObservedForLink: true",
+                 "confirmedHardwarePreset: 2", "> > Looper loops: 0"]
+        values = status(lines)
+        self.assertIsNotNone(values)
+        self.assertEqual(values["Controller phase"], "Ready")
+        self.assertEqual(values["Current preset"], "2")
+
+    def test_prompt_prefixed_action_one_sequence_correlates(self):
+        s = Soak(count=1)
+        s.on_status(snapshot_status(slot=3))
+        self.assertEqual(s.send_due(0), 1)
+        s.on_line("> PRESET_TRACE t=100 event=accept id=1 target=1 confirmed=3")
+        s.on_line("PRESET_TRACE t=101 event=queued id=1 target=1 elapsed=0")
+        event(s, "sent", id=1, target=1)
+        event(s, "number_query", id=1, target=1, sent=1)
+        event(s, "number_confirm", id=1, target=1, confirmed=1)
+        event(s, "full_query", id=1, target=1, sent=1, msg=12)
+        parsed(s, msg=12)
+        event(s, "preset_apply_gate", msg=12, expected=12, match=1, owner_active=1,
+              owner_msg=12, owner_sub="01", slot=0, cache=0, acceptedActive=1,
+              revision_before=1, revision_after=2)
+        event(s, "preset_observation_publish", msg=12, slot=0, revision=2)
+        event(s, "response_lane_complete", msg=12, cmd="03", sub="01", active_before=1,
+              owner_msg=12, owner_sub="01", matched=1, released=1)
+        event(s, "ready", id=1, target=1, msg=12)
+        self.assertEqual(s.accepted, 1)
+        self.assertEqual(s.last_ready, ("1", "1"))
+        self.assertEqual(s.stop, "completed")
+
     def test_full_hardware_slot_snapshot_match_and_within_bank_mismatch(self):
         for slot in (5, 8):
             with self.subTest(slot=slot):
