@@ -609,34 +609,35 @@ g++ -std=c++17 -Wall -Wextra -Werror -DPANELAN_PRESET_TRACE -Isrc tools/test_amp
 python3 tools/test_amp_battery_poll_source.py
 ```
 
-Fresh Spark 2 500-action acceptance after this priority change (2026-10-07):
+Fresh Spark 2 500-action acceptance after the final foreground/retry-gap gate
+(2026-10-07):
 `pio run -e panelan-lvgl-controller` and
 `pio run -e panelan-lvgl-controller-preset-trace` passed, and the trace image was
 flashed to `/dev/ttyACM0`. The fresh event-driven run completed
-**500 accepted changing actions / 500 matching Ready actions** in **1527.68 s**.
-Number-confirm latency was p50 **330 ms**, p95 **417 ms**, p99 **487 ms**, max
-**594 ms**. Full Ready latency was p50 **1065.5 ms**, p95 **1152 ms**, p99
-**1216 ms**, max **1354 ms**. There were 500 number-query attempts, no Busy
+**500 accepted changing actions / 500 matching Ready actions** in **1526.50 s**.
+Number-confirm latency was p50 **330 ms**, p95 **415 ms**, p99 **479 ms**, max
+**619 ms**. Full Ready latency was p50 **1058 ms**, p95 **1154 ms**, p99
+**1217 ms**, max **1395 ms**. There were 500 number-query attempts, no Busy
 `sent=0` number polls, and no action requiring multiple sent verification
 polls.
 
-Battery query traces recorded **26 sent / 20 deferred** events and 25
+Battery query traces recorded **26 sent / 21 deferred** events and 25
 `battery_poll_due` lines. The first captured battery send (`t=8398`, owner msg 9 /
 subcommand `0x71`) has no preceding due line in the logfile, whose first trace
 timestamps are around `t=8230`; treat the due-event count as capture-incomplete.
-Of the deferrals, 16 had controller work pending with an active response-lane
-owner, three were in the controller retry gap with the lane idle, and one was
-deferred for another active owner (msg 7 / subcommand `0x76`). All due polls were
-eventually sent. No action full query was refused by a battery poll; all 500
+All 21 deferrals reported `reason=controller_work_pending`: 16 showed an active
+response-lane owner and five were in a pending-controller-work gap while the lane
+was idle. Every due poll was eventually sent. No action full query was refused
+by a battery poll; all 500
 action full queries sent and matched. There were zero full-query send
 failures, full-data timeouts/retries, preset parse rejects, stream rejects,
 frame/multipart discards, incoming rejects, trace-ring losses, or BLE disconnects.
-There were **three successful full-preset query crossings of msg 247** during
-the 500-action run (actions 78, 161, and 411), each with
+There were **four successful full-preset query crossings of msg 247** during
+the 500-action run (actions 78, 161, 411, and 494), each with
 the complete matching parse/apply/publish/lane-release/Ready chain. The receive
-totals include startup synchronization: 501 multipart completions, 375 × 17/17
-and 126 × 18/18, each followed by parse and publication. Final action 500 / target
+totals for the 500 actions were 500 multipart completions, 374 × 17/17 and 126 ×
+18/18; each completed action parsed and published. Final action 500 / target
 4 reached Ready on msg 10. Capture:
-`/tmp/opencode/panelan_preset_diagnostic_20261007_191103.log`. This is the Spark 2
+`/tmp/opencode/panelan_preset_diagnostic_20261007_194354.log`. This is the Spark 2
 preset reliability acceptance result; stop for review and do not start FX tests
 or a further soak.
