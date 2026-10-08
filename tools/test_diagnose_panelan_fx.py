@@ -1,21 +1,25 @@
 import json
+from collections import deque
 from contextlib import redirect_stderr
 from io import StringIO
 import unittest
 
-from diagnose_panelan_fx import Diagnostic, SLOTS, fx_trace, parse_args, summary
+from diagnose_panelan_fx import (Diagnostic, MAX_READY_AGE, SLOTS,
+                                 cli_prompt_only_buffer, command_write_window_clear, fx_ready, fx_trace,
+                                 parse_args, summary)
 
 
-def ready(d, t=0, phase='Ready', amp='Spark 2'):
+def ready(d, t=0, phase='Ready', amp='Spark 2', requested_at=None, **changes):
     values = {'Spark connected': 'yes', 'Amp': amp, 'Serial': 'S', 'Preset name': 'P',
               'Active hardware slot': '1', 'Current preset': '1', 'Controller phase': phase,
               'identityKnown': 'true', 'sparkStateStale': 'false',
-              'fullPresetObservedForLink': 'true', 'confirmedHardwarePreset': '1'}
-    d.on_status(values, t)
+              'fullPresetObservedForLink': 'true', 'confirmedHardwarePreset': '1',
+              'pendingHardwarePreset': '0', 'presetActionFailed': 'false'}
+    d.on_status(dict(values, **changes), t, t if requested_at is None else requested_at)
 
 
-def feed(d, line, t=1):
-    d.on_line((line + '\n').encode(), t)
+def feed(d, line, t=1, requests=None):
+    d.on_line((line + '\n').encode(), t, requests)
 
 
 def start(d, slot=0, desired=True, model='M', t=0):
@@ -46,6 +50,26 @@ def result(d, match=1, enabled=1, msg=33, ack=1, t=1.2):
 
 
 class FxDiagnosticTest(unittest.TestCase):
+    def test_fx_ready_gate_rejects_pending_or_failed_preset(self):
+        values = {'Spark connected': 'yes', 'Amp': 'Spark 2', 'Serial': 'S', 'Preset name': 'P',
+                  'Active hardware slot': '1', 'Current preset': '1', 'Controller phase': 'Ready',
+                  'identityKnown': 'true', 'sparkStateStale': 'false', 'fullPresetObservedForLink': 'true',
+                  'confirmedHardwarePreset': '1', 'pendingHardwarePreset': '0', 'presetActionFailed': 'false'}
+        self.assertTrue(fx_ready(values))
+        self.assertFalse(fx_ready(dict(values, pendingHardwarePreset='2')))
+        self.assertFalse(fx_ready(dict(values, presetActionFailed='true')))
+
+    def test_command_window_waits_for_buffered_input_and_pending_status(self):
+        self.assertTrue(command_write_window_clear(False, False, False, False))
+        for state in ((True, False, False, False), (False, True, False, False),
+                      (False, False, True, False), (False, False, False, True)):
+            with self.subTest(state=state):
+                self.assertFalse(command_write_window_clear(*state))
+        self.assertTrue(cli_prompt_only_buffer(b"> "))
+        self.assertTrue(cli_prompt_only_buffer(b"> >  "))
+        self.assertTrue(command_write_window_clear(False, not cli_prompt_only_buffer(b"> "), False, False))
+        self.assertFalse(cli_prompt_only_buffer(b"> PRESET_TRACE t=1 event=accept"))
+
     def test_fx_sent_trace_after_known_effect_logger_prefix(self):
         plain = "PRESET_TRACE t=10 event=fx_sent slot=0 msg=23 desired=0"
         self.assertEqual(fx_trace(plain), fx_trace("Switching Off effect bias.noisegate..." + plain))
@@ -63,6 +87,30 @@ class FxDiagnosticTest(unittest.TestCase):
         self.assertEqual(d.actions[0]["msg"], "23")
         self.assertEqual(d.actions[0]["desired"], False)
 
+    def test_first_direction_comes_from_controller_not_harness(self):
+        d = Diagnostic(count=1)
+        ready(d)
+        start(d, desired=False)
+        payload(d, desired=False)
+        confirm(d)
+        self.assertIsNone(d.stop)
+        self.assertFalse(d.actions[0]['desired'])
+
+    def test_prompt_embedded_missing_trace_send_counts_as_dispatched(self):
+        d = Diagnostic(count=1)
+        ready(d)
+        self.assertEqual(d.next_command(0), 'fx gate toggle')
+        feed(d, '> unrelated prefix PRESET_TRACE event=fx_sent slot=0 msg=23 desired=0', .1)
+        self.assertEqual(d.counters['event_fx_sent'], 0)
+        feed(d, '> Controller: sending FX 0 (bias.noisegate) off', .2)
+        self.assertIn('lacks matching fx_sent', d.stop)
+        self.assertEqual((summary(d, .2)['dispatched'], summary(d, .2)['actions']), (1, 0))
+        self.assertEqual(summary(d, .2)['slots']['gate']['dispatched'], 1)
+        self.assertTrue(d.current['send_seen'])
+        self.assertIsNone(d.current['msg'])
+        self.assertIsNone(d.current['source'])
+        self.assertIsNone(d.next_command(4))
+
     def setup_action(self, focus=False):
         d = Diagnostic(focus=focus, count=1, cadence=3)
         ready(d, phase='Syncing')
@@ -76,12 +124,14 @@ class FxDiagnosticTest(unittest.TestCase):
 
     def test_raw_prompt_normalized_only_at_leading_edge(self):
         d = Diagnostic(count=1)
+        requests = deque([0])
         for line in ('> --- Ignitron status ---', '> Spark connected: yes', '> Amp: Spark 2',
                      '> Serial: S', '> Preset name: P', '> Active hardware slot: 1',
                      '> Controller phase: Ready', '> identityKnown: true',
                      '> sparkStateStale: false', '> fullPresetObservedForLink: true',
-                     '> confirmedHardwarePreset: 1', '> Looper loops: 0'):
-            feed(d, line, 0)
+                     '> confirmedHardwarePreset: 1', '> pendingHardwarePreset: 0',
+                     '> presetActionFailed: false', '> Looper loops: 0'):
+            feed(d, line, 0, requests)
         self.assertEqual(d.next_command(0), 'fx gate toggle')
         feed(d, '> PRESET_TRACE event=fx_sent slot=0 msg=23 desired=1')
         feed(d, '> Controller: sending FX 0 (M) on')
@@ -354,6 +404,203 @@ class FxDiagnosticTest(unittest.TestCase):
         changed = dict(d.last_status, **{'confirmedHardwarePreset': '2'})
         d.on_status(changed, 1)
         self.assertIn('preset changed', d.stop)
+
+    def test_identity_and_preset_pin_between_actions_and_while_pending(self):
+        for focus in (False, True):
+            for change in ({'Serial': 'Other'}, {'Preset name': 'Other'},
+                           {'Current preset': '2', 'Active hardware slot': '2', 'confirmedHardwarePreset': '2'},
+                           {'confirmedHardwarePreset': '2', 'Controller phase': 'Syncing'}):
+                with self.subTest(focus=focus, change=change):
+                    d = Diagnostic(focus=focus, count=2)
+                    ready(d)
+                    start(d)
+                    if focus:
+                        d.probe_commands()
+                        ready(d, 1, **change)
+                    else:
+                        payload(d)
+                        confirm(d)
+                        ready(d, 3, **change)
+                    self.assertIn('changed', d.stop)
+                    self.assertIsNone(d.next_command(4))
+                    self.assertEqual(summary(d, 4)['dispatched'], 1)
+
+    def test_complete_status_block_catches_changed_serial_between_actions(self):
+        d = Diagnostic(count=2)
+        ready(d)
+        start(d)
+        payload(d)
+        confirm(d)
+        lines = ('--- Ignitron status ---', 'Spark connected: yes', 'Amp: Spark 2',
+                 'Serial: Other', 'Preset name: P', 'Active hardware slot: 1',
+                 'Controller phase: Ready', 'identityKnown: true', 'sparkStateStale: false',
+                 'fullPresetObservedForLink: true', 'confirmedHardwarePreset: 1',
+                 'pendingHardwarePreset: 0', 'presetActionFailed: false',
+                 'Looper loops: 0')
+        requests = deque([3])
+        for line in lines:
+            feed(d, line, 3, requests)
+        self.assertIn('changed', d.stop)
+        self.assertIsNone(d.next_command(3))
+
+    def test_stale_ready_blocks_dispatch_until_fresh_complete_status(self):
+        d = Diagnostic(count=2)
+        ready(d)
+        self.assertIsNone(d.next_command(MAX_READY_AGE + .01))
+        self.assertIsNone(d.current)
+        ready(d, 2, phase='Syncing')
+        self.assertIsNone(d.next_command(2))
+        ready(d, 3)
+        start(d, t=3)
+        payload(d, t=4)
+        confirm(d, t=4.1)
+        self.assertIsNone(d.next_command(6))  # no new Ready after first action
+        ready(d, 7)
+        self.assertIsNone(d.next_command(7 + MAX_READY_AGE + .01))
+        ready(d, 9)
+        self.assertEqual(d.next_command(9), 'fx comp toggle')
+
+    def test_ready_seen_during_action_cannot_gate_following_dispatch(self):
+        d = Diagnostic(count=2, cadence=3)
+        ready(d)
+        start(d)
+        payload(d)
+        ready(d, 1)  # a status concurrent with the in-flight FX operation
+        confirm(d, t=1.1)
+        self.assertIsNone(d.next_command(3))
+        ready(d, 3.1)  # a fresh complete snapshot after confirmation
+        self.assertEqual(d.next_command(3.1), 'fx comp toggle')
+
+    def test_status_block_started_during_action_is_discarded_on_confirmation(self):
+        d = Diagnostic(count=2, cadence=3)
+        ready(d)
+        start(d)
+        for line in ("--- Ignitron status ---", "Spark connected: yes", "Amp: Spark 2",
+                     "Serial: S", "Preset name: P", "Active hardware slot: 1",
+                     "Controller phase: Ready", "identityKnown: true", "sparkStateStale: false",
+                     "fullPresetObservedForLink: true", "confirmedHardwarePreset: 1",
+                     "pendingHardwarePreset: 0", "presetActionFailed: false"):
+            feed(d, line, .5)
+        payload(d)
+        confirm(d, t=1.1)
+        feed(d, "Looper loops: 0", 1.2)
+        self.assertIsNone(d.next_command(3.1))
+        ready(d, 3.2)
+        self.assertEqual(d.next_command(3.2), 'fx comp toggle')
+
+    def test_pre_confirm_request_completing_after_confirm_cannot_gate(self):
+        d = Diagnostic(count=2)
+        ready(d)
+        start(d)
+        requests = deque([.5])
+        for line in ('--- Ignitron status ---', 'Spark connected: yes', 'Amp: Spark 2',
+                     'Serial: S', 'Preset name: P', 'Active hardware slot: 1',
+                     'Controller phase: Ready', 'identityKnown: true', 'sparkStateStale: false',
+                     'fullPresetObservedForLink: true', 'confirmedHardwarePreset: 1',
+                     'pendingHardwarePreset: 0', 'presetActionFailed: false'):
+            feed(d, line, 1, requests)
+        payload(d, t=1.2)
+        confirm(d, t=2)
+        feed(d, 'Looper loops: 0', 2.1, requests)
+        self.assertEqual(len(requests), 0)
+        self.assertFalse(d.ready)
+        self.assertIsNone(d.next_command(3))
+        requests.append(2.5)
+        for line in ('--- Ignitron status ---', 'Spark connected: yes', 'Amp: Spark 2',
+                     'Serial: S', 'Preset name: P', 'Active hardware slot: 1',
+                     'Controller phase: Ready', 'identityKnown: true', 'sparkStateStale: false',
+                     'fullPresetObservedForLink: true', 'confirmedHardwarePreset: 1',
+                     'pendingHardwarePreset: 0', 'presetActionFailed: false',
+                     'Looper loops: 0'):
+            feed(d, line, 3, requests)
+        self.assertEqual(d.next_command(3), 'fx comp toggle')
+
+    def test_preconfirm_block_tail_cannot_consume_postconfirm_status_request(self):
+        d = Diagnostic(count=2, cadence=3)
+        ready(d)
+        start(d)
+        requests = deque([.5])
+        fields = ('Spark connected: yes', 'Amp: Spark 2', 'Serial: S', 'Preset name: P',
+                  'Active hardware slot: 1', 'Controller phase: Ready', 'identityKnown: true',
+                  'sparkStateStale: false', 'fullPresetObservedForLink: true',
+                  'confirmedHardwarePreset: 1', 'pendingHardwarePreset: 0',
+                  'presetActionFailed: false')
+        feed(d, '--- Ignitron status ---', 1, requests)
+        for line in fields:
+            feed(d, line, 1, requests)
+        payload(d, t=1.2)
+        confirm(d, t=2)
+        requests.append(2.1)  # main issues a fresh status after confirmation
+        feed(d, 'Looper loops: 0', 2.2, requests)  # tail of old pre-confirm block
+        self.assertEqual(list(requests), [2.1])
+        self.assertFalse(d.ready)
+        self.assertIsNone(d.next_command(3))
+        for line in ('--- Ignitron status ---', *fields, 'Looper loops: 0'):
+            feed(d, line, 3.1, requests)
+        self.assertEqual(list(requests), [])
+        self.assertEqual(d.next_command(3.1), 'fx comp toggle')
+
+    def test_unsolicited_ready_cannot_gate_initial_or_post_confirm_action(self):
+        d = Diagnostic(count=2)
+        ready(d)
+        start(d)
+        payload(d)
+        confirm(d)
+        d.on_status(d.last_status, 3)
+        self.assertIsNone(d.next_command(3))
+        ready(d, 3.1, requested_at=1.5)
+        self.assertIsNone(d.next_command(3.1))
+        ready(d, 3.2, requested_at=2)
+        self.assertEqual(d.next_command(3.2), 'fx comp toggle')
+        initial = Diagnostic(count=1)
+        initial.on_status(d.last_status, 0)
+        self.assertIsNone(initial.next_command(0))
+
+    def test_completed_status_consumes_oldest_request_and_checks_uncorrelated_pin(self):
+        d = Diagnostic(count=1)
+        requests = deque([0, 1])
+        lines = ('--- Ignitron status ---', 'Spark connected: yes', 'Amp: Spark 2',
+                     'Serial: S', 'Preset name: P', 'Active hardware slot: 1',
+                     'Controller phase: Ready', 'identityKnown: true', 'sparkStateStale: false',
+                     'fullPresetObservedForLink: true', 'confirmedHardwarePreset: 1',
+                     'pendingHardwarePreset: 0', 'presetActionFailed: false',
+                     'Looper loops: 0')
+        for line in lines:
+            feed(d, line, 2, requests)
+        self.assertEqual(list(requests), [1])
+        self.assertEqual(d.next_command(2), 'fx gate toggle')
+        for line in lines:
+            feed(d, line, 2.1, requests)
+        self.assertEqual(list(requests), [])
+        for line in lines:
+            feed(d, line.replace('Serial: S', 'Serial: Other'), 2.2, requests)
+        self.assertIn('changed', d.stop)
+
+    def test_expired_ready_snapshot_eventually_times_out_without_dispatch(self):
+        d = Diagnostic(count=1, ready_timeout=3)
+        ready(d, 0)
+        self.assertIsNone(d.next_command(MAX_READY_AGE + .01))
+        d.tick(MAX_READY_AGE + 3)
+        self.assertIn('Ready timeout', d.stop)
+        self.assertIsNone(d.current)
+
+    def test_fresh_status_resets_wait_after_expiry_then_no_response_times_out(self):
+        d = Diagnostic(count=1, ready_timeout=3)
+        d.tick(0)
+        ready(d, 2)
+        d.tick(2)
+        d.tick(2 + MAX_READY_AGE + 2.9)
+        self.assertIsNone(d.stop)
+        d.tick(2 + MAX_READY_AGE + 3)
+        self.assertIn('Ready timeout', d.stop)
+        self.assertIsNone(d.next_command(10))
+
+    def test_non_finite_timing_arguments_rejected(self):
+        for flag in ('--ready-timeout', '--action-timeout', '--cadence'):
+            for value in ('nan', 'inf', '-inf'):
+                with self.subTest(flag=flag, value=value):
+                    with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                        parse_args(['--port', 'p', '--count', '1', flag, value])
 
 
 if __name__ == '__main__':

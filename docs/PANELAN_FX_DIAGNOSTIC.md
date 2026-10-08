@@ -20,6 +20,29 @@ minimum command cadence is 3 seconds, Ready timeout 60 seconds and action
 timeout 20 seconds; `--cadence`, `--ready-timeout`, and `--action-timeout` can
 adjust these (cadence cannot be less than 3). An ambiguous action stops the
 run; never issue a compensating toggle automatically.
+Non-finite timing arguments (`nan`, `inf`, `-inf`) are rejected.
+
+The first Ready block pins Spark serial, active hardware slot/current preset,
+confirmed hardware preset, and preset name for the entire run. Ready also
+requires no pending/failed preset action. Any subsequent complete status
+reporting a change stops the run, including during probes or between actions.
+Dispatch also requires a complete Ready block no older than
+one second; the harness polls status again when Ready evidence ages out and
+stops after the Ready timeout if refresh never arrives. The harness pairs each
+completed status block with the oldest outstanding `status` command send time.
+Unsolicited blocks cannot authorize dispatch. After confirmation, only a Ready
+block requested at or after that confirmation can authorize the next action;
+late output from an earlier request cannot. Every complete block is still
+checked for pinned identity/preset and connection changes, even if uncorrelated
+or too old to gate. Each FX direction is read
+from the controller send line, not assumed from the harness toggle sequence.
+The harness does not enqueue status/action commands while serial input, a
+partial status block, or an outstanding status request remains.
+The CLI's standalone buffered `>` prompt is the only raw-buffer exception; it is
+retained in the raw logfile and normalized only for command-window/parsing logic.
+If the controller send line is observed but its `fx_sent` trace is missing, the
+run stops uncorrelated; the command still counts as dispatched with unknown
+message and outcome. Do not retry it.
 
 The JSON report includes last good/failed action, per-slot models, messages,
 confirmation latency/source, full-query duration, retries, Busy deferrals and
@@ -66,3 +89,17 @@ attempted after the fix because the first action's final Spark-owned state is
 unknown. The trace firmware with deferred-query diagnostics was flashed, but no
 FX retry, battery-query collision, or controller failure is evidenced by this
 capture.
+
+## Read-only state re-establishment attempt (2026-10-07)
+
+After the parser fix, the controller status gate reported Spark 2, connected,
+phase Ready, and confirmed hardware slot 4. No FX command was sent. A read-only
+`refresh` was accepted and full query msg 14 assembled and parsed, but the
+controller emitted `preset_apply_gate expected=0 match=0 acceptedActive=0` and
+`HW name cache/full preset: rejected ... checksum=44 expected=4e`; it emitted no
+`Message processed` JSON from which to read `bias.noisegate.IsOn`. Thus the
+previously dispatched gate action's resulting FX state was not re-established.
+Capture: `/tmp/opencode/panelan_fx_readonly_20261007_204334.log`. No FX toggle,
+busy probe, preset probe, focused six-slot sequence, or 500-action run followed.
+Stop for review; do not send a compensating toggle or assume the prior OFF
+command succeeded.

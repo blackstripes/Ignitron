@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Trace-firmware Spark 2 FX diagnostic. Operator supplies the CDC port; never retries an action."""
 import argparse
-from collections import Counter
+from collections import Counter, deque
 from datetime import datetime
 import json
+import math
 import os
 import re
 import select
@@ -16,6 +17,13 @@ SLOTS = ("gate", "comp", "drive", "mod", "delay", "reverb")
 SEND = re.compile(r"Controller: sending FX ([0-5]) \(([^()]+)\) (on|off)")
 CONFIRM = re.compile(r"Controller: FX ([0-5]) \(([^()]+)\) confirmed by (FX_ONOFF|full preset response)")
 LEGACY_EFFECT_PREFIX = re.compile(r"^Switching (?:On|Off) effect [^\r\n]*\.\.\.(PRESET_TRACE .*)$")
+MAX_READY_AGE = 1.0  # seconds; a status block must immediately precede dispatch
+PIN_KEYS = ('Serial', 'Current preset', 'confirmedHardwarePreset', 'Preset name')
+
+
+def fx_ready(values):
+    return (snapshot_ready(values) and values.get('pendingHardwarePreset') == '0' and
+            values.get('presetActionFailed') == 'false')
 
 
 def fx_trace(line):
@@ -28,6 +36,16 @@ def fx_trace(line):
     return trace(prefixed.group(1)) if prefixed else None
 
 
+def command_write_window_clear(input_ready, input_buffered, status_block_open, status_requests_pending):
+    """Do not enqueue CLI commands ahead of serial data already waiting to parse."""
+    return not (input_ready or input_buffered or status_block_open or status_requests_pending)
+
+
+def cli_prompt_only_buffer(raw):
+    """The CLI's standalone prompt may be buffered without a terminating newline."""
+    return bool(re.fullmatch(rb"\s*(?:>\s*)+", raw))
+
+
 class Diagnostic:
     """Hardware-free monotonic event machine; feed complete raw serial lines in arrival order."""
     def __init__(self, focus=False, count=150, cadence=3, ready_timeout=60, action_timeout=20):
@@ -37,6 +55,7 @@ class Diagnostic:
         self.ready = False
         self.ready_since = None
         self.wait_since = None
+        self.block_requested_at = None
         self.last_send = float('-inf')
         self.actions = []
         self.current = None
@@ -50,6 +69,8 @@ class Diagnostic:
         self.stop = None
         self.counters = Counter()
         self.last_status = {}
+        self.pinned_status = None
+        self.confirmed_at = None
 
     def fail(self, reason):
         if self.stop is None:
@@ -59,26 +80,34 @@ class Diagnostic:
             if 'chain changed' in reason:
                 self.counters['chain_conflicts'] += 1
 
-    def on_status(self, values, now):
+    def on_status(self, values, now, requested_at=None):
         if values is None:
             return
-        if self.current and self.focus and self.current['probe_sent'] and self.last_status:
-            for key in ('confirmedHardwarePreset', 'Preset name', 'Active hardware slot'):
-                if values.get(key) != self.last_status.get(key):
-                    self.fail('amp preset changed while rejection probes pending')
+        if self.pinned_status is not None:
+            if any(key in values and values[key] != self.pinned_status[key] for key in PIN_KEYS):
+                self.fail('Spark identity/active preset changed')
+            if (values.get('Active hardware slot') is not None and
+                    self.pinned_status['Active hardware slot'] is not None and
+                    values['Active hardware slot'] != self.pinned_status['Active hardware slot']):
+                self.fail('Spark active hardware slot changed')
         self.last_status = values
         if self.started and (values.get('Spark connected') != 'yes' or values.get('Amp') != 'Spark 2'):
             self.counters['connection_status_lost'] += 1
             self.fail('Spark connection/identity lost')
-        self.ready = snapshot_ready(values)
+        self.ready = (fx_ready(values) and requested_at is not None and
+                      (self.confirmed_at is None or requested_at >= self.confirmed_at))
         if self.ready:
+            if self.pinned_status is None:
+                self.pinned_status = {key: values.get(key) for key in (*PIN_KEYS, 'Active hardware slot')}
             self.started = True
             self.ready_since = now
+            self.wait_since = None
         elif self.current is None:
             self.ready_since = None
 
     def next_command(self, now):
-        if self.stop or self.current or not self.ready or self.ready_since is None:
+        if (self.stop or self.current or not self.ready or self.ready_since is None or
+                now - self.ready_since > MAX_READY_AGE):
             return None
         if len(self.actions) >= (12 if self.focus else self.count):
             self.stop = 'completed'
@@ -91,7 +120,7 @@ class Diagnostic:
                             msg=None, source=None, latency=None, query_msg=None,
                             query_duration=None, query_at=None, retries=0, deferrals=0,
                             events=[], payloads=[], result=None, probes=set(), probe_sent=False,
-                            probe_required=probe_required)
+                            probe_required=probe_required, send_seen=False)
         self.ready = False  # require a new authoritative Ready after every action
         self.ready_since = None
         self.last_send = now
@@ -110,11 +139,15 @@ class Diagnostic:
         a = self.current
         if a and now - a['at'] >= self.action_timeout:
             self.fail('FX action timeout')
-        if not a and self.stop is None and not self.ready:
+        fresh_ready = self.ready and self.ready_since is not None and now - self.ready_since <= MAX_READY_AGE
+        if not a and self.stop is None and not fresh_ready:
             if self.wait_since is None:
-                self.wait_since = now
+                self.wait_since = (self.ready_since + MAX_READY_AGE
+                                   if self.ready_since is not None else now)
             if now - self.wait_since >= self.ready_timeout:
                 self.fail('authoritative Spark 2 Ready timeout')
+        elif not a and fresh_ready:
+            self.wait_since = None
 
     def on_payload(self, data):
         a = self.current
@@ -132,7 +165,7 @@ class Diagnostic:
                     self.fail('conflicting Spark payload for target model')
                 a['payloads'].append((source, enabled, self.payload_at, self.payload_msg))
 
-    def on_line(self, raw, now):
+    def on_line(self, raw, now, status_requests=None):
         line = normalize_cli_line(raw.decode(errors='replace').rstrip('\r\n'))
         if line == 'Message processed:':
             self.payload = ''
@@ -150,11 +183,14 @@ class Diagnostic:
                 self.on_payload(data)
         if line == '--- Ignitron status ---':
             self.blocks = [line]
+            self.block_requested_at = (status_requests.popleft()
+                                       if status_requests is not None and status_requests else None)
         elif self.blocks:
             self.blocks.append(line)
             if line.startswith('Looper loops:'):
-                self.on_status(status(self.blocks), now)
+                self.on_status(status(self.blocks), now, self.block_requested_at)
                 self.blocks = []
+                self.block_requested_at = None
         e = fx_trace(line)
         kind = e.get('event') if e else None
         if kind:
@@ -181,6 +217,7 @@ class Diagnostic:
             self.fail(line)
         sent = SEND.search(line)
         if sent:
+            a['send_seen'] = True  # physical send is observed even when fx_sent was lost
             if a['model'] is not None or int(sent[1]) != a['slot']:
                 self.fail('unexpected FX send: ' + line)
             else:
@@ -262,6 +299,14 @@ class Diagnostic:
                 self.actions.append(a)
                 self.counters[source] += 1
                 self.current = None
+                # Require a post-confirmation snapshot before the next FX
+                # dispatch; a Ready block observed during the action is stale
+                # with respect to its final Spark-owned observation.
+                self.ready = False
+                self.ready_since = None
+                self.confirmed_at = now
+                self.blocks = []  # discard an incomplete status started before confirmation
+                self.block_requested_at = None
                 self.wait_since = now
 
 
@@ -283,7 +328,7 @@ def summary(diagnostic, runtime):
     """Aggregate only observed sends/confirmations; never infer success from ACKs."""
     actions = diagnostic.actions
     pending = diagnostic.current
-    dispatched = actions + ([pending] if pending and pending['msg'] is not None else [])
+    dispatched = actions + ([pending] if pending and (pending['msg'] is not None or pending['send_seen']) else [])
     slots = {}
     for index, name in enumerate(SLOTS):
         confirmed = [a for a in actions if a['slot'] == index]
@@ -338,8 +383,10 @@ def parse_args(argv=None):
     p.add_argument('--ready-timeout', type=float, default=60)
     p.add_argument('--action-timeout', type=float, default=20)
     args = p.parse_args(argv)
-    if (args.count is not None and not 1 <= args.count <= 500) or args.cadence < 3 or args.ready_timeout <= 0 or args.action_timeout <= 0:
-        p.error('count must be 1..500, cadence >= 3, timeouts > 0')
+    if ((args.count is not None and not 1 <= args.count <= 500) or
+            not all(math.isfinite(v) for v in (args.cadence, args.ready_timeout, args.action_timeout)) or
+            args.cadence < 3 or args.ready_timeout <= 0 or args.action_timeout <= 0):
+        p.error('count must be 1..500, cadence >= 3, timeouts > 0; values must be finite')
     return args
 
 
@@ -350,6 +397,7 @@ def main():
     path = f"/tmp/opencode/panelan_fx_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.log"
     fd, original, buf = None, None, b''
     next_status = 0
+    status_requests = deque()
     try:
         with open(path, 'xb') as log:
             fd = os.open(args.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
@@ -365,14 +413,23 @@ def main():
                 diagnostic.tick(now)
                 if diagnostic.stop:
                     break
-                if diagnostic.current is None and not diagnostic.ready and now >= next_status:
-                    os.write(fd, b'status\n')
-                    next_status = now + 1
-                command = diagnostic.next_command(now)
-                if command:
-                    os.write(fd, (command + '\n').encode())
-                for probe in diagnostic.probe_commands():
-                    os.write(fd, (probe + '\n').encode())
+                input_ready = bool(select.select([fd], [], [], 0)[0])
+                write_window = command_write_window_clear(
+                    input_ready, bool(buf) and not cli_prompt_only_buffer(buf),
+                    bool(diagnostic.blocks), bool(status_requests))
+                if write_window:
+                    if (diagnostic.current is None and
+                            (not diagnostic.ready or diagnostic.ready_since is None or
+                             now - diagnostic.ready_since > MAX_READY_AGE) and now >= next_status):
+                        os.write(fd, b'status\n')
+                        sent_at = time.monotonic()
+                        status_requests.append(sent_at)
+                        next_status = sent_at + 1
+                    command = diagnostic.next_command(now)
+                    if command:
+                        os.write(fd, (command + '\n').encode())
+                    for probe in diagnostic.probe_commands():
+                        os.write(fd, (probe + '\n').encode())
                 readable, _, _ = select.select([fd], [], [], 0.1)
                 if readable:
                     data = os.read(fd, 4096)
@@ -385,7 +442,7 @@ def main():
                         raw += b'\n'
                         log.write(datetime.now().isoformat(timespec='milliseconds').encode() + b' ' + raw)
                         log.flush()  # raw bytes precede any decoding/normalization
-                        diagnostic.on_line(raw, time.monotonic())
+                        diagnostic.on_line(raw, time.monotonic(), status_requests)
                         if diagnostic.stop:
                             break
     except (OSError, termios.error) as exc:
@@ -400,7 +457,8 @@ def main():
             os.close(fd)
     report = dict(stop=diagnostic.stop, last_good=diagnostic.actions[-1] if diagnostic.actions else None,
                   failed=diagnostic.current, models=diagnostic.models, counts=dict(diagnostic.counters),
-                  dispatched=len(diagnostic.actions) + int(diagnostic.current is not None and diagnostic.current['msg'] is not None),
+                  dispatched=len(diagnostic.actions) + int(diagnostic.current is not None and
+                      (diagnostic.current['msg'] is not None or diagnostic.current['send_seen'])),
                    logfile=path, actions=diagnostic.actions,
                    summary=summary(diagnostic, time.monotonic() - started_at))
     print(json.dumps(report, indent=2, default=str))
