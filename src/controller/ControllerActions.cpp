@@ -940,7 +940,19 @@ void ControllerActions::process(SparkDataControl &dataControl) {
                 const bool retry = fxFullPresetRetry_.queryDispatched();
                 uint8_t fxQueryMessage = 0;
                 const bool sent = dataControl.getCurrentPresetFromSpark(&fxQueryMessage);
-                if (!sent && keepQueuedSparkIntent(dataControl.lastSubmissionStatus())) return;
+                if (!sent && keepQueuedSparkIntent(dataControl.lastSubmissionStatus())) {
+#ifdef PANELAN_PRESET_TRACE
+                    const auto transport = SparkDataControl::presetTransportTrace();
+                    const char *submission = transport.submission == SparkSubmission::Sent ? "Sent" :
+                                             transport.submission == SparkSubmission::Busy ? "Busy" : "Failed";
+                    PRESET_TRACE("event=fx_full_query_deferred slot=%u desired=%u lastSubmissionStatus=%s currentCommandHasRemaining=%u currentCommandRemainingParts=%d responseLaneActive=%u ownerMsg=%u ownerSub=%02X controllerFullPresetMessageNumber=%u",
+                                 sentFxSlot_, sentFxDesiredEnabled_, submission,
+                                 transport.commandHasRemaining, transport.commandRemainingParts,
+                                 transport.responseLaneActive, transport.ownerMessage, transport.ownerSubcommand,
+                                 transport.controllerFullPresetMessageNumber);
+#endif
+                    return;
+                }
                 if (sent && retry) SparkDataControl::recordTransportRetry();
                 SparkDataControl::expectControllerFullPreset(0);
                 fxFullPresetRetry_.attemptedAt(millis(), sent, fxQueryMessage, revisionBeforeSend,
