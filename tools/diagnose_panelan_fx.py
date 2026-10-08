@@ -19,11 +19,42 @@ CONFIRM = re.compile(r"Controller: FX ([0-5]) \(([^()]+)\) confirmed by (FX_ONOF
 LEGACY_EFFECT_PREFIX = re.compile(r"^Switching (?:On|Off) effect [^\r\n]*\.\.\.(PRESET_TRACE .*)$")
 MAX_READY_AGE = 1.0  # seconds; a status block must immediately precede dispatch
 PIN_KEYS = ('Serial', 'Current preset', 'confirmedHardwarePreset', 'Preset name')
+FX_LINE = re.compile(r'^FX (gate|comp|drive|mod|delay|reverb): known=(true|false) model=(.*?) enabled=(true|false) pending=(true|false) failed=(true|false)$')
+
+
+def fx_status(lines):
+    """Parse FX observations only from a complete CLI status block."""
+    values = status(lines)
+    if values is None:
+        return None
+    slots = {}
+    chains = []
+    for raw in lines:
+        line = normalize_cli_line(raw)
+        if line.startswith('FX chain: '):
+            chains.append(line[len('FX chain: '):])
+        match = FX_LINE.fullmatch(line)
+        if line.startswith('FX ') and not line.startswith('FX chain: ') and not match:
+            return values  # malformed FX observation cannot authorize dispatch
+        if match:
+            name, known, model, enabled, pending, failed = match.groups()
+            if name in slots:
+                return values  # duplicate observations cannot establish Ready
+            slots[name] = dict(known=known == 'true', model=model, enabled=enabled == 'true',
+                               pending=pending == 'true', failed=failed == 'true')
+    if len(chains) == 1:
+        values['FX chain'] = chains[0]
+    values['FX slots'] = slots
+    return values
 
 
 def fx_ready(values):
     return (snapshot_ready(values) and values.get('pendingHardwarePreset') == '0' and
-            values.get('presetActionFailed') == 'false')
+            values.get('presetActionFailed') == 'false' and
+            values.get('FX chain') not in (None, '', '(unknown)') and
+            all((slot := values.get('FX slots', {}).get(name)) is not None and
+                slot['known'] and slot['model'] not in ('', '(unknown)') and
+                not slot['pending'] and not slot['failed'] for name in SLOTS))
 
 
 def fx_trace(line):
@@ -70,6 +101,7 @@ class Diagnostic:
         self.counters = Counter()
         self.last_status = {}
         self.pinned_status = None
+        self.baseline = None
         self.confirmed_at = None
 
     def fail(self, reason):
@@ -90,6 +122,11 @@ class Diagnostic:
                     self.pinned_status['Active hardware slot'] is not None and
                     values['Active hardware slot'] != self.pinned_status['Active hardware slot']):
                 self.fail('Spark active hardware slot changed')
+            if 'FX chain' in values and values['FX chain'] != self.baseline['chain']:
+                self.fail('FX chain changed')
+            for name, slot in values.get('FX slots', {}).items():
+                if slot['model'] != self.baseline['slots'][name]['model']:
+                    self.fail('FX model changed: ' + name)
         self.last_status = values
         if self.started and (values.get('Spark connected') != 'yes' or values.get('Amp') != 'Spark 2'):
             self.counters['connection_status_lost'] += 1
@@ -99,6 +136,13 @@ class Diagnostic:
         if self.ready:
             if self.pinned_status is None:
                 self.pinned_status = {key: values.get(key) for key in (*PIN_KEYS, 'Active hardware slot')}
+                self.baseline = dict(chain=values['FX chain'], slots={name: dict(values['FX slots'][name])
+                                                                     for name in SLOTS})
+                self.models = {i: self.baseline['slots'][name]['model'] for i, name in enumerate(SLOTS)}
+                self.states = {i: self.baseline['slots'][name]['enabled'] for i, name in enumerate(SLOTS)}
+            if self.current is None and any(values['FX slots'][name]['enabled'] != self.states[i]
+                                            for i, name in enumerate(SLOTS)):
+                self.fail('FX status state differs from last confirmed state')
             self.started = True
             self.ready_since = now
             self.wait_since = None
@@ -188,7 +232,7 @@ class Diagnostic:
         elif self.blocks:
             self.blocks.append(line)
             if line.startswith('Looper loops:'):
-                self.on_status(status(self.blocks), now, self.block_requested_at)
+                self.on_status(fx_status(self.blocks), now, self.block_requested_at)
                 self.blocks = []
                 self.block_requested_at = None
         e = fx_trace(line)
@@ -456,7 +500,8 @@ def main():
                 termios.tcsetattr(fd, termios.TCSANOW, original)
             os.close(fd)
     report = dict(stop=diagnostic.stop, last_good=diagnostic.actions[-1] if diagnostic.actions else None,
-                  failed=diagnostic.current, models=diagnostic.models, counts=dict(diagnostic.counters),
+                   failed=diagnostic.current, models=diagnostic.models, baseline=diagnostic.baseline,
+                   last_status=diagnostic.last_status, counts=dict(diagnostic.counters),
                   dispatched=len(diagnostic.actions) + int(diagnostic.current is not None and
                       (diagnostic.current['msg'] is not None or diagnostic.current['send_seen'])),
                    logfile=path, actions=diagnostic.actions,

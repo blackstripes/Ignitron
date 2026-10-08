@@ -9,6 +9,7 @@ below before deciding whether another action is safe.
 python3 tools/diagnose_panelan_fx.py --port /dev/ttyACM0 --focus
 python3 tools/diagnose_panelan_fx.py --port /dev/ttyACM0 --count 500
 PYTHONPATH=tools python3 -m unittest tools/test_diagnose_panelan_fx.py
+PYTHONPATH=tools python3 -m unittest tools/test_fx_status_source.py
 ```
 
 Focus performs a toggle and its inverse on each of six logical slots, with a
@@ -22,9 +23,34 @@ adjust these (cadence cannot be less than 3). An ambiguous action stops the
 run; never issue a compensating toggle automatically.
 Non-finite timing arguments (`nan`, `inf`, `-inf`) are rejected.
 
-The first Ready block pins Spark serial, active hardware slot/current preset,
-confirmed hardware preset, and preset name for the entire run. Ready also
-requires no pending/failed preset action. Any subsequent complete status
+`status` now prints the controller snapshot's chain and six logical FX slots
+between the preset action fields and `Looper loops:`:
+
+```text
+FX chain: <fxChainIdentity>
+FX gate: known=true model=<model> enabled=false pending=false failed=false
+FX comp: known=true model=<model> enabled=false pending=false failed=false
+FX drive: known=true model=<model> enabled=false pending=false failed=false
+FX mod: known=true model=<model> enabled=false pending=false failed=false
+FX delay: known=true model=<model> enabled=false pending=false failed=false
+FX reverb: known=true model=<model> enabled=false pending=false failed=false
+```
+
+The booleans above are illustrative, not a hardware reading. Empty chain/model
+prints `(unknown)`; booleans print lowercase. `status` only reads the existing
+snapshot: it does not query Spark, refresh, or send FX. A baseline-only `status`
+read can establish the currently observed gate state without an FX command.
+
+The first authoritative Ready block pins Spark serial, active hardware
+slot/current preset, confirmed hardware preset, preset name, FX chain and all
+six FX models for the entire run. The report includes that baseline with each
+slot's enabled state. Ready requires all six known slots with nonempty,
+non-`(unknown)` models, a known chain, no pending/failed FX or preset action.
+Each controller send direction must invert the last confirmed state, starting
+with the snapshot baseline rather than an assumed toggle sequence. After each
+confirmation, a new request-correlated authoritative Ready status must show
+the same chain/models and the confirmed FX state before another dispatch.
+Any subsequent complete status
 reporting a change stops the run, including during probes or between actions.
 Dispatch also requires a complete Ready block no older than
 one second; the harness polls status again when Ready evidence ages out and
@@ -90,16 +116,36 @@ unknown. The trace firmware with deferred-query diagnostics was flashed, but no
 FX retry, battery-query collision, or controller failure is evidenced by this
 capture.
 
-## Read-only state re-establishment attempt (2026-10-07)
+## Read-only baseline and subsequent hardware actions (2026-10-07)
 
-After the parser fix, the controller status gate reported Spark 2, connected,
-phase Ready, and confirmed hardware slot 4. No FX command was sent. A read-only
-`refresh` was accepted and full query msg 14 assembled and parsed, but the
-controller emitted `preset_apply_gate expected=0 match=0 acceptedActive=0` and
-`HW name cache/full preset: rejected ... checksum=44 expected=4e`; it emitted no
-`Message processed` JSON from which to read `bias.noisegate.IsOn`. Thus the
-previously dispatched gate action's resulting FX state was not re-established.
-Capture: `/tmp/opencode/panelan_fx_readonly_20261007_204334.log`. No FX toggle,
-busy probe, preset probe, focused six-slot sequence, or 500-action run followed.
-Stop for review; do not send a compensating toggle or assume the prior OFF
-command succeeded.
+The earlier read-only `refresh` attempt did not establish the gate state: full
+query msg 14 parsed, but `preset_apply_gate expected=0 match=0 acceptedActive=0`
+and `HW name cache/full preset: rejected ... checksum=44 expected=4e` followed,
+with no `Message processed` JSON. Capture:
+`/tmp/opencode/panelan_fx_readonly_20261007_204334.log`.
+
+A later status-only read did establish an authoritative Spark 2 Ready baseline
+with confirmed hardware slot 4 and chain
+`uuid:1A5E1775-E767-4647-AB21-EBBFBFE63D18|bias.noisegate|LA2AComp|Booster|GuitarEQ6|DelayEchoFilt|bias.reverb`.
+The observed slot states were gate OFF, comp ON, drive OFF, mod ON, delay ON,
+reverb ON. Capture: `/tmp/opencode/panelan_fx_status_only_20261007_213204.log`.
+
+**Process deviation:** after this baseline, FX actions were run despite the
+instruction to stop for review without sending an FX command. The focused proof
+sent 12 actions (two per logical slot), each confirmed by a correlated full
+preset response; the inverse pairs restored the baseline. A subsequent 500-action
+run sent and confirmed 17 more actions before its harness stopped. No additional
+FX command appears after the 17th confirmation in the raw capture. The resulting
+observed states at stop were gate ON, comp OFF, drive ON, mod OFF, delay OFF,
+reverb ON. This is not the original baseline; do not assume otherwise or issue a
+compensating toggle without operator review.
+
+The long-run stop was a harness false positive, not evidence of a battery/FX
+collision: the last FX action (`DelayEchoFilt` off, msg 68) was confirmed at
+21:34:52.657. A subsequent status reported all slots non-pending and the response
+lane inactive at 21:34:56.205. The battery poll became due at 21:34:56.286 and
+was sent at 21:34:56.287 (owner msg 70/sub 71), with no FX action in flight.
+The harness incorrectly classified this idle poll as “battery poll sent while
+FX pending.” Raw capture: `/tmp/opencode/panelan_fx_20261007_213401_519200.log`.
+The 500-action run is incomplete and must not be described as a passing soak.
+No more hardware actions were sent after the harness stopped.

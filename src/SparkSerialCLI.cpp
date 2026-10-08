@@ -204,6 +204,16 @@ void SparkSerialCLI::printStatus() {
         Serial.printf("confirmedHardwarePreset: %u\n", snapshot.confirmedHardwarePreset);
         Serial.printf("pendingHardwarePreset: %u\n", snapshot.pendingHardwarePreset);
         Serial.printf("presetActionFailed: %s\n", snapshot.presetActionFailed ? "true" : "false");
+        Serial.printf("FX chain: %s\n", snapshot.fxChainIdentity.empty() ? "(unknown)" : snapshot.fxChainIdentity.c_str());
+        static constexpr const char *fxLabels[] = {"gate", "comp", "drive", "mod", "delay", "reverb"};
+        for (size_t i = 0; i < snapshot.fxSlots.size(); ++i) {
+            const ControllerFxSlot &slot = snapshot.fxSlots[i];
+            Serial.printf("FX %s: known=%s model=%s enabled=%s pending=%s failed=%s\n",
+                          fxLabels[i], slot.known ? "true" : "false",
+                          slot.modelName.empty() ? "(unknown)" : slot.modelName.c_str(),
+                          slot.enabled ? "true" : "false", slot.pending ? "true" : "false",
+                          slot.actionFailed ? "true" : "false");
+        }
     }
 #ifdef PANELAN_PRESET_TRACE
     const auto transport = SparkDataControl::presetTransportTrace();
