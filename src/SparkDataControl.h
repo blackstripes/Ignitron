@@ -19,6 +19,7 @@
 #include "SparkTransportTelemetry.h"
 #include "SparkRetainedIntents.h"
 #include "SparkSubmission.h"
+#include "AmpBatteryPoll.h"
 
 #include <Arduino.h>
 #include <atomic>
@@ -114,6 +115,8 @@ public:
 
     // Check if a preset has been updated (via ack or from Spark)
     void checkForUpdates();
+    // Low-priority periodic query: caller confirms foreground is ready after actions.
+    void serviceBackgroundQueries(bool foregroundReady);
 
     static bool getAmpName();
     static bool getCurrentPresetNum(uint8_t *messageNumber = nullptr);
@@ -271,8 +274,8 @@ private:
     static bool recordStartFlag;
 
     static bool ampNameReceived_;
-    const unsigned int updateAmpBatteryInterval = 60000; // Update battery status every minute
     unsigned int lastAmpBatteryUpdate = 0;               // When battery level was last updated
+    AmpBatteryPoll ampBatteryPoll_;
 
     // static LooperSetting *looperSetting_;
 

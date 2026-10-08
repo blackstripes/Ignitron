@@ -45,6 +45,8 @@ public:
     // Idempotent; never sends a Spark command.
     void onAmpDisconnected();
     void process(SparkDataControl &dataControl);
+    // Read-only priority gate for background queries, after process() on this tick.
+    bool backgroundQueriesAllowed() const;
 
 private:
     static constexpr uint32_t kPresetTimeoutMs = 5000;

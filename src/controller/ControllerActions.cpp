@@ -172,6 +172,20 @@ bool ControllerActions::hasPendingFxOperation() const {
     return queuedFxSlot_ != kNoFxSlot || sentFxSlot_ != kNoFxSlot;
 }
 
+bool ControllerActions::backgroundQueriesAllowed() const {
+    const ControllerSnapshot &snapshot = state_.snapshot();
+    return snapshot.connectionPhase == ControllerConnectionPhase::Ready &&
+           snapshot.fullPresetObservedForLink && !snapshot.sparkStateStale &&
+           snapshot.pendingHardwarePreset == 0 && !snapshot.presetActionFailed &&
+           sentPreset_ == 0 && presetTargets_.queued() == 0 && presetTargets_.deferred() == 0 &&
+           !presetTimeoutReconcile_.needed() && !awaitingPresetFullResponse_ &&
+           // A revoked post-switch full query is still pending retry even when
+           // its response lane is idle. Startup's completed query stays recorded.
+           (!fullPresetRetry_.attempted() || startupFullPresetQueryIssued_) &&
+           !hasPendingFxOperation() && !queuedTunerRequest_ && !tunerRequestSent_ &&
+           queuedLooperAction_ == LooperAction::None && sentLooperAction_ == LooperAction::None;
+}
+
 void ControllerActions::cancelFxRequest(ControllerState &state, SparkDataControl *dataControl, bool refresh,
                                         const char *reason) {
     const uint8_t slot = sentFxSlot_ != kNoFxSlot ? sentFxSlot_ : queuedFxSlot_;

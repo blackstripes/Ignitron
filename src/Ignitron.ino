@@ -310,7 +310,13 @@ void loop() {
 #ifdef PANELAN_LVGL_UI_MODE
     controllerState.refreshFromSpark(*spark_dc);
     controllerActions.process(*spark_dc);
+    const bool foregroundReady = controllerActions.backgroundQueriesAllowed();
+#else
+    const bool foregroundReady = true;
 #endif
+    if (operationMode != SPARK_MODE_KEYBOARD) {
+        spark_dc->serviceBackgroundQueries(foregroundReady);
+    }
 
 #ifdef HEADLESS_SERIAL_MODE
     serialCLI->update();

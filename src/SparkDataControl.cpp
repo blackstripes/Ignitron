@@ -457,6 +457,7 @@ void SparkDataControl::resetStatus() {
     sparkAmpName = "Spark 40";
     withDelay = false;
     lastAmpBatteryUpdate = 0;
+    ampBatteryPoll_.reset();
     ingressInvalidated_.store(false);
     clearQueuedMessages();
     sparkSsr.reset();
@@ -610,17 +611,6 @@ void SparkDataControl::checkForUpdates() {
         }
     }
 
-#ifdef ENABLE_BATTERY_STATUS_INDICATOR
-#if BATTERY_TYPE == BATTERY_TYPE_AMP
-    unsigned int currentTime = millis();
-    if (lastAmpBatteryUpdate == 0 || (currentTime - lastAmpBatteryUpdate > updateAmpBatteryInterval)) {
-        Serial.println("Reading current battery level");
-        currentMsg = sparkMsg.getAmpStatus(nextMessageNum);
-        if (triggerCommand(currentMsg)) lastAmpBatteryUpdate = currentTime;
-    }
-#endif
-#endif
-
     if (operationMode_ == SPARK_MODE_AMP) {
 
         // Read incoming (serial) Bluetooth data, if available
@@ -644,6 +634,45 @@ void SparkDataControl::checkForUpdates() {
             }
         }
     }
+}
+
+void SparkDataControl::serviceBackgroundQueries(bool foregroundReady) {
+#if defined(ENABLE_BATTERY_STATUS_INDICATOR) && BATTERY_TYPE == BATTERY_TYPE_AMP
+    if (operationMode_ == SPARK_MODE_KEYBOARD) return;
+    const bool connected = operationMode_ == SPARK_MODE_AMP ? isAppConnected() : isAmpConnected();
+    ampBatteryPoll_.service(millis(), connected, foregroundReady, lastAmpBatteryUpdate,
+        []() -> AmpBatteryPoll::Transport {
+            return {lastSubmissionStatus_, currentCommand.hasRemaining(),
+                    static_cast<int>(currentCommand.remainingCount()), responseLane_.active(),
+#ifdef PANELAN_PRESET_TRACE
+                    responseLane_.traceMessageNumber(), responseLane_.traceSubcommand(), false};
+#else
+                    0, 0, false};
+#endif
+        },
+        []() {
+            currentMsg = sparkMsg.getAmpStatus(nextMessageNum);
+            return triggerCommand(currentMsg);
+        },
+        [](AmpBatteryPoll::Event event, const AmpBatteryPoll::Transport &transport) {
+#ifdef PANELAN_PRESET_TRACE
+            const char *name = event == AmpBatteryPoll::Event::Due ? "battery_poll_due" :
+                               event == AmpBatteryPoll::Event::Sent ? "battery_poll_sent" : "battery_poll_deferred";
+            const char *status = transport.submission == SparkSubmission::Sent ? "Sent" :
+                                 transport.submission == SparkSubmission::Busy ? "Busy" : "Failed";
+            Serial.printf("PRESET_TRACE t=%lu event=%s lastSubmissionStatus=%s currentCommandHasRemaining=%u currentCommandRemainingParts=%d responseLaneActive=%u ownerMsg=%u ownerSub=%02X%s\n",
+                          (unsigned long)millis(), name, status, transport.remaining,
+                          transport.remainingParts, transport.laneActive,
+                          transport.ownerMessage, transport.ownerSubcommand,
+                          event == AmpBatteryPoll::Event::Deferred && transport.controllerWorkPending
+                              ? " reason=controller_work_pending" : "");
+#else
+            (void)event; (void)transport;
+#endif
+        });
+#else
+    (void)foregroundReady;
+#endif
 }
 
 void SparkDataControl::processSparkData(ByteVector &blk
