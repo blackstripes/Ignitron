@@ -31,7 +31,10 @@ def status_lines(models=None, enabled=None, chain='chain'):
             'Serial: S', 'Preset name: P', 'Active hardware slot: 1',
             'Controller phase: Ready', 'identityKnown: true', 'sparkStateStale: false',
             'fullPresetObservedForLink: true', 'confirmedHardwarePreset: 1',
-            'pendingHardwarePreset: 0', 'presetActionFailed: false', f'FX chain: {chain}',
+            'pendingHardwarePreset: 0', 'presetActionFailed: false',
+            'lastSubmissionStatus: Sent', 'currentCommand hasRemaining: false  remainingParts: 0',
+            'responseLane active: false  owner msg: 0  owner sub: 00',
+            'controllerFullPresetMessageNumber: 0', f'FX chain: {chain}',
             *(f'FX {name}: known=true model={(models or ["M"] * 6)[i]} enabled={"true" if (enabled or [False] * 6)[i] else "false"} pending=false failed=false'
               for i, name in enumerate(SLOTS)), 'Looper loops: 0')
 
@@ -345,6 +348,43 @@ class FxDiagnosticTest(unittest.TestCase):
         d = self.setup_action()
         ready(d, 1, amp='Spark')
         self.assertIn('lost', d.stop)
+
+    def test_battery_poll_after_confirm_completion_and_idle_status_is_valid(self):
+        d = self.setup_action()
+        payload(d)
+        confirm(d)
+        self.assertIsNone(d.current)  # authoritative confirmation completes action
+        requests = deque([3])
+        for line in status_lines(enabled=[True] + [False] * 5):
+            feed(d, line, 3, requests)
+        self.assertTrue(d.ready)
+        self.assertEqual(d.last_status['responseLane active'], 'false')
+        self.assertFalse(any(slot['pending'] for slot in d.last_status['FX slots'].values()))
+        feed(d, 'PRESET_TRACE event=battery_poll_sent lastSubmissionStatus=Sent '
+                'currentCommandHasRemaining=0 currentCommandRemainingParts=0 '
+                'responseLaneActive=1 ownerMsg=70 ownerSub=71', 3.1)
+        self.assertIsNone(d.stop)
+        self.assertEqual(d.actions[0]['source'], 'FX_ONOFF')
+        self.assertEqual(d.counters['event_battery_poll_sent'], 1)
+
+    def test_battery_poll_before_controller_fx_send_is_not_collision(self):
+        d = Diagnostic(count=1)
+        ready(d)
+        self.assertEqual(d.next_command(0), 'fx gate toggle')
+        self.assertIsNone(d.current['msg'])
+        self.assertFalse(d.current['send_seen'])
+        feed(d, 'PRESET_TRACE event=battery_poll_sent ownerSub=71', .1)
+        self.assertIsNone(d.stop)
+        feed(d, 'PRESET_TRACE event=fx_sent slot=0 msg=23 desired=1', .2)
+        feed(d, 'Controller: sending FX 0 (M) on', .3)
+        feed(d, 'PRESET_TRACE event=battery_poll_sent ownerSub=71', .4)
+        self.assertIn('battery poll sent while FX pending', d.stop)
+
+    def test_battery_poll_owning_fx_verification_lane_still_fails(self):
+        d = self.setup_action()
+        feed(d, 'PRESET_TRACE event=fx_full_query_deferred slot=0 desired=1 '
+                'lastSubmissionStatus=Busy ownerSub=71')
+        self.assertIn('battery collision', d.stop)
 
     def test_busy_other_owner_then_success(self):
         d = self.setup_action()

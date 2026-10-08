@@ -252,7 +252,7 @@ class Diagnostic:
             return
         if e:
             a['events'].append(dict(e, at=now))
-        if kind == 'battery_poll_sent':
+        if kind == 'battery_poll_sent' and (a['msg'] is not None or a['send_seen']):
             self.fail('battery poll sent while FX pending')
         if kind in ('frame_discard', 'multipart_discard', 'preset_parse_reject', 'incoming_reject',
                     'stream_message_reject', 'stream_discard', 'multipart_timeout'):

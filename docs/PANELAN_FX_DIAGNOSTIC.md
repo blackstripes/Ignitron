@@ -148,4 +148,45 @@ was sent at 21:34:56.287 (owner msg 70/sub 71), with no FX action in flight.
 The harness incorrectly classified this idle poll as “battery poll sent while
 FX pending.” Raw capture: `/tmp/opencode/panelan_fx_20261007_213401_519200.log`.
 The 500-action run is incomplete and must not be described as a passing soak.
-No more hardware actions were sent after the harness stopped.
+No additional hardware actions were sent within that failed attempt.
+
+## Fresh 500-action acceptance attempt (2026-10-07)
+
+After the harness false-positive fix and host regressions passed, a fresh run
+started from an authoritative Spark 2 Ready status. It stopped on a genuine
+20-second `FX action timeout` at 191 dispatched / 190 confirmed; this is not a
+passing 500-action acceptance. There were no concurrency probes. Capture:
+`/tmp/opencode/panelan_fx_20261007_215020_606449.log`; JSON report:
+`/home/pzwolinski/.local/share/opencode/tool-output/tool_11976d222001FFJXOhcNA3Fyig`.
+
+The unresolved dispatch was `DelayEchoFilt` OFF, FX msg 226, followed by full
+preset query msg 227. The correlated full-preset response was parsed and reported
+`match=1 known=1 enabled=0 desired=0 chain=1`, but no complete
+`Controller: FX 4 (DelayEchoFilt) confirmed ...` line was captured before the
+action deadline; the raw log ends with a partial `Con`. Thus the amp response
+observed the requested OFF state, but the controller action completion and a
+post-action Ready snapshot were not captured. Stop here: do not retry or issue a
+compensating toggle until operator review. The reported last Ready snapshot was
+before this unresolved dispatch.
+
+Partial results from 190 confirmed actions:
+
+| Slot | Dispatched | Confirmed | ON | OFF | Confirmation source |
+| --- | ---: | ---: | ---: | ---: | --- |
+| gate (`bias.noisegate`) | 32 | 32 | 16 | 16 | full preset response 32 |
+| comp (`LA2AComp`) | 32 | 32 | 16 | 16 | full preset response 32 |
+| drive (`Booster`) | 32 | 32 | 16 | 16 | full preset response 32 |
+| mod (`GuitarEQ6`) | 32 | 32 | 16 | 16 | full preset response 32 |
+| delay (`DelayEchoFilt`) | 32 | 31 | 16 | 15 | full preset response 31 |
+| reverb (`bias.reverb`) | 31 | 31 | 16 | 15 | full preset response 31 |
+| **Total** | **191** | **190** | **95** | **95** | **full preset response 190** |
+
+Confirmed-action latency was p50 1.739 s, p95 1.748 s, p99 1.813 s, max 1.928 s.
+All 190 confirmations used full-preset verification; its latency was p50 0.652 s,
+p95 0.663 s, p99 0.670 s, max 0.720 s. Busy/deferred owners were zero. There
+were zero FX full-query retries or send failures; one action timed out while
+awaiting controller confirmation, despite the matching query result (the JSON
+summary counts one full-query timeout because the action stopped with “timeout”).
+There were 12 battery sends and 12 deferrals, with no battery collision reported.
+There were zero model/chain conflicts, parser/framing/multipart/stream anomalies,
+BLE disconnects, or ingress trace losses. The run lasted 759.08 seconds.
