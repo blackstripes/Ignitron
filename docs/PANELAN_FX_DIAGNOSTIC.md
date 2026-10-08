@@ -317,8 +317,42 @@ battery collisions, transport/parser/framing/multipart/stream anomalies,
 disconnects, or trace losses. Battery polls: 8 sent, 8 deferred. Runtime was
 529.60 seconds. The raw capture shows successful full-result and post-bookkeeping
 confirmation traces paired at the same firmware timestamp; no delayed/fragmented
-proof required the 30-second host-only window in this rerun. This is a focused
-stress pass, **not** the requested 500-action acceptance; stop for review before
-any 500-action run. The final states were gate OFF, comp OFF, drive ON, mod ON,
-delay ON, reverb ON—the inverse of baseline for every slot because each was
-toggled 25 times. No restoration command was sent.
+proof required the 30-second host-only window in this rerun. This was a focused
+stress pass; the requested 500-action acceptance follows.
+
+## Spark 2 FX reliability acceptance pass (2026-10-08)
+
+The requested 500-action event-driven run completed with **500 dispatched / 500
+controller-confirmed / 500 post-action Ready**. The read-only pre-run baseline
+passed Spark 2 Ready, serial `S5011I16101117`, hardware slot 4, all six
+known/non-pending/non-failed FX slots, no pending/failed preset action, and an
+idle response lane. Baseline: gate OFF, comp OFF, drive ON, mod ON, delay ON,
+reverb ON. No state restoration commands or concurrency probes were sent. Raw
+capture: `/tmp/opencode/panelan_fx_20261008_073240_098167.log`; JSON report:
+`/home/pzwolinski/.local/share/opencode/tool-output/tool_11b9e5e47001CX9ApCg14lBNHQ`.
+
+| Slot | Dispatched | Controller-confirmed | Post-action Ready | ON | OFF | Confirmation source |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| gate (`bias.noisegate`) | 84 | 84 | 84 | 42 | 42 | full preset response 84 |
+| comp (`LA2AComp`) | 84 | 84 | 84 | 42 | 42 | full preset response 84 |
+| drive (`Booster`) | 83 | 83 | 83 | 41 | 42 | full preset response 83 |
+| mod (`GuitarEQ6`) | 83 | 83 | 83 | 41 | 42 | full preset response 83 |
+| delay (`DelayEchoFilt`) | 83 | 83 | 83 | 41 | 42 | full preset response 83 |
+| reverb (`bias.reverb`) | 83 | 83 | 83 | 41 | 42 | full preset response 83 |
+| **Total** | **500** | **500** | **500** | **248** | **252** | **full preset response 500** |
+
+Controller confirmation elapsed: p50 **1739 ms**, p95 **1749 ms**, p99 **1825.04 ms**,
+max **1918 ms**. Host proof-delivery delay: p50 **0.137 ms**, p95 **0.228 ms**,
+p99 **0.319 ms**, max **0.469 ms**. Full-preset verification latency: p50
+**0.652 s**, p95 **0.662 s**, p99 **0.728 s**, max **0.831 s**. All 500 actions
+required correlated full-preset verification. Retries, timeouts, query send
+failures, Busy/deferred owners, battery collisions, model/chain conflicts,
+framing/multipart/parser/stream anomalies, BLE disconnects, and trace losses were
+all **zero**. Battery polls: **33 sent / 28 deferred**. Runtime: **1965.54 s**.
+The final Ready status showed all FX slots non-pending/non-failed and OFF; no
+restoration commands were issued.
+
+This is the **Spark 2 FX reliability acceptance pass**. Combined with the
+500/500 Spark 2 preset acceptance in `docs/SPARK_RECEIVE_FRAMING.md`, Spark 2
+preset + FX core control reliability is complete. This does not cover tuner,
+looper, UI, or NEO Core follow-up work.

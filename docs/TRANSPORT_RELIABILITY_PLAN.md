@@ -963,3 +963,17 @@ it does not explain action 239 or action 203/msg=247, whose earlier captures do
 not include handoff events. Action 131 remains unresolved and was not pursued.
 The physical Spark 2 power-off remains a separate unresolved observation. The
 500-action soak remains stopped for review.
+
+## Spark 2 preset + FX core control acceptance (complete, 2026-10-08)
+
+The earlier interrupted preset and FX attempts above remain historical failures;
+they were not retroactively counted as passes. Separate fresh acceptance runs
+subsequently completed:
+
+- Presets: **500/500 accepted changing actions / 500 matching Ready actions**;
+  details in `docs/SPARK_RECEIVE_FRAMING.md` (2026-10-07).
+- FX: **500/500 dispatched / 500 controller-confirmed / 500 post-action Ready**;
+  details and complete metrics in `docs/PANELAN_FX_DIAGNOSTIC.md` (2026-10-08).
+
+These results complete the Spark 2 preset + FX core control reliability gate.
+They do not cover tuner, looper, UI, or NEO Core follow-up work.

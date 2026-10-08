@@ -639,5 +639,8 @@ totals for the 500 actions were 500 multipart completions, 374 × 17/17 and 126 
 18/18; each completed action parsed and published. Final action 500 / target
 4 reached Ready on msg 10. Capture:
 `/tmp/opencode/panelan_preset_diagnostic_20261007_194354.log`. This is the Spark 2
-preset reliability acceptance result; stop for review and do not start FX tests
-or a further soak.
+preset reliability acceptance result. The separate Spark 2 FX reliability
+acceptance subsequently passed 500/500 on 2026-10-08; see
+`docs/PANELAN_FX_DIAGNOSTIC.md`. Together, the preset and FX core control
+acceptance targets are complete. Tuner, looper, UI, and NEO Core work remain
+outside this result.
