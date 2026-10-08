@@ -115,6 +115,11 @@ class Diagnostic:
     def on_status(self, values, now, requested_at=None):
         if values is None:
             return
+        # A late complete Ready block must not erase an already-expired wait.
+        if self.current is None and self.stop is None:
+            self.tick(now)
+        if self.stop:
+            return
         if self.pinned_status is not None:
             if any(key in values and values[key] != self.pinned_status[key] for key in PIN_KEYS):
                 self.fail('Spark identity/active preset changed')
@@ -181,8 +186,11 @@ class Diagnostic:
 
     def tick(self, now):
         a = self.current
-        if a and now - a['at'] >= self.action_timeout:
-            self.fail('FX action timeout')
+        if a:
+            if a['sent_at'] is None and now - a['at'] >= self.action_timeout:
+                self.fail('FX dispatch timeout')
+            elif a['sent_at'] is not None and now - a['sent_at'] >= self.action_timeout:
+                self.fail('FX action timeout')
         fresh_ready = self.ready and self.ready_since is not None and now - self.ready_since <= MAX_READY_AGE
         if not a and self.stop is None and not fresh_ready:
             if self.wait_since is None:
@@ -262,6 +270,9 @@ class Diagnostic:
         sent = SEND.search(line)
         if sent:
             a['send_seen'] = True  # physical send is observed even when fx_sent was lost
+            if now - a['at'] > self.action_timeout:
+                self.fail('FX dispatch timeout')
+                return
             if a['model'] is not None or int(sent[1]) != a['slot']:
                 self.fail('unexpected FX send: ' + line)
             else:
@@ -326,6 +337,9 @@ class Diagnostic:
             self.fail('FX snapshot unavailable')
         confirmed = CONFIRM.search(line)
         if confirmed and not self.stop:
+            if a['sent_at'] is not None and now - a['sent_at'] > self.action_timeout:
+                self.fail('FX action timeout')
+                return
             source = confirmed[3]
             if (a['sent_at'] is None or int(confirmed[1]) != a['slot'] or confirmed[2] != a['model'] or
                     not any(kind == source and enabled == a['desired'] and
@@ -434,6 +448,39 @@ def parse_args(argv=None):
     return args
 
 
+def drain_serial_before_tick(fd, buf, log, diagnostic, status_requests, max_reads=64):
+    """Consume readable complete lines before checking deadlines; never wait for more input.
+
+    A bounded batch prevents a continuous serial stream from holding up the loop.
+    In that case deadlines are still checked, then the caller drains again
+    without writing commands or waiting for new input.
+    """
+    saturated = False
+    for _ in range(max_reads):
+        if not select.select([fd], [], [], 0)[0]:
+            break
+        data = os.read(fd, 4096)
+        if not data:
+            diagnostic.fail('serial EOF')
+            break
+        buf += data
+        while b'\n' in buf:
+            raw, buf = buf.split(b'\n', 1)
+            raw += b'\n'
+            log.write(datetime.now().isoformat(timespec='milliseconds').encode() + b' ' + raw)
+            log.flush()  # raw bytes precede any decoding/normalization
+            diagnostic.on_line(raw, time.monotonic(), status_requests)
+            if diagnostic.stop:
+                break
+        if diagnostic.stop:
+            break
+    else:
+        saturated = True
+    if not diagnostic.stop:
+        diagnostic.tick(time.monotonic())
+    return buf, saturated
+
+
 def main():
     args = parse_args()
     diagnostic = Diagnostic(args.focus, args.count or 12, args.cadence, args.ready_timeout, args.action_timeout)
@@ -453,10 +500,12 @@ def main():
             cfg[6][termios.VMIN] = cfg[6][termios.VTIME] = 0
             termios.tcsetattr(fd, termios.TCSANOW, cfg)
             while not diagnostic.stop:
-                now = time.monotonic()
-                diagnostic.tick(now)
+                buf, more_to_drain = drain_serial_before_tick(fd, buf, log, diagnostic, status_requests)
                 if diagnostic.stop:
                     break
+                if more_to_drain:
+                    continue
+                now = time.monotonic()
                 input_ready = bool(select.select([fd], [], [], 0)[0])
                 write_window = command_write_window_clear(
                     input_ready, bool(buf) and not cli_prompt_only_buffer(buf),
@@ -474,21 +523,7 @@ def main():
                         os.write(fd, (command + '\n').encode())
                     for probe in diagnostic.probe_commands():
                         os.write(fd, (probe + '\n').encode())
-                readable, _, _ = select.select([fd], [], [], 0.1)
-                if readable:
-                    data = os.read(fd, 4096)
-                    if not data:
-                        diagnostic.fail('serial EOF')
-                        break
-                    buf += data
-                    while b'\n' in buf:
-                        raw, buf = buf.split(b'\n', 1)
-                        raw += b'\n'
-                        log.write(datetime.now().isoformat(timespec='milliseconds').encode() + b' ' + raw)
-                        log.flush()  # raw bytes precede any decoding/normalization
-                        diagnostic.on_line(raw, time.monotonic(), status_requests)
-                        if diagnostic.stop:
-                            break
+                select.select([fd], [], [], 0.1)
     except (OSError, termios.error) as exc:
         diagnostic.fail('serial/log error: ' + str(exc))
     finally:

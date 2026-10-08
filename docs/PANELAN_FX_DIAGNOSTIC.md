@@ -152,22 +152,27 @@ No additional hardware actions were sent within that failed attempt.
 
 ## Fresh 500-action acceptance attempt (2026-10-07)
 
-After the harness false-positive fix and host regressions passed, a fresh run
-started from an authoritative Spark 2 Ready status. It stopped on a genuine
-20-second `FX action timeout` at 191 dispatched / 190 confirmed; this is not a
-passing 500-action acceptance. There were no concurrency probes. Capture:
+After the battery-poll false-positive fix and host regressions passed, the first
+fresh run started from authoritative Spark 2 Ready status. It stopped at 191
+dispatched / 190 confirmed, but a later timing review indicates the harness
+likely applied its 20-second timeout from the CLI request rather than the
+controller send. This was not a passing acceptance. There were no concurrency
+probes. Capture:
 `/tmp/opencode/panelan_fx_20261007_215020_606449.log`; JSON report:
 `/home/pzwolinski/.local/share/opencode/tool-output/tool_11976d222001FFJXOhcNA3Fyig`.
 
 The unresolved dispatch was `DelayEchoFilt` OFF, FX msg 226, followed by full
-preset query msg 227. The correlated full-preset response was parsed and reported
-`match=1 known=1 enabled=0 desired=0 chain=1`, but no complete
-`Controller: FX 4 (DelayEchoFilt) confirmed ...` line was captured before the
-action deadline; the raw log ends with a partial `Con`. Thus the amp response
-observed the requested OFF state, but the controller action completion and a
-post-action Ready snapshot were not captured. Stop here: do not retry or issue a
-compensating toggle until operator review. The reported last Ready snapshot was
-before this unresolved dispatch.
+preset query msg 227. The report's CLI request time was monotonic 6355084.502
+(host `22:02:39.607`); controller send was 6355084.656 (host `22:02:39.760`,
+firmware `t=1851592`). Query msg 227 was sent at `22:02:40.847` (`t=1852678`),
+and the matching result (`match=1 known=1 enabled=0 desired=0 chain=1`) arrived
+at `22:02:41.508` (`t=1853339`). The old CLI-anchored deadline was approximately
+`22:02:59.607`; raw capture ends with partial `Con` at `22:02:59.655`, 48 ms
+after that deadline but about 105 ms before a 20-second send-anchored deadline
+at `22:02:59.760`. This strongly suggests a harness timing/order false stop;
+however, the remaining confirmation bytes are absent from the capture, so this
+does not establish a completed controller confirmation. The last Ready snapshot
+preceded this action. Do not retry or compensate without operator review.
 
 Partial results from 190 confirmed actions:
 
@@ -190,3 +195,59 @@ summary counts one full-query timeout because the action stopped with “timeout
 There were 12 battery sends and 12 deferrals, with no battery collision reported.
 There were zero model/chain conflicts, parser/framing/multipart/stream anomalies,
 BLE disconnects, or ingress trace losses. The run lasted 759.08 seconds.
+
+## Fresh 500-action rerun with two-phase timeout (2026-10-07)
+
+After the timing fix and all host regressions passed, status-only established
+Spark 2 Ready, serial `S5011I16101117`, hardware slot 4, the pinned FX chain above,
+all six known/non-pending FX slots, no remaining controller command parts, and
+an inactive response lane. Baseline: gate ON, comp OFF, drive ON, mod OFF, delay
+OFF, reverb ON. No compensating DelayEchoFilt action was sent. The run stopped at
+**355 dispatched / 354 confirmed** on the first post-send `FX action timeout`; it
+is not a passing 500-action acceptance. No concurrency probes were sent. Complete
+raw capture: `/tmp/opencode/panelan_fx_20261007_222140_151545.log`; JSON report:
+`/home/pzwolinski/.local/share/opencode/tool-output/tool_1199c44f9001C7fQxEdeGaHWC6`.
+
+The unresolved action was gate (`bias.noisegate`) ON, msg 215. CLI request was
+logged at `22:43:33.500`; FX send at `22:43:33.651` (`t=4305475`). Query msg 216
+was sent at `22:43:34.738` (`t=4306561`). Its complete matching full-preset
+response was parsed at `22:43:35.395` (`t=4307219`, `elapsed=1744`) with
+`match=1 known=1 enabled=1 desired=1 chain=1`; multipart completion, preset parse,
+and response-lane release are present. The corrected 20-second send-anchored
+deadline was approximately `22:43:53.651`. The raw capture ends with partial
+`Cont` at `22:43:53.742`, 91 ms after that deadline; no complete controller
+confirmation line or post-action Ready status was captured. The poll-before-tick
+drain cannot accept bytes first observed after the deadline. Do not retry or
+compensate; preserve this unresolved state for review.
+
+**Failure classification:** the amp response for the pending action reported the
+requested ON state, so this is not evidence of an amp refusing the state change.
+BLE/response transport completed and released its lane; the full-preset multipart
+assembly and parser completed, with no framing/parser/trace-loss anomalies. The
+missing evidence is the complete controller confirmation line: only its `Cont`
+prefix was captured after the host send-anchored deadline. That leaves controller
+confirmation/CLI-output timing versus host serial capture unresolved; it is not
+justified to label this a controller failure, a transport failure, or a harness
+false positive. The harness correctly withheld confirmation based on the
+available evidence and stopped.
+
+Partial results from the rerun:
+
+| Slot | Dispatched | Confirmed | ON | OFF | Confirmation source |
+| --- | ---: | ---: | ---: | ---: | --- |
+| gate (`bias.noisegate`) | 60 | 59 | 29 | 30 | full preset response 59 |
+| comp (`LA2AComp`) | 59 | 59 | 30 | 29 | full preset response 59 |
+| drive (`Booster`) | 59 | 59 | 29 | 30 | full preset response 59 |
+| mod (`GuitarEQ6`) | 59 | 59 | 30 | 29 | full preset response 59 |
+| delay (`DelayEchoFilt`) | 59 | 59 | 30 | 29 | full preset response 59 |
+| reverb (`bias.reverb`) | 59 | 59 | 29 | 30 | full preset response 59 |
+| **Total** | **355** | **354** | **177** | **177** | **full preset response 354** |
+
+Confirmed-action latency: p50 1.738 s, p95 1.748 s, p99 1.813 s, max 1.831 s.
+Full-preset verification latency: p50 0.651 s, p95 0.662 s, p99 0.722 s,
+max 0.745 s. There were zero Busy/deferred owners, retries, query send failures,
+model/chain conflicts, battery collisions, transport/parser/framing/multipart/stream
+anomalies, disconnects, or trace losses. Battery polls: 22 sent, 21 deferred.
+The report counts one full-query timeout because the action stopped with an
+action-timeout reason, although the correlated full-query result itself arrived.
+Runtime was 1333.63 seconds. Do not describe this partial run as acceptance.

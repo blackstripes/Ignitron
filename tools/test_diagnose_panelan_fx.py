@@ -1,12 +1,13 @@
 import json
 from collections import deque
 from contextlib import redirect_stderr
-from io import StringIO
+from io import BytesIO, StringIO
 import unittest
+from unittest.mock import patch
 
 from diagnose_panelan_fx import (Diagnostic, MAX_READY_AGE, SLOTS, fx_status,
-                                 cli_prompt_only_buffer, command_write_window_clear, fx_ready, fx_trace,
-                                  parse_args, summary)
+                                  cli_prompt_only_buffer, command_write_window_clear, drain_serial_before_tick,
+                                  fx_ready, fx_trace, parse_args, summary)
 
 
 def ready_slots():
@@ -68,6 +69,25 @@ def query(d, t=1):
 
 def result(d, match=1, enabled=1, msg=33, ack=1, t=1.2):
     feed(d, f'PRESET_TRACE event=fx_full_result slot=0 msg={msg} match={match} ack={ack} known=1 enabled={enabled} desired=1 chain=1 elapsed=600', t)
+
+
+def serial_cycle(d, chunks, now, buf=b'', max_reads=64):
+    """Drive the production drain/tick ordering with mocked nonblocking serial I/O."""
+    chunks = deque(chunks)
+    log = BytesIO()
+
+    def readiness(read_fds, write_fds, error_fds, timeout):
+        assert timeout == 0
+        return (read_fds if chunks else [], [], [])
+
+    def read(fd, size):
+        assert size == 4096
+        return chunks.popleft()
+    with patch('diagnose_panelan_fx.select.select', side_effect=readiness), \
+            patch('diagnose_panelan_fx.os.read', side_effect=read), \
+            patch('diagnose_panelan_fx.time.monotonic', return_value=now):
+        remaining, saturated = drain_serial_before_tick(7, buf, log, d, deque(), max_reads)
+    return remaining, saturated, log.getvalue()
 
 
 class FxDiagnosticTest(unittest.TestCase):
@@ -348,6 +368,138 @@ class FxDiagnosticTest(unittest.TestCase):
         d = self.setup_action()
         ready(d, 1, amp='Spark')
         self.assertIn('lost', d.stop)
+
+    def test_dispatch_and_confirmation_have_separate_action_timeouts(self):
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        self.assertEqual(d.next_command(0), 'fx gate toggle')
+        d.tick(19.9)
+        self.assertIsNone(d.stop)
+        feed(d, 'PRESET_TRACE event=fx_sent slot=0 msg=23 desired=1', 19.95)
+        feed(d, 'Controller: sending FX 0 (M) on', 19.99)
+        d.tick(20)
+        self.assertIsNone(d.stop)
+        payload(d, t=39)
+        confirm(d, t=39.9)
+        d.tick(40)
+        self.assertIsNone(d.stop)
+        self.assertEqual(len(d.actions), 1)
+        self.assertAlmostEqual(d.actions[0]['latency'], 19.91)
+
+    def test_dispatch_timeout_without_send_and_confirmation_timeout_after_send(self):
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        d.next_command(0)
+        d.tick(20)
+        self.assertEqual(d.stop, 'FX dispatch timeout')
+        self.assertIsNone(d.current['sent_at'])
+        self.assertIsNone(d.current['msg'])
+        self.assertFalse(d.current['send_seen'])
+        self.assertEqual(summary(d, 20)['actions'], 0)
+
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        d.next_command(0)
+        feed(d, 'PRESET_TRACE event=fx_sent slot=0 msg=23 desired=1', 19.8)
+        feed(d, 'Controller: sending FX 0 (M) on', 19.9)
+        d.tick(39.89)
+        self.assertIsNone(d.stop)
+        d.tick(39.9)
+        self.assertEqual(d.stop, 'FX action timeout')
+        self.assertEqual(summary(d, 40)['actions'], 0)
+
+    def test_late_physical_send_cannot_rescue_dispatch(self):
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        d.next_command(0)
+        feed(d, 'PRESET_TRACE event=fx_sent slot=0 msg=23 desired=1', 19.99)
+        serial_cycle(d, [b'Controller: sending FX 0 (M) on\n'], 20.01)
+        self.assertEqual(d.stop, 'FX dispatch timeout')
+        self.assertEqual(len(d.actions), 0)
+        self.assertIsNotNone(d.current)
+        self.assertTrue(d.current['send_seen'])
+        self.assertIsNone(d.current['sent_at'])
+
+    def test_late_ready_status_cannot_erase_expired_wait(self):
+        d = Diagnostic(count=1, ready_timeout=3)
+        d.tick(0)
+        lines = b''.join((line + '\n').encode() for line in status_lines())
+        log = BytesIO()
+        requests = deque([2.9])
+        chunks = deque([lines])
+        with patch('diagnose_panelan_fx.select.select',
+                   side_effect=lambda fds, _w, _e, timeout: (fds if chunks else [], [], [])), \
+                patch('diagnose_panelan_fx.os.read', side_effect=lambda _fd, _size: chunks.popleft()), \
+                patch('diagnose_panelan_fx.time.monotonic', return_value=3.01):
+            drain_serial_before_tick(7, b'', log, d, requests)
+        self.assertEqual(d.stop, 'authoritative Spark 2 Ready timeout')
+        self.assertIsNone(d.next_command(3.01))
+        self.assertIsNone(d.current)
+
+    def test_serial_drain_reads_full_confirmation_before_boundary_tick(self):
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        start(d)
+        query(d)
+        payload(d, source='full preset response', t=2)
+        chunks = [b'PRESET_TRACE event=fx_full_result slot=0 msg=33 match=1 ack=1 known=1 ',
+                  b'enabled=1 desired=1 chain=1 elapsed=600\nController: FX 0 (M) confirmed ',
+                  b'by full preset response\nCon']
+        remaining, saturated, log = serial_cycle(d, chunks, 20.2)
+        self.assertFalse(saturated)
+        self.assertEqual(remaining, b'Con')
+        self.assertEqual(log.count(b'PRESET_TRACE event=fx_full_result'), 1)
+        self.assertIn(b'Controller: FX 0 (M) confirmed by full preset response\n', log)
+        self.assertNotIn(b'\nCon', log)
+        self.assertIsNone(d.stop)
+        self.assertEqual(len(d.actions), 1)
+
+    def test_serial_drain_late_confirmation_fails_even_if_ready(self):
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        start(d)
+        payload(d, t=2)
+        serial_cycle(d, [b'Controller: FX 0 (M) confirmed by FX_ONOFF\n'], 20.201)
+        self.assertEqual(d.stop, 'FX action timeout')
+        self.assertEqual(len(d.actions), 0)
+
+    def test_matching_full_result_without_controller_confirmation_times_out(self):
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        start(d)
+        query(d)
+        payload(d, source='full preset response', t=2)
+        serial_cycle(d, [b'PRESET_TRACE event=fx_full_result slot=0 msg=33 match=1 ack=1 '
+                         b'known=1 enabled=1 desired=1 chain=1 elapsed=600\n'], 20.2)
+        self.assertIsNotNone(d.current['result'])
+        self.assertEqual(d.stop, 'FX action timeout')
+        self.assertEqual(len(d.actions), 0)
+
+    def test_serial_drain_bounded_batch_ticks_even_while_more_input_is_ready(self):
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        start(d)
+        payload(d, t=2)
+        remaining, saturated, log = serial_cycle(d, [b'Controller: FX 0 (M) ',
+                                                   b'confirmed by FX_ONOFF\n'], 20.19, max_reads=1)
+        self.assertTrue(saturated)
+        self.assertIsNone(d.stop)
+        self.assertEqual(log, b'')
+        remaining, saturated, log = serial_cycle(d, [b'confirmed by FX_ONOFF\n'], 20.2, remaining)
+        self.assertFalse(saturated)
+        self.assertEqual(remaining, b'')
+        self.assertIsNone(d.stop)
+        self.assertEqual(len(d.actions), 1)
+
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        start(d)
+        for t in (20.19, 20.201):
+            _, saturated, _ = serial_cycle(d, [b'PRESET_TRACE event=battery_poll_deferred\n'] * 2,
+                                           t, max_reads=1)
+            self.assertTrue(saturated)
+        self.assertEqual(d.stop, 'FX action timeout')
+        self.assertEqual(len(d.actions), 0)
 
     def test_battery_poll_after_confirm_completion_and_idle_status_is_valid(self):
         d = self.setup_action()
