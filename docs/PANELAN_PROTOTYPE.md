@@ -80,6 +80,14 @@ matching ACK is inconclusive, even if the ACK arrives before its reply; only
 an old-state reply to a query issued after that ACK establishes a conflict.
 `fx_full_query` trace lines include `ack=0|1` at query send time (also logged
 for failed attempts); `fx_full_result` reports the matched query's ACK status.
+After an authoritative FX observation, controller state, telemetry, the persistent
+`FxConfirmed` event and pending-request cleanup complete before serial output.
+With `PANELAN_PRESET_TRACE`, confirmation emits
+`event=fx_confirmed slot=<n> msg=<original FX msg> source=FX_ONOFF|full_preset elapsed=<ms>`
+after cleanup; `elapsed` is captured at the controller confirmation decision
+against the original FX send, before bookkeeping/output. The human-readable
+confirmation follows it. Host sequencing and correlation model:
+`g++ -std=c++17 -Wall -Wextra -Werror -Isrc tools/test_fx_confirmation.cpp -o /tmp/test_fx_confirmation && /tmp/test_fx_confirmation`.
 The FX action remains pending (and preset selection is blocked) until
 resolved, with a **15-second** deadline anchored to the original FX command;
 ACKs and retries never extend it. A reply at or after the deadline cannot confirm.

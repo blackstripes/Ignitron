@@ -15,9 +15,10 @@ from diagnose_panelan_presets import normalize_cli_line, snapshot_ready, status,
 
 SLOTS = ("gate", "comp", "drive", "mod", "delay", "reverb")
 SEND = re.compile(r"Controller: sending FX ([0-5]) \(([^()]+)\) (on|off)")
-CONFIRM = re.compile(r"Controller: FX ([0-5]) \(([^()]+)\) confirmed by (FX_ONOFF|full preset response)")
 LEGACY_EFFECT_PREFIX = re.compile(r"^Switching (?:On|Off) effect [^\r\n]*\.\.\.(PRESET_TRACE .*)$")
 MAX_READY_AGE = 1.0  # seconds; a status block must immediately precede dispatch
+FX_PROOF_DELIVERY_WINDOW = 30.0  # host seconds after matching Spark evidence
+FX_CONTROLLER_DEADLINE_MS = 15000  # validate firmware decision time; never extend its deadline
 PIN_KEYS = ('Serial', 'Current preset', 'confirmedHardwarePreset', 'Preset name')
 FX_LINE = re.compile(r'^FX (gate|comp|drive|mod|delay|reverb): known=(true|false) model=(.*?) enabled=(true|false) pending=(true|false) failed=(true|false)$')
 
@@ -168,7 +169,7 @@ class Diagnostic:
         self.current = dict(slot=slot, model=None, desired=None, at=now, sent_at=None,
                             msg=None, source=None, latency=None, query_msg=None,
                             query_duration=None, query_at=None, retries=0, deferrals=0,
-                            events=[], payloads=[], result=None, probes=set(), probe_sent=False,
+                            events=[], payloads=[], result=None, evidence_at={}, probes=set(), probe_sent=False,
                             probe_required=probe_required, send_seen=False)
         self.ready = False  # require a new authoritative Ready after every action
         self.ready_since = None
@@ -189,7 +190,10 @@ class Diagnostic:
         if a:
             if a['sent_at'] is None and now - a['at'] >= self.action_timeout:
                 self.fail('FX dispatch timeout')
-            elif a['sent_at'] is not None and now - a['sent_at'] >= self.action_timeout:
+            elif (a['sent_at'] is not None and a['evidence_at'] and
+                  now - min(a['evidence_at'].values()) >= FX_PROOF_DELIVERY_WINDOW):
+                self.fail('FX controller proof delivery timeout')
+            elif a['sent_at'] is not None and not a['evidence_at'] and now - a['sent_at'] >= self.action_timeout:
                 self.fail('FX action timeout')
         fresh_ready = self.ready and self.ready_since is not None and now - self.ready_since <= MAX_READY_AGE
         if not a and self.stop is None and not fresh_ready:
@@ -201,7 +205,23 @@ class Diagnostic:
         elif not a and fresh_ready:
             self.wait_since = None
 
-    def on_payload(self, data):
+    @staticmethod
+    def matching_spark(a, source):
+        return any(kind == source and enabled == a['desired'] and
+                   (source == 'FX_ONOFF' or
+                    (a['result'] is not None and msg == a['query_msg'] and
+                     a['result'].get('msg') == msg and a['query_at'] is not None and at >= a['query_at']))
+                   for kind, enabled, at, msg in a['payloads'])
+
+    def mark_evidence(self, now):
+        a = self.current
+        if a is None or a['sent_at'] is None or now - a['sent_at'] >= self.action_timeout:
+            return
+        for source in ('FX_ONOFF', 'full preset response'):
+            if source not in a['evidence_at'] and self.matching_spark(a, source):
+                a['evidence_at'][source] = now
+
+    def on_payload(self, data, now):
         a = self.current
         if not a or a['sent_at'] is None or not isinstance(data, dict):
             return
@@ -215,7 +235,8 @@ class Diagnostic:
             if model == a['model']:
                 if source == 'FX_ONOFF' and enabled != a['desired']:
                     self.fail('conflicting Spark payload for target model')
-                a['payloads'].append((source, enabled, self.payload_at, self.payload_msg))
+                a['payloads'].append((source, enabled, now, self.payload_msg))
+        self.mark_evidence(now)
 
     def on_line(self, raw, now, status_requests=None):
         line = normalize_cli_line(raw.decode(errors='replace').rstrip('\r\n'))
@@ -232,7 +253,7 @@ class Diagnostic:
                     self.fail('Spark payload exceeds parser limit')
             else:
                 self.payload = None
-                self.on_payload(data)
+                self.on_payload(data, now)
         if line == '--- Ignitron status ---':
             self.blocks = [line]
             self.block_requested_at = (status_requests.popleft()
@@ -318,6 +339,7 @@ class Diagnostic:
                 elif e.get('enabled') == str(int(a['desired'])):
                     a['result'] = e
                     a['query_duration'] = now - a['query_at']
+                    self.mark_evidence(now)
                 elif e.get('ack') == '1':
                     self.fail('matching full result conflict: ' + str(e))
         if self.focus and a['probe_sent']:
@@ -335,23 +357,27 @@ class Diagnostic:
             self.fail('FX command rejected')
         if 'Current preset data is not available' in line:
             self.fail('FX snapshot unavailable')
-        confirmed = CONFIRM.search(line)
-        if confirmed and not self.stop:
-            if a['sent_at'] is not None and now - a['sent_at'] > self.action_timeout:
+        if kind == 'fx_confirmed' and not self.stop:
+            if a['sent_at'] is not None and not a['evidence_at'] and now - a['sent_at'] >= self.action_timeout:
                 self.fail('FX action timeout')
                 return
-            source = confirmed[3]
-            if (a['sent_at'] is None or int(confirmed[1]) != a['slot'] or confirmed[2] != a['model'] or
-                    not any(kind == source and enabled == a['desired'] and
-                            (source == 'FX_ONOFF' or
-                             (a['result'] is not None and msg == a['query_msg'] and
-                              a['result'].get('msg') == msg and a['query_at'] is not None and at >= a['query_at']))
-                            for kind, enabled, at, msg in a['payloads']) or
+            proof_source = e.get('source')
+            source = {'FX_ONOFF': 'FX_ONOFF', 'full_preset': 'full preset response'}.get(proof_source)
+            elapsed_text = e.get('elapsed', '')
+            elapsed = int(elapsed_text) if re.fullmatch(r'[0-9]+', elapsed_text) else None
+            if (a['sent_at'] is None or a['msg'] is None or e.get('slot') != str(a['slot']) or
+                    e.get('msg') != a['msg'] or source is None or elapsed is None or
+                    elapsed >= FX_CONTROLLER_DEADLINE_MS or
+                    not self.matching_spark(a, source) or source not in a['evidence_at'] or
                     (a['probe_required'] and
                       a['probes'] != {'duplicate', 'preset_cli', 'preset_trace'})):
-                self.fail('uncorrelated/incomplete FX confirmation: ' + line)
+                self.fail('uncorrelated/incomplete FX confirmation: ' + str(e))
+            elif now - a['evidence_at'][source] >= FX_PROOF_DELIVERY_WINDOW:
+                self.fail('FX controller proof delivery timeout')
             else:
                 a['source'], a['latency'] = source, now - a['sent_at']
+                a['controller_elapsed_ms'] = elapsed
+                a['proof_delivery_delay'] = now - a['evidence_at'][source]
                 self.models[a['slot']] = a['model']
                 self.states[a['slot']] = a['desired']
                 self.actions.append(a)
@@ -391,12 +417,16 @@ def summary(diagnostic, runtime):
     for index, name in enumerate(SLOTS):
         confirmed = [a for a in actions if a['slot'] == index]
         latencies = [a['latency'] for a in confirmed]
+        controller_elapsed = [a['controller_elapsed_ms'] for a in confirmed]
+        delivery = [a['proof_delivery_delay'] for a in confirmed]
         full = [a['query_duration'] for a in confirmed if a['query_duration'] is not None]
         slots[name] = dict(dispatched=sum(a['slot'] == index for a in dispatched),
                             actions=len(confirmed), on=sum(a['desired'] for a in confirmed),
                             off=sum(not a['desired'] for a in confirmed),
                             sources=dict(Counter(a['source'] for a in confirmed)),
                             full_verifications=len(full), **latency_stats(latencies, 'latency'),
+                            **latency_stats(controller_elapsed, 'controller_elapsed_ms'),
+                            **latency_stats(delivery, 'proof_delivery_delay'),
                             **latency_stats(full, 'full_latency'))
     counters = diagnostic.counters
     events = {k.removeprefix('event_'): v for k, v in counters.items() if k.startswith('event_')}
@@ -406,14 +436,17 @@ def summary(diagnostic, runtime):
     return dict(runtime_seconds=runtime, dispatched=len(dispatched), actions=len(actions),
                  slots=slots, sources=dict(Counter(a['source'] for a in actions)),
                  **latency_stats([a['latency'] for a in actions], 'latency'),
+                 **latency_stats([a['controller_elapsed_ms'] for a in actions], 'controller_elapsed_ms'),
+                 **latency_stats([a['proof_delivery_delay'] for a in actions], 'proof_delivery_delay'),
                  full_verifications=len(full), **latency_stats(full, 'full_latency'),
                  full_query_required=sum(any(e.get('event') in ('fx_full_query', 'fx_full_query_deferred')
                                              for e in a['events']) for a in dispatched),
                  full_query_retries=sum(e.get('first') != '1' for e in queries),
-                 full_query_timeouts=int(pending is not None and
-                                         any(e.get('event') in ('fx_full_query', 'fx_full_query_deferred')
-                                             for e in pending['events']) and
-                                         diagnostic.stop is not None and 'timeout' in diagnostic.stop),
+                  full_query_timeouts=int(pending is not None and
+                                          any(e.get('event') in ('fx_full_query', 'fx_full_query_deferred')
+                                              for e in pending['events']) and
+                                          pending['result'] is None and
+                                          diagnostic.stop is not None and 'timeout' in diagnostic.stop),
                  full_query_failures=sum(e.get('sent') != '1' for e in queries),
                  retries=sum(a['retries'] for a in dispatched), busy_deferrals=len(deferred),
                  deferred_owners={k.removeprefix('busy_owner_'): v for k, v in counters.items() if k.startswith('busy_owner_')},

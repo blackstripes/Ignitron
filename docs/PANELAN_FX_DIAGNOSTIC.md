@@ -62,6 +62,17 @@ late output from an earlier request cannot. Every complete block is still
 checked for pinned identity/preset and connection changes, even if uncorrelated
 or too old to gate. Each FX direction is read
 from the controller send line, not assumed from the harness toggle sequence.
+An action counts as confirmed only when the matching post-bookkeeping
+`PRESET_TRACE event=fx_confirmed slot=<n> msg=<FX msg> source=FX_ONOFF|full_preset elapsed=<ms>`
+event is paired with the appropriate matching Spark-owned observation and its
+controller-reported `elapsed` is below the unchanged 15-second firmware action
+deadline. The harness allows a bounded 30-second host-only proof-delivery window
+after matching Spark evidence, for delayed/fragmented serial output; this does
+not extend or change the firmware deadline. The human-readable
+`Controller: FX ... confirmed` line is diagnostic only and is not required or
+sufficient for acceptance. The controller emits the trace only after it has
+confirmed `ControllerState`, recorded confirmation telemetry and the persistent
+event, and cleared its pending FX request.
 The harness does not enqueue status/action commands while serial input, a
 partial status block, or an outstanding status request remains.
 The CLI's standalone buffered `>` prompt is the only raw-buffer exception; it is
@@ -251,3 +262,63 @@ anomalies, disconnects, or trace losses. Battery polls: 22 sent, 21 deferred.
 The report counts one full-query timeout because the action stopped with an
 action-timeout reason, although the correlated full-query result itself arrived.
 Runtime was 1333.63 seconds. Do not describe this partial run as acceptance.
+
+## FX confirmation output-order fix and focused stress (2026-10-08)
+
+Both authoritative FX paths now commit `ControllerState`, confirmation
+telemetry/counter, persistent `FxConfirmed` event, and pending-request cleanup
+before emitting either structured or human-readable serial output. A host C++
+regression drives the production sequencing helper with a throwing logger and
+verifies the state/counter/persistent/clear operations have each happened once
+before logging. The acceptance harness requires the matching structured
+controller event plus Spark-owned matching payload/query evidence; prose alone
+and `fx_full_result` alone cannot confirm.
+
+The first pressure-focused 150-action attempt, before the bounded host proof
+delivery window was added, stopped at 87 dispatched / 86 accepted because the
+structured confirmation line arrived late and fragmented. In its final action,
+Spark's matching full result (`slot=2 msg=188`, `match=1 enabled=1 desired=1
+chain=1`) and the `fx_confirmed` trace shared firmware time `t=339690`, while the
+partial trace bytes were timestamped by the host 18.346 seconds later. The
+trailing line was incomplete. A later read-only Ready status showed Booster ON,
+`pending=false`, all FX known/non-pending, and an idle response lane. This is
+strong evidence of serial-output backpressure delaying the trace/prose after the
+controller state transition, rather than an amp or BLE/response-transport
+failure. It does not identify the exact USB CDC/host-buffer bottleneck. Capture:
+`/tmp/opencode/panelan_fx_20261008_064827_642248.log`; report:
+`/home/pzwolinski/.local/share/opencode/tool-output/tool_11b5d10f9001AVUpexTvUrHYrk`.
+
+After deferring `fx_full_result` output on successful confirmations as well,
+normal and trace firmware were rebuilt and the trace image reflashed. A fresh
+six-slot run passed **150 dispatched / 150 controller-confirmed actions** from
+an authoritative Spark 2 Ready baseline (serial `S5011I16101117`, slot 4). There
+were no concurrency probes. Baseline states were gate ON, comp ON, drive OFF,
+mod OFF, delay OFF, reverb OFF. Raw capture:
+`/tmp/opencode/panelan_fx_20261008_071849_593166.log`; JSON report:
+`/home/pzwolinski/.local/share/opencode/tool-output/tool_11b7bc7d2001oJes0lJgYDz4yr`.
+
+| Slot | Dispatched | Confirmed | ON | OFF | Confirmation source |
+| --- | ---: | ---: | ---: | ---: | --- |
+| gate (`bias.noisegate`) | 25 | 25 | 12 | 13 | full preset response 25 |
+| comp (`LA2AComp`) | 25 | 25 | 12 | 13 | full preset response 25 |
+| drive (`Booster`) | 25 | 25 | 13 | 12 | full preset response 25 |
+| mod (`GuitarEQ6`) | 25 | 25 | 13 | 12 | full preset response 25 |
+| delay (`DelayEchoFilt`) | 25 | 25 | 13 | 12 | full preset response 25 |
+| reverb (`bias.reverb`) | 25 | 25 | 13 | 12 | full preset response 25 |
+| **Total** | **150** | **150** | **76** | **74** | **full preset response 150** |
+
+All 150 actions also had one matching `fx_confirmed` event. Controller elapsed
+was p50 1739 ms, p95 1748.55 ms, p99 1777.04 ms, max 1779 ms; host proof-delivery
+delay was p50 0.143 ms, p95 0.246 ms, p99 0.281 ms, max 0.308 ms. Action latency
+was p50 1.740 s, p95 1.749 s, p99 1.778 s, max 1.779 s. Full-preset verification
+latency was p50 0.653 s, p95 0.661 s, p99 0.684 s, max 0.694 s. There were zero
+retries, query timeouts/send failures, Busy owners, model/chain conflicts,
+battery collisions, transport/parser/framing/multipart/stream anomalies,
+disconnects, or trace losses. Battery polls: 8 sent, 8 deferred. Runtime was
+529.60 seconds. The raw capture shows successful full-result and post-bookkeeping
+confirmation traces paired at the same firmware timestamp; no delayed/fragmented
+proof required the 30-second host-only window in this rerun. This is a focused
+stress pass, **not** the requested 500-action acceptance; stop for review before
+any 500-action run. The final states were gate OFF, comp OFF, drive ON, mod ON,
+delay ON, reverb ON—the inverse of baseline for every slot because each was
+toggled 25 times. No restoration command was sent.

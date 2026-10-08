@@ -5,7 +5,7 @@ from io import BytesIO, StringIO
 import unittest
 from unittest.mock import patch
 
-from diagnose_panelan_fx import (Diagnostic, MAX_READY_AGE, SLOTS, fx_status,
+from diagnose_panelan_fx import (Diagnostic, FX_PROOF_DELIVERY_WINDOW, MAX_READY_AGE, SLOTS, fx_status,
                                   cli_prompt_only_buffer, command_write_window_clear, drain_serial_before_tick,
                                   fx_ready, fx_trace, parse_args, summary)
 
@@ -59,8 +59,9 @@ def payload(d, desired=True, model='M', source='FX_ONOFF', t=1, msg=33):
     feed(d, json.dumps(data), t + .01)
 
 
-def confirm(d, slot=0, model='M', source='FX_ONOFF', t=2):
-    feed(d, f'Controller: FX {slot} ({model}) confirmed by {source}', t)
+def confirm(d, slot=0, model='M', source='FX_ONOFF', t=2, msg=23, elapsed=1800):
+    proof_source = 'full_preset' if source == 'full preset response' else source
+    feed(d, f'PRESET_TRACE t={int(t * 1000)} event=fx_confirmed slot={slot} msg={msg} source={proof_source} elapsed={elapsed}', t)
 
 
 def query(d, t=1):
@@ -238,6 +239,7 @@ class FxDiagnosticTest(unittest.TestCase):
         payload(d)
         confirm(d)
         self.assertEqual(d.actions[0]['source'], 'FX_ONOFF')
+        self.assertEqual(d.counters['event_fx_confirmed'], 1)
         ready(d, 3)
         d.next_command(3)
         self.assertEqual(d.stop, 'completed')
@@ -248,6 +250,58 @@ class FxDiagnosticTest(unittest.TestCase):
         confirm(d, source='full preset response')
         self.assertEqual(d.actions[0]['query_msg'], '33')
         self.assertGreater(d.actions[0]['query_duration'], 0)
+        self.assertEqual(d.counters['event_fx_confirmed'], 1)
+
+    def test_confirmation_prose_alone_never_confirms(self):
+        for source in ('FX_ONOFF', 'full preset response'):
+            with self.subTest(source=source):
+                d = self.setup_action()
+                if source == 'full preset response':
+                    query(d)
+                payload(d, source=source)
+                if source == 'full preset response':
+                    result(d)
+                feed(d, f'Controller: FX 0 (M) confirmed by {source}', 2)
+                self.assertIsNone(d.stop)
+                self.assertEqual(len(d.actions), 0)
+                d.tick(2.01 + FX_PROOF_DELIVERY_WINDOW)
+                self.assertEqual(d.stop, 'FX controller proof delivery timeout')
+
+    def test_controller_proof_requires_matching_spark_evidence(self):
+        for source in ('FX_ONOFF', 'full preset response'):
+            with self.subTest(source=source):
+                d = self.setup_action()
+                if source == 'full preset response':
+                    query(d)
+                    result(d)
+                confirm(d, source=source)
+                self.assertIn('incomplete', d.stop)
+                self.assertEqual(len(d.actions), 0)
+        d = self.setup_action()
+        payload(d, model='Other')
+        confirm(d)
+        self.assertIn('incomplete', d.stop)
+        d = self.setup_action()
+        query(d)
+        payload(d, source='full preset response')
+        confirm(d, source='full preset response')  # payload alone cannot substitute for the result
+        self.assertIn('incomplete', d.stop)
+
+    def test_controller_proof_rejects_wrong_slot_msg_and_source(self):
+        for slot, msg, source in ((1, 23, 'FX_ONOFF'), (0, 24, 'FX_ONOFF'),
+                                  (0, 23, 'other'), (0, 23, 'full_preset')):
+            with self.subTest(slot=slot, msg=msg, source=source):
+                d = self.setup_action()
+                payload(d)
+                feed(d, f'PRESET_TRACE t=2000 event=fx_confirmed slot={slot} msg={msg} source={source} elapsed=1800', 2)
+                self.assertIn('incomplete', d.stop)
+                self.assertEqual(len(d.actions), 0)
+        d = self.setup_action()
+        query(d)
+        payload(d, source='full preset response')
+        result(d)
+        confirm(d, source='FX_ONOFF')
+        self.assertIn('incomplete', d.stop)
 
     def test_fresh_pre_ack_full_result_confirms_with_payload(self):
         d = self.setup_action()
@@ -443,24 +497,77 @@ class FxDiagnosticTest(unittest.TestCase):
         query(d)
         payload(d, source='full preset response', t=2)
         chunks = [b'PRESET_TRACE event=fx_full_result slot=0 msg=33 match=1 ack=1 known=1 ',
-                  b'enabled=1 desired=1 chain=1 elapsed=600\nController: FX 0 (M) confirmed ',
-                  b'by full preset response\nCon']
+                   b'enabled=1 desired=1 chain=1 elapsed=600\nPRESET_TRACE t=20200 event=fx_confirmed ',
+                   b'slot=0 msg=23 source=full_preset elapsed=1800\nCon']
         remaining, saturated, log = serial_cycle(d, chunks, 20.2)
         self.assertFalse(saturated)
         self.assertEqual(remaining, b'Con')
         self.assertEqual(log.count(b'PRESET_TRACE event=fx_full_result'), 1)
-        self.assertIn(b'Controller: FX 0 (M) confirmed by full preset response\n', log)
+        self.assertIn(b'PRESET_TRACE t=20200 event=fx_confirmed slot=0 msg=23 source=full_preset elapsed=1800\n', log)
         self.assertNotIn(b'\nCon', log)
+        self.assertEqual(d.stop, 'FX action timeout')  # Spark evidence itself arrived after the action bound
+        self.assertEqual(len(d.actions), 0)
+
+    def test_delayed_fragmented_controller_proof_after_matching_full_result(self):
+        d = Diagnostic(count=1, action_timeout=20)
+        ready(d)
+        start(d)
+        query(d)
+        payload(d, source='full preset response', t=1.5)
+        result(d, t=1.745)
+        remaining, saturated, _ = serial_cycle(d, [b'PRESET_TRACE t=1745 event=fx_confirmed '], 20.2)
+        self.assertEqual(remaining, b'PRESET_TRACE t=1745 event=fx_confirmed ')
+        self.assertFalse(saturated)
+        self.assertIsNone(d.stop)
+        remaining, _, _ = serial_cycle(d, [b'slot=0 msg=23 source=full_preset elapsed=1745\n'], 21, remaining)
+        self.assertEqual(remaining, b'')
         self.assertIsNone(d.stop)
         self.assertEqual(len(d.actions), 1)
+        self.assertEqual(d.actions[0]['controller_elapsed_ms'], 1745)
+        self.assertAlmostEqual(d.actions[0]['proof_delivery_delay'], 21 - 1.745)
+        self.assertEqual(summary(d, 21)['controller_elapsed_ms_max'], 1745)
 
-    def test_serial_drain_late_confirmation_fails_even_if_ready(self):
+    def test_direct_proof_window_and_elapsed_are_bounded(self):
+        d = self.setup_action()
+        payload(d, t=1)
+        d.tick(20.2)
+        self.assertIsNone(d.stop)
+        confirm(d, t=25, elapsed=14999)
+        self.assertIsNone(d.stop)
+        self.assertEqual(d.actions[0]['controller_elapsed_ms'], 14999)
+
+        for elapsed in ('15000', '15001', 'nope', None):
+            with self.subTest(elapsed=elapsed):
+                d = self.setup_action()
+                payload(d, t=1)
+                proof = 'PRESET_TRACE event=fx_confirmed slot=0 msg=23 source=FX_ONOFF'
+                feed(d, proof + (f' elapsed={elapsed}' if elapsed is not None else ''), 25)
+                self.assertIn('incomplete', d.stop)
+                self.assertEqual(d.actions, [])
+
+        d = self.setup_action()
+        payload(d, t=1)
+        confirm(d, t=1.01 + FX_PROOF_DELIVERY_WINDOW, elapsed=1000)
+        self.assertEqual(d.stop, 'FX controller proof delivery timeout')
+        self.assertEqual(d.actions, [])
+
+    def test_stale_spark_evidence_cannot_start_proof_window(self):
+        d = self.setup_action()
+        query(d)
+        payload(d, source='full preset response', t=1, msg=34)
+        result(d, msg=33, t=2)
+        self.assertEqual(d.current['evidence_at'], {})
+        d.tick(20.2)
+        self.assertEqual(d.stop, 'FX action timeout')
+        self.assertEqual(d.actions, [])
+
+    def test_serial_drain_late_confirmation_rejects_expired_controller_elapsed(self):
         d = Diagnostic(count=1, action_timeout=20)
         ready(d)
         start(d)
         payload(d, t=2)
-        serial_cycle(d, [b'Controller: FX 0 (M) confirmed by FX_ONOFF\n'], 20.201)
-        self.assertEqual(d.stop, 'FX action timeout')
+        serial_cycle(d, [b'PRESET_TRACE t=20201 event=fx_confirmed slot=0 msg=23 source=FX_ONOFF elapsed=15000\n'], 20.201)
+        self.assertIn('incomplete', d.stop)
         self.assertEqual(len(d.actions), 0)
 
     def test_matching_full_result_without_controller_confirmation_times_out(self):
@@ -470,22 +577,26 @@ class FxDiagnosticTest(unittest.TestCase):
         query(d)
         payload(d, source='full preset response', t=2)
         serial_cycle(d, [b'PRESET_TRACE event=fx_full_result slot=0 msg=33 match=1 ack=1 '
-                         b'known=1 enabled=1 desired=1 chain=1 elapsed=600\n'], 20.2)
+                         b'known=1 enabled=1 desired=1 chain=1 elapsed=600\n'], 2.2)
         self.assertIsNotNone(d.current['result'])
-        self.assertEqual(d.stop, 'FX action timeout')
+        d.tick(2.2 + FX_PROOF_DELIVERY_WINDOW)
+        self.assertEqual(d.stop, 'FX controller proof delivery timeout')
         self.assertEqual(len(d.actions), 0)
+        report = summary(d, 2.2 + FX_PROOF_DELIVERY_WINDOW)
+        self.assertEqual(report['full_query_required'], 1)
+        self.assertEqual(report['full_query_timeouts'], 0)
 
     def test_serial_drain_bounded_batch_ticks_even_while_more_input_is_ready(self):
         d = Diagnostic(count=1, action_timeout=20)
         ready(d)
         start(d)
         payload(d, t=2)
-        remaining, saturated, log = serial_cycle(d, [b'Controller: FX 0 (M) ',
-                                                   b'confirmed by FX_ONOFF\n'], 20.19, max_reads=1)
+        remaining, saturated, log = serial_cycle(d, [b'PRESET_TRACE t=20190 event=fx_confirmed ',
+                                                   b'slot=0 msg=23 source=FX_ONOFF elapsed=1800\n'], 20.19, max_reads=1)
         self.assertTrue(saturated)
         self.assertIsNone(d.stop)
         self.assertEqual(log, b'')
-        remaining, saturated, log = serial_cycle(d, [b'confirmed by FX_ONOFF\n'], 20.2, remaining)
+        remaining, saturated, log = serial_cycle(d, [b'slot=0 msg=23 source=FX_ONOFF elapsed=1800\n'], 20.2, remaining)
         self.assertFalse(saturated)
         self.assertEqual(remaining, b'')
         self.assertIsNone(d.stop)
