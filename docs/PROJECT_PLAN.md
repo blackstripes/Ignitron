@@ -13,9 +13,15 @@ to exercise the Spark protocol without the legacy buttons, LEDs, or OLED.
 Hardware verification now covers PanelLan display/touch, direct Spark BLE,
 Home/Preset and confirmed FX actions, Device identity/serial, reconnect, and
 the Spark 2 native tuner (external observation plus display entry/exit and
-fresh note/cents rendering). Spark 2 internal looper is the next major
-unimplemented control surface. See [PANELAN_PROTOTYPE.md](PANELAN_PROTOTYPE.md)
-and [CODEX_HANDOFF.md](../CODEX_HANDOFF.md) for the live status.
+fresh note/cents rendering). Spark 2 preset and FX core reliability have both
+passed 500-action acceptance. Current priority is completing the remaining mini
+displays, switches, wiring, power/decoupling, and physical controller
+integration. FX confirmation latency optimization is deliberately deferred until
+after that hardware/UI bring-up; see
+[DEFERRED_FX_LATENCY_OPTIMIZATION.md](DEFERRED_FX_LATENCY_OPTIMIZATION.md).
+Spark 2 internal looper remains unimplemented and follows the hardware priority.
+See [PANELAN_PROTOTYPE.md](PANELAN_PROTOTYPE.md) and
+[CODEX_HANDOFF.md](../CODEX_HANDOFF.md) for live status.
 
 The upstream Ignitron code is built around classic ESP32 targets and uses NimBLE for Spark communication. The final controller hardware will be ESP32-S3-based, so there will be a deliberate port step rather than assuming the stock target is drop-in compatible.
 
@@ -434,35 +440,37 @@ kept for context. The active sequence is the looper-first plan in
 - Keep serial diagnostics available throughout development.
 - Maintain clear compile-time or board-specific separation so upstream classic ESP32 builds are not accidentally broken.
 
-## Active reliability gate
+## Core reliability status and deferred optimization
 
-Before adding more Spark-facing features, complete the transport hardening work in [TRANSPORT_RELIABILITY_PLAN.md](TRANSPORT_RELIABILITY_PLAN.md).
-
-This reliability gate currently takes priority over the looper/tap-tempo sequence below. Preserve the existing ControllerState/ControllerActions authority and confirmation model; focus first on BLE chunk-write correctness, serialized transport ownership, response backpressure, diagnostics, and long hardware soak tests. Resume feature expansion after the reliability acceptance criteria pass.
-
-**Current next reliability task:** intermittent preset transitions are still visibly slow
-for several seconds even when hardware-preset-number confirmation succeeds quickly.
-Before adding more displays/features or tuning timeouts, extend the preset trace to
-measure the full user-visible lifecycle through matching full-preset parse and
-renderer-facing `Ready` state. The detailed investigation plan and trace requirements
-are in [TRANSPORT_RELIABILITY_PLAN.md](TRANSPORT_RELIABILITY_PLAN.md), under
-"Current unresolved issue: intermittent user-visible preset synchronization latency."
+The Spark 2 preset 500/500 and FX 500/500 core-control acceptance gates are
+complete; evidence is summarized in
+[SPARK_RECEIVE_FRAMING.md](SPARK_RECEIVE_FRAMING.md) and
+[FX_DIRECT_CONFIRMATION_INVESTIGATION.md](FX_DIRECT_CONFIRMATION_INVESTIGATION.md).
+The remaining FX confirmation-latency optimization is deliberately deferred
+until after physical mini-display/switch hardware integration. Preserve the
+accepted ControllerState/ControllerActions authority and confirmation model;
+do not change deadlines, retry cadence, or BLE settings during hardware bring-up.
+See [DEFERRED_FX_LATENCY_OPTIMIZATION.md](DEFERRED_FX_LATENCY_OPTIMIZATION.md)
+for the evidence and resume checklist.
 
 ## Immediate Codex task
 
 The main touchscreen framework is **LVGL 9.x** over the working
 PanelLan/LovyanGFX path; that bring-up and the first polished screens are
-complete. The next sequence is:
+complete. The immediate priority is physical controller integration:
 
-1. Probe Spark 2 internal-looper commands/status through the serial CLI and
-   record actual behavior in [AMP_BEHAVIOR.md](AMP_BEHAVIOR.md).
-2. Add capability-gated canonical looper state/actions; do not create a
-   parallel looper-only UI state path.
-3. Enable the Looper screen only after a measured capability; validate clear,
-   undo/redo, preset/FX/tuner coexistence, and reconnect behavior on hardware.
-4. Add tap tempo through the same action boundary and validate shared tempo.
-5. Keep the six mini displays, MCP23017, physical switches, and expression
-   hardware deferred until this state/interoperability work is stable.
+1. Complete shared SPI and independent chip-select integration for all six mini
+   TFTs, visually validating every panel.
+2. Complete switch-expander and physical switch wiring, checking each input and
+   display-to-switch mapping.
+3. Verify power distribution, 3.3 V regulation, decoupling, wiring clearance,
+   and stable operation with the physical controller integrated.
+4. Keep the existing 2.8-inch UI frozen until all six mini displays work.
+5. After the physical hardware gate, resume capability-gated Spark 2 looper
+   state/actions and tap-tempo work through the canonical controller boundary.
+
+Do not resume the deferred FX latency optimization until this hardware/UI
+bring-up is complete.
 
 The six future ST7735S displays remain simple state-driven renderers and should not each run their own LVGL UI.
 

@@ -24,6 +24,7 @@ Confirmed on physical hardware:
   it changes from `P1` on the Preset view to `GATE` on the FX view
 - direct BLE connection to Spark NEO Core works
 - touchscreen hardware-preset and confirmed FX switching works
+- Spark 2 preset and FX core reliability each passed their 500-action acceptance
 - Spark 2 identity/serial, external tuner observation, display entry/exit,
   fresh note/cents display, and native tuner mute behavior work
 - reconnect after amp power cycle works
@@ -44,6 +45,7 @@ Before changing architecture or UI, read:
 6. [docs/LVGL_ARCHITECTURE.md](docs/LVGL_ARCHITECTURE.md)
 7. [docs/ARCHITECTURE_REVIEW_NEXT_STEPS.md](docs/ARCHITECTURE_REVIEW_NEXT_STEPS.md)
 8. [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md)
+9. [docs/DEFERRED_FX_LATENCY_OPTIMIZATION.md](docs/DEFERRED_FX_LATENCY_OPTIMIZATION.md)
 
 Visual target:
 
@@ -172,29 +174,31 @@ Verified on the connected PanelLan/Spark hardware:
   freshness; and
 - serial CLI/screenshot/serial-observer tooling remains available.
 
-The next product milestone is **verified Spark 2 internal looper control**.
-Start with a protocol/capability probe, then add canonical looper state and
-actions before enabling the current gated Looper screen. Do not claim looper
-support from the touchscreen until its commands and state have been exercised
-on Spark 2 hardware.
+The next product milestone is **physical controller hardware integration**:
+finish the six mini displays, switches, wiring, power/decoupling, and physical
+integration. Keep the main 2.8-inch UI frozen until all six minis work. After
+that hardware gate, resume verified Spark 2 looper control. FX confirmation
+latency optimization is deferred until after hardware/UI bring-up; preserve its
+evidence and checklist in `docs/DEFERRED_FX_LATENCY_OPTIMIZATION.md`.
 
 ## Recommended next sequence
 
-1. Probe Spark 2 looper commands/status through the existing serial CLI and
-   record the result in `docs/AMP_BEHAVIOR.md`.
-2. Add capability-gated `ControllerState`/`ControllerActions` looper flow;
-   preserve pending/confirmed/stale semantics and destructive-clear handling.
-3. Enable the Looper UI only for a verified capability and perform the T3–T5,
-   T9–T10 hardware matrix scenarios.
-4. Add tap-tempo through the same action boundary and verify its relationship
-   to delay and looper tempo.
-5. Exercise Spark-app interoperability, reconnect/resync, and rapid-command
-   collision cases.
-6. Then validate shared SPI and independent chip-select for all six mini TFTs
-   (mini #1 is already integrated), followed by MCP23017 inputs and physical
-   footswitches. Keep the existing 2.8-inch UI unchanged until all six minis
-   are working; then build their UI from the three user concepts in
-   `~/Desktop/Ignitron/` (`miniUI.png`, `miniUI2.png`, `miniUI3.png`).
+1. Complete shared SPI and independent chip-select integration for all six mini
+   TFTs; visually validate each panel.
+2. Complete MCP23017/switch wiring and verify each physical switch maps to the
+   intended mini display and action.
+3. Verify power distribution, regulation, decoupling, wiring clearance, and
+   operation with the physical controller integrated.
+4. Keep the existing 2.8-inch UI frozen until all six minis are working; then
+   build their UI from `~/Desktop/Ignitron/miniUI.png`, `miniUI2.png`, and
+   `miniUI3.png`.
+5. After the physical hardware gate, resume capability-gated Spark 2 looper
+   commands/state/UI, then tap-tempo and Spark-app interoperability checks.
+
+Spark 2 preset + FX core reliability acceptance is complete at 500/500 for each
+surface. FX confirmation latency optimization is deliberately deferred until
+after physical pedal hardware/UI bring-up; preserve its evidence and resume
+checklist in `docs/DEFERRED_FX_LATENCY_OPTIMIZATION.md`.
 
 ## UI implementation rules
 
@@ -223,17 +227,17 @@ Use `panelan-lvgl-controller` for the current touchscreen controller. Keep the
 bring-up targets as diagnostics; do not fold unrelated hardware into the
 controller target without a focused hardware checkpoint.
 
-## Hardware not to implement yet
+## Deferred beyond current hardware bring-up
 
-Do not expand these until looper/state interoperability is stable:
+The six mini displays, switches, wiring, power/decoupling, and physical
+controller integration are the **current priority**, not deferred work. Keep
+these other items parked until that hardware gate is complete:
 
-- six ST7735S mini displays
-- MCP23017 switch expansion
-- eight physical stomp inputs
+- FX confirmation-latency optimization (see
+  `docs/DEFERRED_FX_LATENCY_OPTIMIZATION.md`)
 - ADS1115 expression inputs
-- enclosure-specific assumptions
-
-Those come after the main UI/state architecture is stable.
+- enclosure-specific assumptions pending physical measurement/fit
+- looper and tap-tempo feature expansion until hardware integration is stable
 
 Regardless of sequencing, preserve the user's explicit UI gate: do not redesign
 the current 2.8-inch UI until all six mini displays are working.
@@ -268,17 +272,19 @@ Ask Astra to focus on:
 
 A new Codex session can be started with:
 
-> Work on `main`. Read `CODEX_HANDOFF.md` and every document in its Required reading order before changing code. The PanelLan LVGL controller, Home/FX/Tuner/Device screens, canonical preset/FX actions, and Spark 2 tuner path are already implemented and hardware-tested. The next milestone is capability-gated Spark 2 internal looper control: first probe the existing protocol/CLI on hardware, record evidence, then add canonical state/actions and truthful UI. Preserve the PanelLan/LovyanGFX path, one LVGL owner, and the distinction between pending intent and Spark-confirmed state. Do not add mini TFTs, MCP23017, or expression hardware yet.
+> Work on `main`. Read `CODEX_HANDOFF.md` and every document in its Required reading order before changing code. Spark 2 preset and FX core reliability have passed 500/500 acceptance. The current priority is finishing the six mini displays, switches, wiring, power/decoupling, and physical controller integration. Keep the current 2.8-inch UI frozen until all six mini displays work. Do not resume the deferred FX latency optimization until after hardware/UI bring-up; see `docs/DEFERRED_FX_LATENCY_OPTIMIZATION.md`. After the physical hardware gate, resume capability-gated Spark 2 looper control. Preserve the PanelLan/LovyanGFX path, one LVGL owner, and the distinction between pending intent and Spark-confirmed state.
 
 ## Definition of success for this handoff
 
-The next phase is successful when:
+The current hardware phase is successful when:
 
-- Spark 2 looper capability, commands, and authoritative status are measured
-  on hardware;
-- looper actions share the same controller boundary as touch, CLI, and future
-  footswitches;
-- the Looper screen never presents an invented transport state;
-- tuner/preset/FX behavior survives looper testing, reconnect, and external
-  Spark/App changes; and
-- no mini-display hardware has been prematurely entangled.
+- all six mini displays are wired and visually validated;
+- physical switches and display chip-selects are wired and mapped correctly;
+- power, regulation, decoupling, wiring clearance, and physical integration are
+  stable; and
+- the existing main 2.8-inch UI remains unchanged until that six-display gate
+  passes.
+
+Spark 2 preset + FX core reliability is already accepted at 500/500 for each
+surface. Do not resume FX latency optimization, tuner/looper, UI redesign, or NEO
+Core follow-up in this hardware bring-up task.

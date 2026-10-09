@@ -3,7 +3,8 @@
 This document records the starting point for the custom Ignitron foot controller.
 The normal LVGL target now drives two external minis with separate preset/FX
 cards; TFT1 was visually verified before TFT2 was added. TFT2 still needs visual validation;
-footswitches and TFT3..6 remain deferred.
+complete the remaining mini displays, switches, wiring, power/decoupling, and
+physical controller integration as the current hardware priority.
 
 ## Hardware identified and tested
 
