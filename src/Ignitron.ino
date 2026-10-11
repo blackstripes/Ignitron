@@ -29,6 +29,7 @@
 #ifdef PANELAN_LVGL_UI_MODE
 #include "controller/ControllerState.h"
 #include "controller/ControllerActions.h"
+#include "controller/PhysicalSwitchRouting.h"
 #endif
 #endif
 
@@ -61,6 +62,23 @@ PanelLanDisplay panelLanDisplay;
 #ifdef PANELAN_LVGL_UI_MODE
 ControllerState controllerState;
 ControllerActions controllerActions(controllerState);
+PhysicalSwitches physicalSwitches;
+PhysicalSwitchRouting physicalRouting;
+void pollPhysicalSwitches() {
+    static uint32_t lastPollAt = 0;
+    static bool polled = false;
+    const uint32_t now = millis();
+    if (polled && now - lastPollAt < 5) return;
+    polled = true;
+    lastPollAt = now;
+    uint8_t pressed = 0;
+    const bool valid = panelLanMiniDisplay.readSwitches(pressed);
+    const uint8_t count = static_cast<uint8_t>(presetControl.numberOfHWBanks() * PRESETS_PER_BANK);
+    physicalRouting.observe(controllerState.snapshot(), count);
+    physicalSwitches.sample(valid, pressed, now, [&](uint8_t key, PhysicalSwitches::Kind kind) {
+        physicalRouting.event(key, kind, count, controllerState.snapshot(), panelLanDisplay, controllerActions);
+    });
+}
 #endif
 #endif
 
@@ -75,7 +93,8 @@ void updatePanelLanScreens() {
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     PanelLanMiniDisplay::traceHardware("after main update (flush/touch)");
 #endif
-    panelLanMiniDisplay.update(snapshot, panelLanDisplay.activeView());
+    panelLanMiniDisplay.update(snapshot, panelLanDisplay.activeView(), physicalRouting.browsedBank(),
+                               static_cast<uint8_t>(presetControl.numberOfHWBanks() * PRESETS_PER_BANK));
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     PanelLanMiniDisplay::traceHardware("after mini update");
 #endif
@@ -269,6 +288,7 @@ void loop() {
 #ifdef PANELAN_SC05X_MODE
 #ifdef PANELAN_LVGL_UI_MODE
         controllerState.refreshFromSpark(*spark_dc);
+        pollPhysicalSwitches();
         updatePanelLanScreens();
 #else
         SparkStatus &status = SparkStatus::getInstance();

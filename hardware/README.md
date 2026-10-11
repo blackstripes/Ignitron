@@ -1,36 +1,45 @@
 # Ignitron - Hardware
 This document describes the hardware side of the **Ignitron** foot pedal.
 
-## PanelLan SC05_X two-mini MCP23017 prototype (separate from the legacy PCB below)
+## PanelLan SC05_X six-mini MCP23017 prototype (separate from the legacy PCB below)
 
 The integrated `panelan-lvgl-controller` target uses
 the Waveshare MCP23017 at I2C address **0x27** (A0/A1/A2 physically open,
-which the board pulls high) for two external ST7735S displays' CS and shared
-reset. This is a **two-display** setup, not the six-display
-PCB or the classic ESP32 wiring described below. Connect the PanelLan IO12 to
+which the board pulls high) for six external ST7735S displays' CS and shared
+reset. This is a **six-display software path**, separate from the legacy
+PCB and classic ESP32 wiring described below. Connect the PanelLan IO12 to
 MCP SDA and IO13 to MCP SCL, with 3.3 V I2C pull-ups, common ground and 3.3 V
-MCP supply. Connect IO10 to both minis' SDA/MOSI, IO11 to both SCL/SCK, IO14
-to both DC, MCP GPB0 to TFT1 active-low CS, GPB1 to TFT2 active-low CS, and
-GPB6 to both minis' active-low RES. Power both minis' VCC and BLK externally
+MCP supply. Connect IO10 to all six minis' SDA/MOSI, IO11 to all six SCL/SCK, IO14
+to all six DC, MCP GPB0..5 to TFT1..6 active-low CS respectively, and GPB6
+to all six minis' active-low RES. Power all six minis' VCC and BLK externally
 at regulated 3.3 V with common ground;
 firmware never drives BLK. There is no MISO/readback. **Do not connect mini
 RES/CS to IO12/IO13:** those are I2C pins in these targets.
 
 At startup the driver preloads GPB0..6 high before enabling them as outputs,
 then pulses GPB6 low/high while keeping all CS lines high. The integrated SPI2
-renderer initializes and splashes TFT1 then TFT2, and draws their state cards
-sequentially. On the Preset page TFT1 shows hardware slot 1 and TFT2 slot 2;
-on FX TFT1 shows GATE and TFT2 COMP. Other pages share touchscreen context.
-Each init/draw deasserts all CS lines before selecting only GPB0
-or GPB1 low, then deasserts all afterward; a failed selection/deselection is
+renderer initializes, splashes and draws TFT1 through TFT6 sequentially.
+On the Preset page TFT1..4 show the locally browsed bank's P1..P4 hardware
+preset names/state; TFT5/6 show BANK-/BANK+ and their next bank (or END).
+Browsing does not change the amp's sounding preset. On FX they show
+GATE/COMP/DRIVE/MOD/DELAY/REVERB (FX slots 0..5). Other pages share touchscreen context.
+Each init/draw deasserts all CS lines before selecting only its GPB0..5 CS low,
+then deasserts all afterward; a failed selection/deselection is
 retried without permanently disabling drawing, and each card is cached only after
-its draw finishes. GPB2..5 remain high for future TFT3..6 CS; GPB6 is shared
-reset and GPB7 stays an input. The standalone `panelan-mini-tft-bringup` test
-still selects **TFT1 only** (GPB0); it does not exercise TFT2. Switch wiring
-and handling via the expander are **not implemented**. Other targets (including
+its draw finishes. GPB6 is shared
+ reset and GPB7 stays an input. The standalone `panelan-mini-tft-bringup` test
+ still selects **TFT1 only** (GPB0); it does not exercise TFT2..6. Physical
+ switches 1..6 connect GPA0..GPA5 respectively (matching TFT1..TFT6), MODE
+ connects GPA6, TAP/TUNER connects GPA7. All eight close to GND and use the
+ MCP's internal Port A pull-ups. Only the integrated SPI controller polls GPIOA
+ in its main loop; a boot-held key or failed read requires an all-released sample
+ before another press is recognized. Other targets (including
 the GPIO diagnostic fallback) have separate wiring and are not converted by
 this change. Visually check the standalone color bars/borders and the integrated
-splashes/state cards on both minis: write-only displays cannot report pixel success.
+  splashes/state cards on all six minis: five of six connected panels show an
+  image; TFT5 (GPB4 CS) has backlight but no image. Write-only displays cannot
+  report pixel success. Physical switch routing is implemented,
+  but button press behavior still needs validation on the connected hardware.
 
 The software that controls the Spark amp runs on an ESP32 microcontroller which needs to be connected to the actual hardware so that it's able to react to hardware events, e.g. foot switch presses, and to indicate the current state via the LEDs. All of these connections, except the power supply via USB, are made via a PCB that piggybacks onto the ESP32 board.
 

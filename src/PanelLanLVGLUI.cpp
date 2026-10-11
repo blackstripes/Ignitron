@@ -785,33 +785,53 @@ void PanelLanLVGLUI::onFxClicked(lv_event_t *event) {
 }
 
 void PanelLanLVGLUI::onNavClicked(lv_event_t *event) {
-    if (uiInstance->latestSnapshot_.tunerActive) {
-        const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
-        if (page <= static_cast<uint8_t>(Screen::Device) && uiInstance->actions_) {
+    const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+    if (page <= static_cast<uint8_t>(Screen::Device))
+        uiInstance->physicalNavigate(static_cast<View>(page));
+}
+
+void PanelLanLVGLUI::physicalNavigate(View destination) {
+    const uint8_t page = static_cast<uint8_t>(destination);
+    if (latestSnapshot_.tunerActive) {
+        if (page <= static_cast<uint8_t>(Screen::Device) && actions_) {
             // Keep the nav labels stable while tuner owns the amp. Any
             // destination first exits tuner, then becomes the restored view.
             // TUNER itself simply returns to the pre-tuner screen.
             if (page != static_cast<uint8_t>(Screen::Tuner)) {
-                uiInstance->screenBeforeTuner_ = static_cast<Screen>(page);
+                screenBeforeTuner_ = static_cast<Screen>(page);
             }
-            uiInstance->actions_->requestTuner(false);
+            actions_->requestTuner(false);
         }
         return;
     }
-    const uint8_t page = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+    if (page == static_cast<uint8_t>(Screen::Tuner)) {
+        // Do not move the UI into a tuner view if the controller cannot queue
+        // the corresponding amp action (for example, while another intent is
+        // pending). Remember the return view before accepting the request.
+        if (!actions_ || !actions_->requestTuner(true)) return;
+        if (activeScreen_ != Screen::Tuner) screenBeforeTuner_ = activeScreen_;
+        suppressTunerTakeoverUntilMs_ = 0;
+        setActiveScreen(Screen::Tuner);
+        return;
+    }
     if (page <= static_cast<uint8_t>(Screen::Device)) {
-        if (page != static_cast<uint8_t>(Screen::Tuner)) {
-            // A destination tapped after TUNER is the newer intent. Keep the
-            // UI there if a native tuner-on observation arrives late.
-            if (uiInstance->actions_) uiInstance->actions_->cancelTunerEntry();
-            uiInstance->suppressTunerTakeoverUntilMs_ = millis() + 4000;
-        } else {
-            uiInstance->suppressTunerTakeoverUntilMs_ = 0;
-        }
-        uiInstance->setActiveScreen(static_cast<Screen>(page));
-        if (page == static_cast<uint8_t>(Screen::Tuner) && uiInstance->actions_) {
-            uiInstance->actions_->requestTuner(true);
-        }
+        // A destination selected after TUNER is the newer intent. Keep the UI
+        // there if a native tuner-on observation arrives late.
+        if (actions_) actions_->cancelTunerEntry();
+        suppressTunerTakeoverUntilMs_ = millis() + 4000;
+        setActiveScreen(static_cast<Screen>(page));
+    }
+}
+
+void PanelLanLVGLUI::physicalTunerPress(bool tunerActive) {
+    if (tunerActive) {
+        if (actions_) actions_->requestTuner(false);
+        return;
+    }
+    if (activeScreen_ == Screen::Tuner) {
+        if (actions_) actions_->cancelTunerEntry();
+        suppressTunerTakeoverUntilMs_ = millis() + 4000;
+        setActiveScreen(screenBeforeTuner_);
     }
 }
 
@@ -1154,7 +1174,7 @@ void PanelLanLVGLUI::reconcileExternalTuner(const ControllerSnapshot &snapshot) 
     if (snapshot.tunerActive && !tunerOverrideActive_ && !suppressTakeover) {
         // Preserve only a performance screen. A manual unavailable Tuner tab
         // is not a useful place to return after the amp exits real tuner mode.
-        screenBeforeTuner_ = activeScreen_ == Screen::Tuner ? Screen::Preset : activeScreen_;
+        if (activeScreen_ != Screen::Tuner) screenBeforeTuner_ = activeScreen_;
         tunerOverrideActive_ = true;
         setActiveScreen(Screen::Tuner);
     } else if (!snapshot.tunerActive) {

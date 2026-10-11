@@ -13,7 +13,11 @@ namespace {
 // module showed a stray left-edge RAM column at offset 1; start at column 0.
 PanelLanMiniSPI tft1(0);
 PanelLanMiniSPI tft2(0);
-PanelLanMiniSPI *const tfts[] = {&tft1, &tft2};
+PanelLanMiniSPI tft3(0);
+PanelLanMiniSPI tft4(0);
+PanelLanMiniSPI tft5(0);
+PanelLanMiniSPI tft6(0);
+PanelLanMiniSPI *const tfts[] = {&tft1, &tft2, &tft3, &tft4, &tft5, &tft6};
 PanelLanMiniMCP23017 miniSelect;
 
 void drawSplash(PanelLanMiniSPI &tft) {
@@ -32,10 +36,15 @@ constexpr uint16_t bg = 0x0021;
 constexpr uint16_t white = 0xFFFF;
 constexpr uint16_t muted = 0x7BD0;
 constexpr uint16_t green = 0x07EC;
-// Match the main FX page accents: GATE #00E65D and COMP #48D8BC,
-// converted to RGB565 for the mini TFTs.
+// Match the main FX page accents where available; RGB565 mini TFT colors.
 constexpr uint16_t gateGreen = 0x072B;
 constexpr uint16_t compTeal = 0x4ED7;
+constexpr uint16_t driveRed = 0xF988;
+constexpr uint16_t modPurple = 0xB19F;
+constexpr uint16_t delayBlue = 0x2D7F;
+constexpr uint16_t reverbOrange = 0xFD20;
+constexpr const char *fxNames[] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};
+constexpr uint16_t fxAccents[] = {gateGreen, compTeal, driveRed, modPurple, delayBlue, reverbOrange};
 constexpr uint16_t amber = 0xFEA0;
 constexpr uint16_t red = 0xF924;
 
@@ -143,7 +152,7 @@ void drawCard(PanelLanMiniSPI &g, const Card &card) {
 PanelLanMiniDisplay::PanelLanMiniDisplay() = default;
 
 void PanelLanMiniDisplay::initPanels() {
-    while (miniInitialized_ < 2) {
+    while (miniInitialized_ < miniCount_) {
         const uint8_t display = miniInitialized_ + 1;
         if (!miniSelect.select(display)) {
             // A failed selection may have left a CS asserted. Try to clear it;
@@ -179,39 +188,53 @@ void PanelLanMiniDisplay::begin() {
     initPanels();
 }
 
-void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view) {
+bool PanelLanMiniDisplay::readSwitches(uint8_t &pressed) {
+    return miniReady_ && miniSelect.readSwitches(pressed);
+}
+
+void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view, uint8_t browsedBank, uint8_t presetCount) {
     if (!miniReady_) return;
     const uint32_t now = millis();
     if (static_cast<int32_t>(now - miniRetryAt_) < 0) return;
-    if (miniInitialized_ < 2) {
+    if (miniInitialized_ < miniCount_) {
         initPanels();
         return;
     }
     // Keep the diagnostic visible through startup, even if the controller is
     // disconnected or BLE setup is slow. Afterwards use only SPI2 for state cards.
     if (now - splashAt_ < 5000) return;
-    for (uint8_t i = 0; i < 2; ++i) {
+    for (uint8_t i = 0; i < miniCount_; ++i) {
         const uint8_t display = i + 1;
         Card card;
         switch (view) {
-        case PanelLanLVGLUI::View::Preset:
+        case PanelLanLVGLUI::View::Preset: {
             card.layout = Layout::Preset;
-            // Slot identity is independent of the active selection and its color.
-            shortName(card.name, sizeof(card.name), HardwarePresetNames::label(snapshot.hardwarePresetNames, display));
-            if (!card.name[0]) strcpy(card.name, "UNKNOWN");
-            if (snapshot.pendingHardwarePreset) { card.accent = amber; card.mark = Mark::Dots; }
+            if (i >= 4) {
+                const bool available = i == 4 ? browsedBank > 0 : (browsedBank + 1) * 4 < presetCount;
+                snprintf(card.name, sizeof(card.name), "BANK%c", i == 4 ? '-' : '+');
+                snprintf(card.status, sizeof(card.status), available ? "TO %u" : "END",
+                         static_cast<unsigned>(browsedBank + (i == 4 ? 0 : 2)));
+                card.accent = available ? amber : muted;
+                break;
+            }
+            const uint8_t target = static_cast<uint8_t>(browsedBank * 4 + display);
+            snprintf(card.name, sizeof(card.name), "P%u %s", display,
+                     target <= presetCount ? HardwarePresetNames::label(snapshot.hardwarePresetNames, target) : "UNAVAILABLE");
+            if (target > presetCount) { card.accent = muted; strcpy(card.status, "UNAVAILABLE"); }
+            else if (snapshot.pendingHardwarePreset == target) { card.accent = amber; card.mark = Mark::Dots; }
             else if (snapshot.presetActionFailed) { card.accent = red; card.mark = Mark::Bang; }
             else if (snapshot.sparkStateStale || !snapshot.confirmedHardwarePreset) {
                 card.accent = amber;
-            } else if (snapshot.confirmedHardwarePreset == display) {
+            } else if (snapshot.confirmedHardwarePreset == target) {
                 card.accent = amber; card.filled = true; card.mark = Mark::Wave;
             } else { card.accent = muted; card.mark = Mark::Dash; }
             break;
+        }
         case PanelLanLVGLUI::View::Fx: {
             card.layout = Layout::Gate;
-            strcpy(card.name, i == 0 ? "GATE" : "COMP");
+            strcpy(card.name, fxNames[i]);
             const ControllerFxSlot &slot = snapshot.fxSlots[i];
-            const uint16_t fxAccent = i == 0 ? gateGreen : compTeal;
+            const uint16_t fxAccent = fxAccents[i];
             if (slot.pending) { card.accent = amber; card.mark = Mark::Dots; }
             else if (slot.actionFailed) { card.accent = red; card.mark = Mark::Bang; }
             else if (snapshot.sparkStateStale || !slot.known) card.accent = amber;
@@ -223,7 +246,7 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
             break;
         }
         case PanelLanLVGLUI::View::Looper:
-            strcpy(card.name, "LOOPER"); strcpy(card.status, "UNWIRED");
+            strcpy(card.name, "LOOPER"); strcpy(card.status, "UNASSIGNED");
             card.accent = muted; break;
         case PanelLanLVGLUI::View::Tuner:
             strcpy(card.name, "TUNER");
@@ -280,7 +303,7 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
         cardDrawn_[i] = true;
         if (view == PanelLanLVGLUI::View::Preset)
             Serial.printf("ST7735S TFT%u preset card sent (no readback): slot=%u name=%s active=%u\n",
-                          display, display, card.name, snapshot.confirmedHardwarePreset);
+                           display, display, card.name, snapshot.confirmedHardwarePreset);
     }
 }
 #endif

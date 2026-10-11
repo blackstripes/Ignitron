@@ -217,7 +217,10 @@ void PanelLanMiniDisplay::begin() {
     Serial.println("ST7735S: GPIO init complete, portrait 80 x 160");
 }
 
-void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view) {
+bool PanelLanMiniDisplay::readSwitches(uint8_t &) { return false; }
+
+void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view,
+                                 uint8_t, uint8_t) {
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     if (holdMini_) return;
 #endif

@@ -27,7 +27,7 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
                                                            startupFullPresetQueryIssued_,
                                                            snapshot.fullPresetObservedForLink);
     const char *rejection = preset < 1 || preset > maxHardwarePreset ? "range" :
-        hasPendingFxOperation() ? "fx" : queuedTunerRequest_ || tunerRequestSent_ ? "tuner" :
+        queuedTaps_ != 0 ? "tap" : hasPendingFxOperation() ? "fx" : queuedTunerRequest_ || tunerRequestSent_ ? "tuner" :
         queuedLooperAction_ != LooperAction::None || sentLooperAction_ != LooperAction::None ? "looper" :
         busy && (!SparkDataControl::isAmpConnected() || !snapshot.identityKnown) ? "phase" :
         !busy && snapshot.connectionPhase != ControllerConnectionPhase::Ready ? "phase" :
@@ -80,7 +80,7 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
     const ControllerSnapshot &snapshot = state_.snapshot();
     if (slot >= snapshot.fxSlots.size() || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
-        presetTargets_.queued() != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
+        presetTargets_.queued() != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_ || queuedTaps_) {
         return false;
     }
 
@@ -103,6 +103,14 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
 
 bool ControllerActions::requestTuner(bool on) {
     const ControllerSnapshot &snapshot = state_.snapshot();
+    if (on && queuedTaps_) return false;
+    // The observation can arrive on the same loop iteration as a physical
+    // exit press, before process() retires the confirmed entry. Do not lose
+    // that single exit intent to the still-set in-flight flag.
+    if (!on && snapshot.tunerActive && tunerRequestSent_ && tunerRequestEnabled_) {
+        tunerRequestSent_ = false;
+        tunerEntryCancelRequested_ = false;
+    }
     if (snapshot.tunerActive == on || snapshot.connectionPhase != ControllerConnectionPhase::Ready ||
         snapshot.sparkStateStale || snapshot.pendingHardwarePreset != 0 || sentPreset_ != 0 ||
         presetTargets_.queued() != 0 || hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_) {
@@ -110,6 +118,17 @@ bool ControllerActions::requestTuner(bool on) {
     }
     queuedTunerRequest_ = true;
     queuedTunerEnabled_ = on;
+    return true;
+}
+
+bool ControllerActions::requestTapTempo() {
+    const auto &s = state_.snapshot();
+    if (s.connectionPhase != ControllerConnectionPhase::Ready || s.sparkStateStale || s.tunerActive ||
+        s.pendingHardwarePreset != 0 || sentPreset_ != 0 || presetTargets_.queued() != 0 ||
+        hasPendingFxOperation() || queuedTunerRequest_ || tunerRequestSent_ ||
+        s.looperPending || queuedLooperAction_ != LooperAction::None || sentLooperAction_ != LooperAction::None ||
+        queuedTaps_ == 8) return false;
+    ++queuedTaps_;
     return true;
 }
 
@@ -126,7 +145,7 @@ bool ControllerActions::canRequestLooper() const {
     return snapshot.connectionPhase == ControllerConnectionPhase::Ready && !snapshot.sparkStateStale &&
            snapshot.looperCapability == ControllerLooperCapability::Verified && !snapshot.looperStale &&
             !snapshot.looperPending && snapshot.pendingHardwarePreset == 0 && sentPreset_ == 0 && presetTargets_.queued() == 0 &&
-           !hasPendingFxOperation() && !queuedTunerRequest_ && !tunerRequestSent_ &&
+            !hasPendingFxOperation() && !queuedTunerRequest_ && !tunerRequestSent_ && !queuedTaps_ &&
            queuedLooperAction_ == LooperAction::None && sentLooperAction_ == LooperAction::None;
 }
 
@@ -231,6 +250,7 @@ void ControllerActions::clearFxRequest() {
 }
 
 void ControllerActions::onAmpDisconnected() {
+    queuedTaps_ = 0;
 #ifdef PANELAN_PRESET_TRACE
     if (presetTraceConnectionObserved_) PRESET_TRACE("event=disconnect");
     presetTraceConnectionObserved_ = false;
@@ -312,6 +332,12 @@ void ControllerActions::process(SparkDataControl &dataControl) {
     if (!SparkDataControl::isAmpConnected()) {
         onAmpDisconnected();
         return;
+    }
+    if (queuedTaps_) {
+        --queuedTaps_;
+        if (snapshot.connectionPhase == ControllerConnectionPhase::Ready && !snapshot.sparkStateStale &&
+            !snapshot.tunerActive && !queuedTunerRequest_ && !tunerRequestSent_)
+            dataControl.tapTempoButton();
     }
 #ifdef PANELAN_PRESET_TRACE
     presetTraceConnectionObserved_ = true;

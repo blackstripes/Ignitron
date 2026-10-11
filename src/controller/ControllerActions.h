@@ -26,6 +26,7 @@ public:
     // Queues one model-specific bypass/on-off request. Confirmation is based
     // exclusively on a fresh Spark-owned slot observation, never an ACK.
     bool requestFxToggle(uint8_t slot);
+    bool requestTapTempo();
     // Entry is confirmed by Spark TUNER_ON. Spark 2 does not reliably emit
     // TUNER_OFF for a native exit, so exit uses the established preset-mode
     // transition and fresh tuner output can still reassert amp ownership.
@@ -128,6 +129,7 @@ private:
     FxFullPresetRetry fxFullPresetRetry_;
 
     bool queuedTunerRequest_ = false;
+    uint8_t queuedTaps_ = 0;
     bool tunerRequestSent_ = false;
     bool queuedTunerEnabled_ = false;
     bool tunerRequestEnabled_ = false;

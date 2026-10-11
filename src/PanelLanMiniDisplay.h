@@ -11,12 +11,14 @@
 #error "SPI mini and raw GPIO trace cannot share the mini pins"
 #endif
 
-// Direct, write-only TFT1/TFT2 cards; no LVGL objects or controller actions.
+// SPI backend: direct, write-only TFT1..TFT6 cards; no LVGL objects or controller actions.
 class PanelLanMiniDisplay {
 public:
     PanelLanMiniDisplay();
     void begin();
-    void update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view);
+    void update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view,
+                uint8_t browsedBank = 0, uint8_t presetCount = 4);
+    bool readSwitches(uint8_t &pressed);
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     // Register observations only: these cannot confirm pixels on a write-only LCD.
     static void traceHardware(const char *checkpoint, bool force = false);
@@ -27,14 +29,15 @@ public:
 
 private:
 #ifdef PANELAN_MINI_SPI_MODE
+    static constexpr uint8_t miniCount_ = 6;
     bool miniReady_ = false;
     uint8_t miniInitialized_ = 0;
     void initPanels();
     uint32_t splashAt_ = 0;
     uint32_t miniRetryAt_ = 0;
-    PanelLanLVGLUI::View lastView_[2]{};
-    char lastCard_[2][96]{};
-    bool cardDrawn_[2]{};
+    PanelLanLVGLUI::View lastView_[miniCount_]{};
+    char lastCard_[miniCount_][96]{};
+    bool cardDrawn_[miniCount_]{};
 #else
     struct Panel : lgfx::Panel_ST7735S {
         using lgfx::Panel_ST7735S::getInitCommands;

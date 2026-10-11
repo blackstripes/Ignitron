@@ -22,6 +22,9 @@ public:
     void begin();
     void update(const ControllerSnapshot &snapshot);
     View activeView() const { return static_cast<View>(activeScreen_); }
+    // Physical navigation uses the same tuner/modal path as bottom navigation.
+    void physicalNavigate(View view);
+    void physicalTunerPress(bool tunerActive);
     void setActions(ControllerActions *actions) { actions_ = actions; }
     bool writeScreenshot(Stream &output);
     void injectTouch(uint16_t x, uint16_t y);

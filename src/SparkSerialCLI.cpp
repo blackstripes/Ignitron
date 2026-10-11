@@ -96,8 +96,9 @@ void SparkSerialCLI::execute(String command) {
     } else if (verb == "loop" || verb == "looper") {
         handleLooper(args);
     } else if (verb == "tap") {
-        sparkDC_->tapTempoButton();
-        Serial.println("Tap registered.");
+        if (controllerActions_ && controllerActions_->requestTapTempo()) Serial.println("Tap registered.");
+        else if (!controllerActions_) { sparkDC_->tapTempoButton(); Serial.println("Tap registered."); }
+        else Serial.println("Tap unavailable.");
     } else if (verb == "amp") {
         if (!SparkDataControl::isAmpConnected()) {
             Serial.println("Spark amp is not connected.");

@@ -4,7 +4,7 @@
 #include <Wire.h>
 
 // MCP23017 at 0x27 (Waveshare board address pins open/high), default BANK=0.
-// Only port B is driven:
+// Port A: eight active-low switches with internal pull-ups.
 // GPB0..5 = active-low TFT1..6 CS; GPB6 = shared active-low reset.
 // GPB7 remains an input. No dependency on the main PanelLan touch I2C bus.
 class PanelLanMiniMCP23017 {
@@ -14,6 +14,9 @@ class PanelLanMiniMCP23017 {
     static constexpr uint8_t high_ = csMask_ | resetMask_;
     static constexpr uint8_t olatB_ = 0x15;
     static constexpr uint8_t iodirB_ = 0x01;
+    static constexpr uint8_t iodirA_ = 0x00;
+    static constexpr uint8_t gppuA_ = 0x0c;
+    static constexpr uint8_t gpioA_ = 0x12;
     bool ready_ = false;
 
     bool write(uint8_t reg, uint8_t value) {
@@ -44,7 +47,8 @@ public:
         Wire.begin(12, 13); // IO12 SDA, IO13 SCL (not TFT RES/CS)
         // Preload the latch *while pins are still inputs*: no selected TFT
         // when switching GPB0..6 to outputs. GPB7 is left as an input.
-        if (!write(olatB_, high_) || !write(iodirB_, 0x80)) {
+        if (!write(olatB_, high_) || !write(iodirB_, 0x80) ||
+            !write(iodirA_, 0xff) || !write(gppuA_, 0xff)) {
             Serial.println("MCP23017: no ACK at 0x27 or port-B setup failed");
             return false;
         }
@@ -54,8 +58,26 @@ public:
         delay(20);
         if (!write(olatB_, high_)) { ready_ = false; return false; }
         delay(120);
-        Serial.println("MCP23017: detected at 0x27; GPB0-GPB6 ready, shared TFT1/TFT2 reset complete");
+        Serial.println("MCP23017: detected at 0x27; GPB0-GPB6 ready, shared TFT1..TFT6 reset complete");
         return true;
+    }
+
+    // No cached sample on failure: the caller must discard a broken press
+    // sequence and re-arm only after an all-released observation.
+    bool readSwitches(uint8_t &pressed) {
+        if (!ready_) return false;
+        for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+            Wire.beginTransmission(address_);
+            Wire.write(gpioA_);
+            if (Wire.endTransmission(false) == 0 && Wire.requestFrom(address_, uint8_t(1)) == 1 && Wire.available()) {
+                pressed = static_cast<uint8_t>(~Wire.read());
+                return true;
+            }
+            Wire.end();
+            delay(2);
+            Wire.begin(12, 13);
+        }
+        return false;
     }
 
     // Always deselect all six before asserting one CS. No other SPI client

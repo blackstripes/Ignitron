@@ -19,9 +19,14 @@ Confirmed on physical hardware:
 - landscape 320x240 UI coordinates
 - PanelLan/LovyanGFX display/touch support works
 - `panelan-lvgl-controller` builds and flashes
-- mini display #1 (top-left) is integrated in the default controller target
-  using hardware SPI2 and has been visually tested on the stable wall supply;
-  it changes from `P1` on the Preset view to `GATE` on the FX view
+- mini displays TFT1..TFT6 are supported in software in the default controller
+  target on shared hardware SPI2 with MCP23017 GPB0..5 chip-selects and GPB6
+  shared reset. Five of six displays have been visually confirmed working;
+  TFT5 (GPB4 CS) has backlight but no image. There is no pixel readback.
+- Physical Port A wiring is confirmed: GPA0..5 = switches 1..6, GPA6 = MODE,
+  GPA7 = TAP/TUNER, all active-low to GND. Main-loop polling, independent
+  debouncing and controller-routed actions are implemented in software but
+  **physical press behavior has not been verified**.
 - direct BLE connection to Spark NEO Core works
 - touchscreen hardware-preset and confirmed FX switching works
 - Spark 2 preset and FX core reliability each passed their 500-action acceptance
@@ -64,9 +69,9 @@ Do not:
 - replace the board support with a generic SPI ST7789 implementation
 - rewrite the FT5x06 driver
 - put Spark protocol calls directly inside LVGL widgets
-- run separate full LVGL stacks on the six future mini TFTs
+- run separate full LVGL stacks on the six mini TFTs
 
-The future six ST7735S switch displays should use a lightweight renderer fed by the same canonical ControllerState.
+The six ST7735S displays use a lightweight renderer fed by the same canonical ControllerState.
 
 The user has explicitly frozen the current 2.8-inch touchscreen UI until all
 six mini displays are working. After that hardware gate, use
@@ -175,18 +180,19 @@ Verified on the connected PanelLan/Spark hardware:
 - serial CLI/screenshot/serial-observer tooling remains available.
 
 The next product milestone is **physical controller hardware integration**:
-finish the six mini displays, switches, wiring, power/decoupling, and physical
-integration. Keep the main 2.8-inch UI frozen until all six minis work. After
-that hardware gate, resume verified Spark 2 looper control. FX confirmation
+visually verify all six mini displays, verify the implemented switches by
+physical presses, and complete power/decoupling and physical integration. Keep
+the main 2.8-inch UI frozen until all six minis work. After that hardware gate,
+resume verified Spark 2 looper control. FX confirmation
 latency optimization is deferred until after hardware/UI bring-up; preserve its
 evidence and checklist in `docs/DEFERRED_FX_LATENCY_OPTIMIZATION.md`.
 
 ## Recommended next sequence
 
-1. Complete shared SPI and independent chip-select integration for all six mini
-   TFTs; visually validate each panel.
-2. Complete MCP23017/switch wiring and verify each physical switch maps to the
-   intended mini display and action.
+1. Validate shared SPI and independent chip-select rendering on all six mini
+   TFTs visually (TFT2 and TFT4..6 have no visual verification yet).
+2. Verify the confirmed Port A wiring and each implemented switch's physical response,
+   bank browsing, mode/tuner behavior and mini-card target on hardware.
 3. Verify power distribution, regulation, decoupling, wiring clearance, and
    operation with the physical controller integrated.
 4. Keep the existing 2.8-inch UI frozen until all six minis are working; then
@@ -229,8 +235,9 @@ controller target without a focused hardware checkpoint.
 
 ## Deferred beyond current hardware bring-up
 
-The six mini displays, switches, wiring, power/decoupling, and physical
-controller integration are the **current priority**, not deferred work. Keep
+Visual validation of the six software-supported mini displays, physical
+verification of implemented switches, power/decoupling, and controller
+integration are the **current priority**, not deferred work. Keep
 these other items parked until that hardware gate is complete:
 
 - FX confirmation-latency optimization (see

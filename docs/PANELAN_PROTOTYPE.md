@@ -1,10 +1,33 @@
 # PanelLan touchscreen controller prototype
 
 This document records the starting point for the custom Ignitron foot controller.
-The normal LVGL target now drives two external minis with separate preset/FX
-cards; TFT1 was visually verified before TFT2 was added. TFT2 still needs visual validation;
-complete the remaining mini displays, switches, wiring, power/decoupling, and
-physical controller integration as the current hardware priority.
+The normal LVGL target now drives six external minis in software with separate
+preset/FX cards. Five of six wired displays show an image; the panel connected
+to GPB4 (TFT5 chip select) has backlight but no image. The six physical switch
+actions are implemented for the confirmed wiring. Verify the remaining display
+and physical switch press behavior on the connected assembly. Complete
+power/decoupling and physical controller integration as the current hardware
+priority. Port A GPIOA input polling uses
+the confirmed eight active-low switches (GPA0..5 = switches 1..6, GPA6 MODE,
+GPA7 TAP/TUNER).
+
+ The integrated SPI mini cards reflect the **locally browsed** hardware bank:
+ TFT1..4 are P1..P4 targets in that bank; TFT5/6 show BANK-/BANK+ destination
+ or END at the range boundary. Browsing sends no Spark command and cannot
+ change the main touchscreen's confirmed/pending preset. MODE skips Looper
+ unless verified; physical Looper actions are intentionally unassigned. Switch
+  samples are polled once every ~5 ms in the pre-disconnect-return controller
+  loop (so local MODE still works offline), with 30 ms per-key debounce,
+  1000 ms long threshold, and all-released rearming after boot or a read failure.
+  A newly fresh confirmed preset aligns the browsed bank (including after a
+  stale link); repeated confirmation of the same slot leaves local browsing
+  alone. While tuner entry is pending, a physical primary/MODE/TAP press
+  cancels entry and returns to the pre-tuner view without another action;
+  while tuner is active the same presses request exit only.
+ CLI and switch tap requests share ControllerActions; tempo calculation remains
+ in SparkDataControl. Host-only regression:
+  `g++ -std=c++17 -Wall -Wextra -Werror -Itools/mocks -Isrc tools/test_physical_switches.cpp -o /tmp/test_physical_switches && /tmp/test_physical_switches`.
+  Source integration guards: `python3 -m unittest tools.test_physical_switch_source tools.test_panelan_mini_spi_source`.
 
 ## Hardware identified and tested
 
@@ -310,7 +333,7 @@ Power the module externally from **3.3 V** with common GND; connect IO10 to
 SDA/MOSI, IO11 to SCL/SCK and IO14 to DC. IO12 is now I2C SDA and IO13 I2C SCL
 to the Waveshare MCP23017 at 0x27 (A0/A1/A2 left open/high): GPB0 drives mini #1 CS and GPB6 drives RES. Provide
 3.3 V pull-ups on I2C; this standalone test selects TFT1 only, even if TFT2
-is wired to GPB1. GPB2..5 are reserved high for future mini CS lines.
+and TFT3..6 are wired to GPB1..5.
 Do not connect RES/CS directly to IO12/13. No MISO is
 used. Connect BLK to external 3.3 V (the standalone test displayed colors only
 after this connection); firmware never drives the backlight. Serial at
@@ -337,9 +360,9 @@ normal Spark testing.
   freshness. Multi-device selection is still pending.
 - On a Spark reboot, the BLE client refreshes GATT services and subscribes
   again before it considers the connection usable.
-- The normal `panelan-lvgl-controller` initializes **TFT1 and TFT2** on shared
-  IO10=MOSI, IO11=SCK, IO14=DC, MCP23017 GPB0=TFT1 CS, GPB1=TFT2 CS and
-  GPB6=shared RES;
+- The normal `panelan-lvgl-controller` initializes **TFT1..TFT6** on shared
+  IO10=MOSI, IO11=SCK, IO14=DC, MCP23017 GPB0..5=TFT1..6 CS respectively,
+  and GPB6=shared RES;
   IO12/13 are I2C SDA/SCL (no MISO). BLK remains
   externally tied to regulated 3.3 V for maximum backlight, with common ground.
   The 2.8-inch panel backlight is set to brightness 255 (maximum); user
@@ -353,8 +376,8 @@ normal Spark testing.
   name from the checksum-validated per-amp hardware-slot cache, even when P2
   is active (for example P1 `CLEAN` remains `CLEAN` after selecting P2
    `CRUNCH`). It shows `UNKNOWN` while slot 1's name is unknown, never the active
-   preset's name or a misleading `P1`. TFT2 independently shows slot 2's name
-   (or `UNKNOWN`) and selection state. The GPIO fallback follows TFT1's rule.
+   preset's name or a misleading `P1`. TFT2..6 independently show slots 2..6's
+   names (or `UNKNOWN`) and selection states. The GPIO fallback follows TFT1's rule.
    The controller
   loop asynchronously fetches missing slots one at a time after identity,
   checksums, current number and full-preset startup sync are ready. A slot gets
@@ -377,8 +400,8 @@ normal Spark testing.
   failed, stale/unknown, selected and nonselected states use amber dots, red
   exclamation, amber dash, filled gold waveform strip and muted outline/dash,
   respectively. A failure on another preset does not claim P1 was targeted.
-  TFT1 FX shows `GATE` and TFT2 shows `COMP` (logical FX slots 0 and 1), each
-  with a large green `ON` or blue-grey `OFF` filled strip when
+  TFT1..6 FX show `GATE`, `COMP`, `DRIVE`, `MOD`, `DELAY`, `REVERB` (logical FX
+  slots 0..5), each with a large accented `ON` or blue-grey `OFF` filled strip when
   confirmed; pending/failed/unknown use amber dots, red exclamation or amber
   dash without asserting ON/OFF. Looper is labeled `UNWIRED` (no switch action),
   tuner shows a large note and cents only with a fresh active sample (otherwise
@@ -402,16 +425,20 @@ normal Spark testing.
    the preset name, label, status, colors, icon/layout, and touchscreen view
    independently for each mini. No
    new assets or graphics libraries are required.
-   No pedal input or looper control is assigned to it. Main-panel touch/page
+    The mini TFT is presentation-only; input is read by the MCP switch handler.
+    Physical Looper primary actions remain unassigned until that mapping is
+    independently verified. Main-panel touch/page
    switching and mini updates have been verified together. Spark BLE
    responsiveness with the revised mini artwork active has not yet been
    specifically retested.
-  Other views retain the same touchscreen-context card on both minis. This is not a
-  change to the frozen 2.8-inch LVGL touchscreen UI or an implementation of the
-  six-display layout.
+   Other views retain the same touchscreen-context card on all six minis. This is
+   not a change to the frozen 2.8-inch LVGL touchscreen UI or a completed physical
+   six-display layout.
   **Keep the 2.8-inch visuals and behavior frozen until all six mini displays
-  work.** TFT3..6 and footswitches remain future work; TFT2's output
-  requires visual verification on the connected hardware.
+   work.** TFT5 (GPB4 CS) has backlight but no image; investigate the module,
+   wiring, and GPB4 path. Physical Port A input, debounce, mode/tap handling, preset-bank
+   browsing, and FX button routing are implemented; one-by-one physical press
+   verification remains to be done. Physical Looper actions remain unassigned.
 
 The original OLED, LEDs, and footswitch source files are excluded from this
 target because their legacy GPIO initialization overlaps the PanelLan LCD bus.
@@ -419,7 +446,7 @@ target because their legacy GPIO initialization overlaps the PanelLan LCD bus.
 ### Mini coexistence and transport profiles
 
 The explicit SPI profile is an alias of the default integrated LVGL/controller
-build (state-fed TFT1/TFT2 cards, not the standalone TFT1-only test):
+build (state-fed TFT1..TFT6 cards, not the standalone TFT1-only test):
 
 ```sh
 pio run -e panelan-lvgl-controller-spi-mini
@@ -434,20 +461,21 @@ SPI2_HOST mode-0 10 MHz profile (80x160 glass, portrait offset 26,1, rotated
 X offset 0 to avoid its observed left-edge RAM column). LovyanGFX does not
 own CS or reset pins: the MCP driver preloads all GPB0..6 high, pulses shared
 GPB6 reset with all CS high, then brackets each controller initialization and
-draw by deasserting all CS, selecting GPB0 (TFT1) or GPB1 (TFT2) only, and
-deasserting all CS afterwards. The two displays are driven sequentially, never
+draw by deasserting all CS, selecting only GPB0..5 for TFT1..6 respectively, and
+deasserting all CS afterwards. The six displays are driven sequentially, never
 selected together; transient select/deselect failures retry without permanently
 disabling rendering, and each panel caches its card only after its own draw
-finishes. GPB2..5
-remain high; TFT3..6 and expander switch wiring are not implemented. Each mini
-immediately receives six solid
+finishes. MCP Port A is configured for active-low switches with internal
+pull-ups and polled by the main controller loop. Each mini immediately receives six solid
 color bars, borders and `MINI` using LGFX primitives, holds that image for at
 least five seconds, then draws dark state-driven cards with slot/FX cues and a
   full-width status strip over SPI only when visible content changes (including the
-displayed preset name). There is no utility-mode card or bank/TAP/scene/mute
-action: those physical functions and performance modes are not implemented.
-No pixel readback exists: the wall-powered integrated SPI profile was visually
-verified on Preset and FX with the main touchscreen before this artwork update.
+    displayed preset name). Preset-bank and FX mini cards track the corresponding
+    physical switch actions; MODE and TAP/TUNER are utility inputs without their own
+    mini display. Looper primary actions remain unassigned pending separate hardware
+    verification.
+ No pixel readback exists: five of six connected panels have shown an image;
+TFT5 (GPB4 CS) has backlight but no image.
 A successful build or serial draw
 message alone does **not** establish that SPI pixels are visible on other setups.
 The standalone `panelan-mini-tft-bringup` and GPIO fallback remain separate;
@@ -604,9 +632,11 @@ Spark devices until the remembered-device and confirmation UI is implemented.
 ## Deferred pedal hardware
 
 The enclosure direction is an HX Stomp XL-style layout with up to eight
-footswitches and six small per-switch displays. Beyond the first directly
-wired mini, switch inputs, additional mini CS lines, and performance-mode
-mapping remain unimplemented. The proposed expansion approach remains in
+footswitches and six small per-switch displays. The integrated SPI renderer
+supports all six mini CS lines in software; five connected displays show an
+image, while TFT5 (GPB4 CS) does not. Confirmed MCP Port A switches and their software input/action
+mapping are implemented, but physical press behavior has not been verified.
+The proposed expansion approach remains in
 [PROJECT_PLAN.md](PROJECT_PLAN.md).
 
 
