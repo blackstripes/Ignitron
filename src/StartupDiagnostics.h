@@ -1,5 +1,16 @@
 #pragma once
 
+namespace StartupDiagnostics {
+enum Event : unsigned char {
+    StageBoundary, ResetReason, PreviousBreadcrumb, McpWrite, McpFault,
+    McpIntent, ResetBoundary, PanelBoundary, MiniMessage,
+    WireRestart, WirePause, McpProbe, WireError, WireRetry, WireBegin, WireRead
+};
+enum Fault : unsigned char { NotReady, InvalidSelect, Overlap, InvalidDeselect, SelectFailed, DeselectFailed, SetupFailed };
+enum PanelPhase : unsigned char { InitCall, InitDone, SplashBegin, SplashDone, LiveBegin, LiveDone, InitRetry, DrawRetry };
+enum Message : unsigned char { SpiBegin, McpReady, McpDisabled, PanelReady, CardSent };
+}
+
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
 #include <Arduino.h>
 #include <esp_system.h>
@@ -24,6 +35,18 @@ struct Breadcrumb {
     uint32_t checksum;
 };
 extern Breadcrumb breadcrumb;
+
+// Single controller-task producer/consumer. No heap or Serial work on the
+// producer path, including while a mini CS is asserted.
+void record(Event event, uint8_t a = 0, uint8_t b = 0, uint8_t c = 0,
+            uint32_t value = 0);
+void stage(Stage stage, bool complete, bool includeHealth);
+// Microsecond call boundaries are captured by the caller, adjacent to Wire calls.
+void wireTiming(Event event, uint8_t reg, uint8_t value, uint8_t attempt,
+                uint8_t status, uint32_t before, uint32_t after,
+                uint32_t secondBefore = 0, uint32_t secondAfter = 0);
+void wireError(uint8_t reg, uint8_t value, uint8_t attempt, uint8_t status);
+void drain(); // Only from setup/loop, outside SPI work; requires connected USB CDC.
 
 inline const char *name(uint8_t stage) {
     static const char *const names[] = {
@@ -51,30 +74,12 @@ inline void health() {
 
 inline void boot() {
     const esp_reset_reason_t reason = esp_reset_reason();
-    const char *description = "unknown";
-    switch (reason) {
-    case ESP_RST_POWERON: description = "power on"; break;
-    case ESP_RST_EXT: description = "external reset"; break;
-    case ESP_RST_SW: description = "software reset"; break;
-    case ESP_RST_PANIC: description = "panic/exception"; break;
-    case ESP_RST_INT_WDT: description = "interrupt watchdog"; break;
-    case ESP_RST_TASK_WDT: description = "task watchdog"; break;
-    case ESP_RST_WDT: description = "other watchdog"; break;
-    case ESP_RST_DEEPSLEEP: description = "deep sleep wake"; break;
-    case ESP_RST_BROWNOUT: description = "brownout"; break;
-    case ESP_RST_SDIO: description = "SDIO"; break;
-    default: break;
-    }
-    Serial.printf("[startup %lu ms] reset=%d (%s)", static_cast<unsigned long>(millis()),
-                  static_cast<int>(reason), description);
-    health();
+    record(ResetReason, static_cast<uint8_t>(reason));
     if (breadcrumb.marker == 0x49474E44u && breadcrumb.stage <= InitComplete &&
         breadcrumb.complete <= 1 && breadcrumb.reserved == 0 && breadcrumb.checksum == check(breadcrumb)) {
-        Serial.printf("[startup] previous breadcrumb: %s %s at %lu ms (prior boot uptime)\n",
-                      name(breadcrumb.stage), breadcrumb.complete ? "complete" : "entered",
-                      static_cast<unsigned long>(breadcrumb.timestamp));
+        record(PreviousBreadcrumb, breadcrumb.stage, breadcrumb.complete, 1, breadcrumb.timestamp);
     } else {
-        Serial.println("[startup] previous breadcrumb: unavailable/invalid");
+        record(PreviousBreadcrumb);
     }
 }
 
@@ -85,14 +90,19 @@ inline void mark(Stage stage, bool complete, bool log = true) {
     breadcrumb.complete = complete;
     breadcrumb.reserved = 0;
     breadcrumb.checksum = check(breadcrumb);
-    if (log) {
-        Serial.printf("[startup %lu ms] %s %s", static_cast<unsigned long>(breadcrumb.timestamp),
-                      name(stage), complete ? "complete" : "enter");
-        health();
-    }
+    StartupDiagnostics::stage(stage, complete, log);
 }
 
 inline Stage tftInit(uint8_t display) { return static_cast<Stage>(Tft1Init + (display - 1) * 2); }
 inline Stage tftSplash(uint8_t display) { return static_cast<Stage>(Tft1Splash + (display - 1) * 2); }
 } // namespace StartupDiagnostics
+#else
+#include <stdint.h>
+namespace StartupDiagnostics {
+inline void record(Event, uint8_t = 0, uint8_t = 0, uint8_t = 0, uint32_t = 0) {}
+inline void stage(Stage, bool, bool) {}
+inline void wireTiming(Event, uint8_t, uint8_t, uint8_t, uint8_t,
+                       uint32_t, uint32_t, uint32_t = 0, uint32_t = 0) {}
+inline void wireError(uint8_t, uint8_t, uint8_t, uint8_t) {}
+}
 #endif

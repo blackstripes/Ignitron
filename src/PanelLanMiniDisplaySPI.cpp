@@ -161,33 +161,41 @@ void PanelLanMiniDisplay::initPanels() {
             // the next select also starts with all CS high.
             miniSelect.deselect();
             miniRetryAt_ = millis() + 1000;
-            Serial.printf("ST7735S: MCP23017 select failed; TFT%u init will retry\n", display);
+            StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::InitRetry);
             return;
         }
         PanelLanMiniSPI &tft = *tfts[miniInitialized_];
+        const uint32_t initAt = millis();
+        StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::InitCall);
         tft.init();
+        StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::InitDone, 0, millis() - initAt);
         tft.setRotation(1); // 90 degrees clockwise: 160x80 landscape
         // CS remains asserted; retain progress without serial I/O until deselect.
         StartupDiagnostics::mark(StartupDiagnostics::tftInit(display), true, false);
         StartupDiagnostics::mark(StartupDiagnostics::tftSplash(display), false, false);
+        const uint32_t splashAt = millis();
+        StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::SplashBegin);
         drawSplash(tft); // first pixels before controller state is consulted
+        const uint32_t splashDrawDone = millis();
+        StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::SplashDone,
+                                   0, splashDrawDone - splashAt);
         if (!miniSelect.deselect()) {
             miniRetryAt_ = millis() + 1000;
-            Serial.printf("ST7735S: MCP23017 deselect failed; TFT%u init will retry\n", display);
+            StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::InitRetry);
             return;
         }
         StartupDiagnostics::mark(StartupDiagnostics::tftSplash(display), true);
-        Serial.printf("ST7735S TFT%u logical geometry: %d x %d\n", display, tft.width(), tft.height());
-        Serial.printf("ST7735S TFT%u: SPI2 color bars sent (no readback)\n", display);
+        StartupDiagnostics::record(StartupDiagnostics::MiniMessage, StartupDiagnostics::PanelReady, display,
+                                   static_cast<uint8_t>(tft.height()), tft.width());
         ++miniInitialized_;
     }
     splashAt_ = millis();
 }
 
 void PanelLanMiniDisplay::begin() {
-    Serial.println("ST7735S: integrated SPI2 init (write-only)");
+    StartupDiagnostics::record(StartupDiagnostics::MiniMessage, StartupDiagnostics::SpiBegin);
     if (!miniSelect.begin()) {
-        Serial.println("ST7735S: MCP23017 init failed; minis disabled");
+        StartupDiagnostics::record(StartupDiagnostics::MiniMessage, StartupDiagnostics::McpDisabled);
         return;
     }
     miniReady_ = true;
@@ -296,21 +304,27 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
         if (!miniSelect.select(display)) {
             miniSelect.deselect();
             miniRetryAt_ = millis() + 1000;
-            Serial.printf("ST7735S: MCP23017 select failed; TFT%u draw will retry\n", display);
+            StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::DrawRetry);
             return;
         }
+        const bool firstLive = !cardDrawn_[i];
+        const uint32_t drawAt = millis();
+        if (firstLive) StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::LiveBegin);
         drawCard(*tfts[i], card);
+        const uint32_t drawDone = millis();
+        if (firstLive) StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::LiveDone,
+                                                  0, drawDone - drawAt);
         if (!miniSelect.deselect()) {
             miniRetryAt_ = millis() + 1000;
-            Serial.printf("ST7735S: MCP23017 deselect failed; TFT%u draw will retry\n", display);
+            StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::DrawRetry);
             return;
         }
         lastView_[i] = view;
         strcpy(lastCard_[i], key);
         cardDrawn_[i] = true;
         if (view == PanelLanLVGLUI::View::Preset)
-            Serial.printf("ST7735S TFT%u preset card sent (no readback): slot=%u name=%s active=%u\n",
-                           display, display, card.name, snapshot.confirmedHardwarePreset);
+            StartupDiagnostics::record(StartupDiagnostics::MiniMessage, StartupDiagnostics::CardSent, display,
+                                       snapshot.confirmedHardwarePreset);
     }
     if (!miniUiComplete_) {
         miniUiComplete_ = true;

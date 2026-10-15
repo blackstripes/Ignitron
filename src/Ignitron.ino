@@ -289,18 +289,22 @@ void setup() {
     persistentEventLog.record(PersistentEvent::InitComplete, static_cast<uint16_t>(operationMode), true);
 #ifdef PANELAN_MINI_SPI_MODE
     StartupDiagnostics::mark(StartupDiagnostics::InitComplete, true);
+    StartupDiagnostics::drain(); // All mini SPI selections have been released.
 #endif
 }
 
 void loop() {
 #ifdef PANELAN_MINI_SPI_MODE
+    StartupDiagnostics::drain(); // Controller task, before any mini drawing this pass.
     static uint32_t lastHeartbeat = millis();
     const uint32_t heartbeatNow = millis();
     if (heartbeatNow - lastHeartbeat >= 10000) {
         lastHeartbeat = heartbeatNow;
-        Serial.printf("[startup %lu ms] heartbeat ampConnected=%u", static_cast<unsigned long>(heartbeatNow),
-                      static_cast<unsigned>(SparkDataControl::isAmpConnected()));
-        StartupDiagnostics::health();
+        if (Serial) {
+            Serial.printf("[startup %lu ms] heartbeat ampConnected=%u", static_cast<unsigned long>(heartbeatNow),
+                          static_cast<unsigned>(SparkDataControl::isAmpConnected()));
+            StartupDiagnostics::health();
+        }
     }
 #endif
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
