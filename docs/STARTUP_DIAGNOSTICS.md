@@ -108,11 +108,36 @@ writes during startup. `beginTransmission()` took 7-11 us; each following
 was `loopTask`, priority 1, running on core 1. Readback after the first recovered
 release was IODIRB=0x80, GPIOB=0x7f, OLATB=0x7f.
 
-The approximately one-second wait is inside `Wire.endTransmission()`. That
-API call includes both the ESP32 HAL I2C bus-lock wait and the hardware
-transaction; the application-level timestamps cannot divide those components.
-The 50 ms configured timeout does not bound the HAL's `portMAX_DELAY` lock wait.
-The current capture therefore locates the delay at the call boundary but does
-not establish whether most time is spent acquiring the HAL lock, in the driver
-transaction, or due to scheduling. The register readback is after recovery and
-does not reveal line levels or a transient during the failed transfer.
+## ESP-IDF 4.4.7 command wait diagnosis
+
+The installed core bundles ESP-IDF 4.4.7. A temporary, target-write-only trace
+inside its `esp32-hal-i2c.c::i2cWrite()` split the two internal intervals for
+the OLATB release write: HAL bus-lock acquisition took 4-6 us, while
+`i2c_master_cmd_begin()` took 999643-999700 us and returned 263 (`ESP_ERR_TIMEOUT`).
+The temporary installed-core edit and project trace flag were reverted after this
+diagnostic build; no permanent framework modification is part of the firmware.
+The full startup trace is saved locally (not committed) at
+`logs/i2c-core-lock-timing-20261015-055646.log`.
+
+In ESP-IDF 4.4.7 `components/driver/i2c.c::i2c_master_cmd_begin()`, the command
+mutex is acquired with the supplied tick timeout, then the command-event loop
+computes remaining time but clamps `xQueueReceive()` to at least
+`I2C_CMD_ALIVE_INTERVAL_TICK`, defined as `1000 / portTICK_PERIOD_MS` (one
+second). If no ISR `ALIVE`/`DONE` event reaches that queue, the driver therefore
+does not return at the configured 50 ms; it returns at approximately the
+one-second liveness interval, runs `i2c_hw_fsm_reset()`, and returns
+`ESP_ERR_TIMEOUT`. This matches the captured call duration. It identifies the
+one-second wait precisely; it does not explain why that transaction produces
+no I2C interrupt/event.
+
+The mini SPI path uses SPI2 and GPIO10/11/14; the MCP uses I2C0/Wire on GPIO12/13.
+LovyanGFX's Arduino SPI transaction path takes and releases its SPI host mutex;
+that mutex is separate from the I2C0 locks. No shared lock, GPIO, or application
+global-Wire caller tying the SPI transaction to I2C0 was found in the inspected
+code. The repeated timing correlation remains real, but the reason no I2C event
+arrives after splash rendering is unresolved. A stuck/loaded SDA or SCL, a
+transient or peripheral/interrupt state issue remain possible; the GPIOB
+readback is only after recovery and cannot distinguish them. Do not shorten the
+driver's one-second liveness wait as a fix: that would only expose the timeout
+earlier, not restore the missing I2C event. Capture SDA/SCL at the MCP during a
+failed release before changing recovery, SPI, or reset behavior.
