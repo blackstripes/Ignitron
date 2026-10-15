@@ -11,6 +11,7 @@
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
 #include "PersistentEventLog.h"
+#include "StartupDiagnostics.h"
 #ifndef HEADLESS_SERIAL_MODE
 #include "SparkButtonHandler.h"
 #include "SparkDisplayControl.h"
@@ -84,12 +85,22 @@ void pollPhysicalSwitches() {
 
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
 void updatePanelLanScreens() {
+#ifdef PANELAN_MINI_SPI_MODE
+    static bool firstUpdate = true;
+    if (firstUpdate) StartupDiagnostics::mark(StartupDiagnostics::MainUiUpdate, false);
+#endif
     const ControllerSnapshot &snapshot = controllerState.snapshot();
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     PanelLanMiniDisplay::traceHardware("before main update");
 #endif
     // LVGL flushes synchronously inside update(); then service the selected mini backend.
     panelLanDisplay.update(snapshot);
+#ifdef PANELAN_MINI_SPI_MODE
+    if (firstUpdate) {
+        firstUpdate = false;
+        StartupDiagnostics::mark(StartupDiagnostics::MainUiUpdate, true);
+    }
+#endif
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     PanelLanMiniDisplay::traceHardware("after main update (flush/touch)");
 #endif
@@ -155,6 +166,10 @@ bool selectTouchPreset(uint8_t preset) {
 void setup() {
 
     Serial.begin(115200);
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+    StartupDiagnostics::boot(); // Before the bounded USB CDC wait: do not require DTR.
+    StartupDiagnostics::mark(StartupDiagnostics::Boot, false);
+#endif
 #ifdef PANELAN_SC05X_MODE
     // USB CDC hosts do not always assert DTR (and the display must not depend
     // on a serial terminal being open). Give the host a brief chance, then
@@ -164,16 +179,25 @@ void setup() {
         delay(10);
     }
 #else
-    while (!Serial)
-        ;
+    const unsigned long serialReadyDeadline = millis() + 1500;
+    while (!Serial && millis() < serialReadyDeadline) delay(10);
 #endif
 
     Serial.println("Initializing");
+#ifdef PANELAN_MINI_SPI_MODE
+    StartupDiagnostics::mark(StartupDiagnostics::Boot, true);
+#endif
 #ifdef PANELAN_SC05X_MODE
  #ifdef PANELAN_LVGL_UI_MODE
     panelLanDisplay.setActions(&controllerActions);
  #endif
+#ifdef PANELAN_MINI_SPI_MODE
+    StartupDiagnostics::mark(StartupDiagnostics::MainDisplay, false);
+#endif
     panelLanDisplay.begin();
+#ifdef PANELAN_MINI_SPI_MODE
+    StartupDiagnostics::mark(StartupDiagnostics::MainDisplay, true);
+#endif
 #ifndef PANELAN_LVGL_UI_MODE
     panelLanDisplay.setPresetCallback(selectTouchPreset);
 #endif
@@ -213,7 +237,13 @@ void setup() {
 #endif
 
     // Setting operation mode before initializing
+#ifdef PANELAN_MINI_SPI_MODE
+    StartupDiagnostics::mark(StartupDiagnostics::SparkInit, false);
+#endif
     operationMode = spark_dc->init(operationMode);
+#ifdef PANELAN_MINI_SPI_MODE
+    StartupDiagnostics::mark(StartupDiagnostics::SparkInit, true);
+#endif
 #ifndef HEADLESS_SERIAL_MODE
     spark_bh.configureButtons();
 #endif
@@ -252,11 +282,27 @@ void setup() {
     panelLanMiniDisplay.update(controllerState.snapshot(), panelLanDisplay.activeView());
 #endif
 
+#ifdef PANELAN_MINI_SPI_MODE
+    StartupDiagnostics::mark(StartupDiagnostics::InitComplete, false);
+#endif
     Serial.println("Initialization done.");
     persistentEventLog.record(PersistentEvent::InitComplete, static_cast<uint16_t>(operationMode), true);
+#ifdef PANELAN_MINI_SPI_MODE
+    StartupDiagnostics::mark(StartupDiagnostics::InitComplete, true);
+#endif
 }
 
 void loop() {
+#ifdef PANELAN_MINI_SPI_MODE
+    static uint32_t lastHeartbeat = millis();
+    const uint32_t heartbeatNow = millis();
+    if (heartbeatNow - lastHeartbeat >= 10000) {
+        lastHeartbeat = heartbeatNow;
+        Serial.printf("[startup %lu ms] heartbeat ampConnected=%u", static_cast<unsigned long>(heartbeatNow),
+                      static_cast<unsigned>(SparkDataControl::isAmpConnected()));
+        StartupDiagnostics::health();
+    }
+#endif
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     if (!panelLanMiniDisplay.diagnosticRunController()) {
         serialCLI->update();

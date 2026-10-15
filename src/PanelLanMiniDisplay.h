@@ -38,6 +38,7 @@ private:
     PanelLanLVGLUI::View lastView_[miniCount_]{};
     char lastCard_[miniCount_][96]{};
     bool cardDrawn_[miniCount_]{};
+    bool miniUiComplete_ = false;
 #else
     struct Panel : lgfx::Panel_ST7735S {
         using lgfx::Panel_ST7735S::getInitCommands;

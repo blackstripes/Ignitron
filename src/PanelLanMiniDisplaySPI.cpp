@@ -6,6 +6,7 @@
 #include <cstring>
 #include "PanelLanMiniSPI.h"
 #include "PanelLanMiniMCP23017.h"
+#include "StartupDiagnostics.h"
 #include "controller/HardwarePresetNames.h"
 
 namespace {
@@ -154,6 +155,7 @@ PanelLanMiniDisplay::PanelLanMiniDisplay() = default;
 void PanelLanMiniDisplay::initPanels() {
     while (miniInitialized_ < miniCount_) {
         const uint8_t display = miniInitialized_ + 1;
+        StartupDiagnostics::mark(StartupDiagnostics::tftInit(display), false);
         if (!miniSelect.select(display)) {
             // A failed selection may have left a CS asserted. Try to clear it;
             // the next select also starts with all CS high.
@@ -165,13 +167,17 @@ void PanelLanMiniDisplay::initPanels() {
         PanelLanMiniSPI &tft = *tfts[miniInitialized_];
         tft.init();
         tft.setRotation(1); // 90 degrees clockwise: 160x80 landscape
-        Serial.printf("ST7735S TFT%u logical geometry: %d x %d\n", display, tft.width(), tft.height());
+        // CS remains asserted; retain progress without serial I/O until deselect.
+        StartupDiagnostics::mark(StartupDiagnostics::tftInit(display), true, false);
+        StartupDiagnostics::mark(StartupDiagnostics::tftSplash(display), false, false);
         drawSplash(tft); // first pixels before controller state is consulted
         if (!miniSelect.deselect()) {
             miniRetryAt_ = millis() + 1000;
             Serial.printf("ST7735S: MCP23017 deselect failed; TFT%u init will retry\n", display);
             return;
         }
+        StartupDiagnostics::mark(StartupDiagnostics::tftSplash(display), true);
+        Serial.printf("ST7735S TFT%u logical geometry: %d x %d\n", display, tft.width(), tft.height());
         Serial.printf("ST7735S TFT%u: SPI2 color bars sent (no readback)\n", display);
         ++miniInitialized_;
     }
@@ -203,6 +209,7 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
     // Keep the diagnostic visible through startup, even if the controller is
     // disconnected or BLE setup is slow. Afterwards use only SPI2 for state cards.
     if (now - splashAt_ < 5000) return;
+    if (!miniUiComplete_) StartupDiagnostics::mark(StartupDiagnostics::MiniUiUpdate, false);
     for (uint8_t i = 0; i < miniCount_; ++i) {
         const uint8_t display = i + 1;
         Card card;
@@ -304,6 +311,10 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
         if (view == PanelLanLVGLUI::View::Preset)
             Serial.printf("ST7735S TFT%u preset card sent (no readback): slot=%u name=%s active=%u\n",
                            display, display, card.name, snapshot.confirmedHardwarePreset);
+    }
+    if (!miniUiComplete_) {
+        miniUiComplete_ = true;
+        StartupDiagnostics::mark(StartupDiagnostics::MiniUiUpdate, true);
     }
 }
 #endif

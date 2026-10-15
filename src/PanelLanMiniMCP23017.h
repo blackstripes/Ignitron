@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include "StartupDiagnostics.h"
 
 // MCP23017 at 0x27 (Waveshare board address pins open/high), default BANK=0.
 // Port A: eight active-low switches with internal pull-ups.
@@ -43,6 +44,9 @@ class PanelLanMiniMCP23017 {
 
 public:
     bool begin() {
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+        StartupDiagnostics::mark(StartupDiagnostics::McpBegin, false);
+#endif
         ready_ = false;
         Wire.begin(12, 13); // IO12 SDA, IO13 SCL (not TFT RES/CS)
         // Preload the latch *while pins are still inputs*: no selected TFT
@@ -59,6 +63,9 @@ public:
         if (!write(olatB_, high_)) { ready_ = false; return false; }
         delay(120);
         Serial.println("MCP23017: detected at 0x27; GPB0-GPB6 ready, shared TFT1..TFT6 reset complete");
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+        StartupDiagnostics::mark(StartupDiagnostics::McpBegin, true);
+#endif
         return true;
     }
 
