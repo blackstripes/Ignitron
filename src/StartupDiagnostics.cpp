@@ -40,6 +40,7 @@ const char *resetReasonName(uint8_t reason) {
 }
 
 void record(Event event, uint8_t a, uint8_t b, uint8_t c, uint32_t value) {
+    if (event == McpFault) FlightRecorder::record(FlightRecorder::Mcp, a, uint16_t(value));
     if (count == capacity) { ++dropped; return; }
     Record &r = ring[(next + count) % capacity];
     r.at = millis(); r.value = value; r.event = event; r.a = a; r.b = b; r.c = c;
@@ -70,6 +71,7 @@ void wireTiming(Event event, uint8_t reg, uint8_t value, uint8_t attempt,
 }
 
 void wireError(uint8_t reg, uint8_t value, uint8_t attempt, uint8_t status) {
+    FlightRecorder::record(FlightRecorder::Mcp, status, attempt);
     if (count == capacity) { ++dropped; return; }
     Record &r = ring[(next + count) % capacity];
     r.at = millis(); r.event = WireError; r.a = reg; r.b = value;

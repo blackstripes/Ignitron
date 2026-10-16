@@ -1,4 +1,5 @@
 #include "PersistentEventLog.h"
+#include "FlightRecorder.h"
 
 #include <LittleFS.h>
 #include <string.h>
@@ -106,6 +107,21 @@ void PersistentEventLog::begin(bool filesystemAvailable) {
 }
 
 void PersistentEventLog::record(PersistentEvent event, uint16_t value, bool urgent) {
+    // Mirror only existing semantic transitions into crash-survival RTC storage.
+    // Filesystem history and RTC retention remain independent.
+    switch (event) {
+    case PersistentEvent::SyncPhase: FlightRecorder::record(FlightRecorder::Sync, 0, value); break;
+    case PersistentEvent::BleLinkUp: FlightRecorder::record(FlightRecorder::Link, 1); break;
+    case PersistentEvent::BleLinkDown: FlightRecorder::record(FlightRecorder::Link, 0); break;
+    case PersistentEvent::BleSubscribeFailure: FlightRecorder::record(FlightRecorder::Connect, 3); break;
+    case PersistentEvent::BleWriteFailure: FlightRecorder::record(FlightRecorder::Connect, 4, value); break;
+    case PersistentEvent::PresetSend: case PersistentEvent::PresetConfirmed: case PersistentEvent::PresetFailed:
+        FlightRecorder::record(FlightRecorder::Preset, static_cast<uint8_t>(event) - static_cast<uint8_t>(PersistentEvent::PresetSend), value); break;
+    case PersistentEvent::FxSend: case PersistentEvent::FxConfirmed: case PersistentEvent::FxFailed:
+        FlightRecorder::record(FlightRecorder::Fx, static_cast<uint8_t>(event) - static_cast<uint8_t>(PersistentEvent::FxSend), value); break;
+    case PersistentEvent::IngressInvalidated: FlightRecorder::record(FlightRecorder::Invalidate); break;
+    default: break;
+    }
     portENTER_CRITICAL(&eventLogMux);
     if (ringCount_ == kRamRecords) { ++ramOverruns_; } else { ++ringCount_; }
     Record &record = ring_[ringWrite_];
@@ -177,7 +193,7 @@ void PersistentEventLog::service() {
 }
 
 const char *PersistentEventLog::eventName(uint8_t event) const {
-    static const char *const names[] = {"?", "boot", "init", "fs-unavailable", "ble-up", "ble-down", "subscribe-fail", "write-fail", "ingress-busy", "ingress-full", "ingress-reset", "sync-phase", "preset-send", "preset-ok", "preset-fail", "fx-send", "fx-ok", "fx-fail"};
+    static const char *const names[] = {"?", "boot", "init", "fs-unavailable", "ble-up", "ble-down", "subscribe-fail", "write-fail", "ingress-busy", "ingress-full", "ingress-reset", "sync-phase", "preset-send", "preset-ok", "preset-fail", "fx-send", "fx-ok", "fx-fail", "boot-reset"};
     return event < sizeof(names) / sizeof(names[0]) ? names[event] : "unknown";
 }
 void PersistentEventLog::printRecord(Stream &out, const Record &record) const {

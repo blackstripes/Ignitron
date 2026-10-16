@@ -11,7 +11,7 @@ enum class PersistentEvent : uint8_t {
     IngressDropBusy, IngressDropFull, IngressInvalidated,
     SyncPhase,
     PresetSend, PresetConfirmed, PresetFailed,
-    FxSend, FxConfirmed, FxFailed
+    FxSend, FxConfirmed, FxFailed, BootResetSummary
 };
 
 class PersistentEventLog {

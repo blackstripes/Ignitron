@@ -167,6 +167,7 @@ void setup() {
 
     Serial.begin(115200);
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+    FlightRecorder::boot();
     StartupDiagnostics::boot(); // Before the bounded USB CDC wait: do not require DTR.
     StartupDiagnostics::mark(StartupDiagnostics::Boot, false);
 #endif
@@ -184,6 +185,9 @@ void setup() {
 #endif
 
     Serial.println("Initializing");
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+    if (Serial) FlightRecorder::replay(Serial);
+#endif
 #ifdef PANELAN_MINI_SPI_MODE
     StartupDiagnostics::mark(StartupDiagnostics::Boot, true);
 #endif
@@ -287,6 +291,9 @@ void setup() {
 #endif
     Serial.println("Initialization done.");
     persistentEventLog.record(PersistentEvent::InitComplete, static_cast<uint16_t>(operationMode), true);
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+    persistentEventLog.record(PersistentEvent::BootResetSummary, FlightRecorder::resetSummary(), true);
+#endif
 #ifdef PANELAN_MINI_SPI_MODE
     StartupDiagnostics::mark(StartupDiagnostics::InitComplete, true);
     StartupDiagnostics::drain(); // All mini SPI selections have been released.
@@ -300,6 +307,7 @@ void loop() {
     const uint32_t heartbeatNow = millis();
     if (heartbeatNow - lastHeartbeat >= 10000) {
         lastHeartbeat = heartbeatNow;
+        FlightRecorder::heapSample(0x40);
         if (Serial) {
             Serial.printf("[startup %lu ms] heartbeat ampConnected=%u", static_cast<unsigned long>(heartbeatNow),
                           static_cast<unsigned>(SparkDataControl::isAmpConnected()));

@@ -1,4 +1,5 @@
 #include "PanelLanLVGLUI.h"
+#include "FlightRecorder.h"
 #include "controller/ControllerActions.h"
 
 #include <esp_heap_caps.h>
@@ -1189,6 +1190,10 @@ void PanelLanLVGLUI::reconcileExternalTuner(const ControllerSnapshot &snapshot) 
 bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
     const size_t captureBytes = kDisplayWidth * kDisplayHeight * sizeof(uint16_t);
     uint8_t *capture = static_cast<uint8_t *>(heap_caps_malloc(captureBytes, MALLOC_CAP_SPIRAM));
+    if (!capture) {
+        FlightRecorder::record(FlightRecorder::AllocationFailure, 1);
+        FlightRecorder::heapSample(0x83);
+    }
     lv_image_dsc_t snapshot{};
     const lv_result_t result = capture
                                    ? lv_snapshot_take_to_buf(lv_screen_active(), LV_COLOR_FORMAT_RGB565,

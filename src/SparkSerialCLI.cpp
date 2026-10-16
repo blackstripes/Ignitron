@@ -7,6 +7,7 @@
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
 #include "PersistentEventLog.h"
+#include "FlightRecorder.h"
 
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
 #include "PanelLanLVGLUI.h"
@@ -85,6 +86,16 @@ void SparkSerialCLI::execute(String command) {
         else if (args == "dump") persistentEventLog.dump(Serial);
         else if (args == "clear confirm") Serial.println(persistentEventLog.clear() ? "Event log cleared." : "Event log is RAM-only; nothing persisted to clear.");
         else Serial.println("Usage: log status|dump|clear confirm");
+    } else if (verb == "flight") {
+        if (args == "status") FlightRecorder::status(Serial);
+        else if (args == "dump") FlightRecorder::dump(Serial);
+        else if (args == "test-restart") {
+            FlightRecorder::record(FlightRecorder::RestartIntent, 0xFE);
+            Serial.println("TEST: flight-recorder software restart requested");
+            Serial.flush();
+            ESP.restart();
+        }
+        else Serial.println("Usage: flight status|dump");
     } else if (verb == "preset") {
         handlePreset(args);
     } else if (verb == "bank") {
@@ -152,6 +163,8 @@ void SparkSerialCLI::printHelp() {
     Serial.println("  status");
     Serial.println("  report                  Print compact counters since boot (alias: diagnostics)");
     Serial.println("  log status|dump|clear confirm");
+    Serial.println("  flight status|dump      RTC pending/current trace (dump acknowledges pending)");
+    Serial.println("  flight test-restart     TEST ONLY: marked software restart of MCU");
     Serial.println("  amp                     Request amp identity");
     Serial.println("  refresh                 Request current preset");
     Serial.println("  screenshot              Stream a PPM screenshot over USB serial");

@@ -6,6 +6,7 @@
  */
 
 #include "SparkStreamReader.h"
+#include "FlightRecorder.h"
 #include "SparkPresetChecksum.h"
 #include <utility>
 
@@ -970,6 +971,7 @@ MessageProcessStatus SparkStreamReader::nextMessage() {
     const bool parsed = !readMessage(false).empty();
     response.clear();
     if (!parsed) {
+        FlightRecorder::record(FlightRecorder::Parser, 0);
         message.clear();
         statusObject.lastMessageNum() = 0;
 #ifdef PANELAN_PRESET_TRACE
@@ -977,6 +979,7 @@ MessageProcessStatus SparkStreamReader::nextMessage() {
 #endif
         return MSG_PROCESS_RES_REJECT;
     }
+    if (request) FlightRecorder::record(FlightRecorder::Parser, 2);
     return request ? MSG_PROCESS_RES_REQUEST : MSG_PROCESS_RES_COMPLETE;
 }
 

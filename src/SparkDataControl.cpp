@@ -7,6 +7,7 @@
 
 #include "SparkDataControl.h"
 #include "PersistentEventLog.h"
+#include "FlightRecorder.h"
 #include "SparkMessageSequence.h"
 
 #ifdef PANELAN_PRESET_TRACE
@@ -227,14 +228,17 @@ OperationMode SparkDataControl::init(OperationMode opModeInput) {
         bleControl->initBLE(&bleNotificationCallback);
         DEBUG_PRINTLN("Starting regular check for empty HW presets.");
 
-        xTaskCreatePinnedToCore(
+        if (xTaskCreatePinnedToCore(
             startLooperTimer,
             "LooperTimer",
             10000,
             NULL,
             0,
             NULL,
-            1);
+            1) != pdPASS) {
+            FlightRecorder::record(FlightRecorder::TaskFailure, 1);
+            FlightRecorder::heapSample(0x81);
+        }
         break;
     case SPARK_MODE_AMP:
         readBTModeFromFile();
@@ -369,6 +373,7 @@ void SparkDataControl::restartESP(bool resetSparkMode) {
         }
     }
     Serial.println();
+    FlightRecorder::record(FlightRecorder::RestartIntent, resetSparkMode ? 1 : 0);
     ESP.restart();
 }
 

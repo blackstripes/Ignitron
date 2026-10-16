@@ -4,6 +4,7 @@
 #include "SparkPresetControl.h"
 #include "SparkStatus.h"
 #include "PersistentEventLog.h"
+#include "FlightRecorder.h"
 #include "controller/HardwarePresetNames.h"
 
 #include <Arduino.h>
@@ -223,6 +224,10 @@ void ControllerState::invalidatePresetData() {
 }
 
 void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
+    if (static_cast<uint8_t>(snapshot_.connectionPhase) > static_cast<uint8_t>(ControllerConnectionPhase::Ready) ||
+        static_cast<uint8_t>(next.connectionPhase) > static_cast<uint8_t>(ControllerConnectionPhase::Ready))
+        FlightRecorder::record(FlightRecorder::StateFault, static_cast<uint8_t>(snapshot_.connectionPhase),
+                               static_cast<uint8_t>(next.connectionPhase));
     if (snapshot_.connectionPhase != next.connectionPhase) persistentEventLog.record(PersistentEvent::SyncPhase, static_cast<uint16_t>(next.connectionPhase), true);
     if (snapshot_.connectionPhase == next.connectionPhase &&
         snapshot_.sparkStateStale == next.sparkStateStale &&

@@ -25,6 +25,7 @@ enum Message : unsigned char { SpiBegin, McpReady, McpDisabled, PanelReady, Card
 #include <esp_attr.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "FlightRecorder.h"
 
 namespace StartupDiagnostics {
 enum Stage : uint8_t {
@@ -98,6 +99,11 @@ inline void mark(Stage stage, bool complete, bool log = true) {
     breadcrumb.complete = complete;
     breadcrumb.reserved = 0;
     breadcrumb.checksum = check(breadcrumb);
+    FlightRecorder::record(FlightRecorder::Stage, stage, complete);
+    if (complete && (stage == Boot || stage == MainDisplay || stage == SparkInit ||
+                     stage == McpBegin || stage == InitComplete || stage == MainUiUpdate ||
+                     stage == MiniUiUpdate))
+        FlightRecorder::heapSample(static_cast<uint8_t>(stage) | 0x20);
     StartupDiagnostics::stage(stage, complete, log);
 }
 

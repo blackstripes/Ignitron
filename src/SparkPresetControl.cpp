@@ -1,4 +1,5 @@
 #include "SparkPresetControl.h"
+#include "FlightRecorder.h"
 
 SparkPresetControl::SparkPresetControl() {
 }
@@ -18,7 +19,7 @@ void SparkPresetControl::init() {
     if (operationMode == SPARK_MODE_APP) {
         Serial.print("Initializing APP mode");
 #ifndef DISABLE_BACKGROUND_PRESET_CACHE
-        xTaskCreatePinnedToCore(
+        if (xTaskCreatePinnedToCore(
             checkForMissingPresets, // Function to implement the task
             "HWpresets",            // Name of the task
             10000,                  // Stack size in words
@@ -26,7 +27,10 @@ void SparkPresetControl::init() {
             0,                      // Priority of the task
             NULL,                   // Task handle.
             1                       // Core where the task should run
-        );
+        ) != pdPASS) {
+            FlightRecorder::record(FlightRecorder::TaskFailure, 2);
+            FlightRecorder::heapSample(0x82);
+        }
 #else
         // The LVGL/controller coexistence checkpoint deliberately has a
         // single owner for outbound Spark commands. The legacy cache task

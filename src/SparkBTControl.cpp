@@ -8,6 +8,7 @@
 #include "SparkBTControl.h"
 #include "BleChunkWrite.h"
 #include "PersistentEventLog.h"
+#include "FlightRecorder.h"
 
 #ifdef PANELAN_SC05X_MODE
 #include "PanelLanDisplay.h"
@@ -74,6 +75,7 @@ void SparkBTControl::initBLE(notify_callback notifyCallback) {
      Optional callback for when scanning stops.
      */
     Serial.println("Starting scan");
+    FlightRecorder::record(FlightRecorder::Scan, 1);
     scan->start(kScanTime, scanEndedCB);
 }
 
@@ -86,11 +88,13 @@ void SparkBTControl::scanEndedCB(NimBLEScanResults results) {
 }
 
 void SparkBTControl::startScan() {
+    FlightRecorder::record(FlightRecorder::Scan, 1);
     NimBLEDevice::getScan()->start(kScanTime, scanEndedCB);
     Serial.println("Scan initiated");
 }
 
 bool SparkBTControl::connectToServer() {
+    FlightRecorder::record(FlightRecorder::Connect, 1);
     /** Check if we have a client we should reuse first **/
     if (NimBLEDevice::getClientListSize()) {
         // A Spark may reboot while the controller remains powered.  Its old
@@ -101,6 +105,7 @@ bool SparkBTControl::connectToServer() {
             client_->deleteServices();
             if (!client_->connect(advDevice_, true)) {
                 Serial.println("Reconnect failed");
+                FlightRecorder::record(FlightRecorder::Connect, 2, 1);
                 isAmpConnected_ = false;
                 return false;
             }
@@ -120,6 +125,7 @@ bool SparkBTControl::connectToServer() {
             Serial.println(
                 "Max clients reached - no more connections available");
             isAmpConnected_ = false;
+            FlightRecorder::record(FlightRecorder::Connect, 2, 2);
             return false;
         }
 
@@ -141,6 +147,7 @@ bool SparkBTControl::connectToServer() {
             NimBLEDevice::deleteClient(client_);
             Serial.println("Failed to connect, deleted client");
             isAmpConnected_ = false;
+            FlightRecorder::record(FlightRecorder::Connect, 2, 3);
             return false;
         }
     }
@@ -149,6 +156,7 @@ bool SparkBTControl::connectToServer() {
         if (!client_->connect(advDevice_)) {
             Serial.println("Failed to connect");
             isAmpConnected_ = false;
+            FlightRecorder::record(FlightRecorder::Connect, 2, 4);
             return false;
         }
     }
@@ -159,6 +167,7 @@ bool SparkBTControl::connectToServer() {
     // peripheral or lack the control notification characteristic.  Mark the
     // amp connected only after subscribeToNotifications succeeds.
     isAmpConnected_ = false;
+    FlightRecorder::record(FlightRecorder::Connect, 0);
     return true;
 }
 
@@ -308,6 +317,7 @@ void SparkBTControl::onResult(NimBLEAdvertisedDevice *advertisedDevice) {
 #endif
     if (advertisedDevice->isAdvertisingService(
             NimBLEUUID(SPARK_BLE_SERVICE_UUID))) {
+        if (!isConnectionFound_) FlightRecorder::record(FlightRecorder::Scan, 2);
         Serial.println("Found Spark, connecting.");
         /** stop scan before connecting */
         // Commented as workaround, might need to get back here, is currently with DataControl;
