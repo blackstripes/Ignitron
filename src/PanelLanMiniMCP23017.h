@@ -120,6 +120,17 @@ class PanelLanMiniMCP23017 {
     }
 
 public:
+#if defined(PANELAN_I2C_AB_STAGE) && (PANELAN_I2C_AB_STAGE == 1 || PANELAN_I2C_AB_STAGE == 3 || PANELAN_I2C_AB_STAGE == 4)
+    // Explicit OLATB transaction, not a deselect of an active panel.
+    // ACK confirms only the write, not the physical CS levels.
+    bool diagnosticAllCsHigh() {
+        if (!ready_ || active_) return false;
+        StartupDiagnostics::record(StartupDiagnostics::McpIntent, 2, 0x80, high_);
+        const bool ok = write(olatB_, high_);
+        if (ok) probeAfterRecoveredHigh();
+        return ok;
+    }
+#endif
     bool begin() {
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
         StartupDiagnostics::mark(StartupDiagnostics::McpBegin, false);

@@ -1,5 +1,93 @@
 # PanelLan SPI controller startup capture
 
+## Opt-in I2C/SPI A/B variants
+
+The normal `panelan-lvgl-controller` has **no** `PANELAN_I2C_AB_STAGE` flag.
+Build one image at a time and flash only when ready to capture on hardware:
+
+```sh
+pio run -e panelan-lvgl-controller-i2c-ab-1
+pio run -e panelan-lvgl-controller-i2c-ab-1 -t upload --upload-port /dev/ttyACM0
+pio run -e panelan-lvgl-controller-i2c-ab-2
+pio run -e panelan-lvgl-controller-i2c-ab-2 -t upload --upload-port /dev/ttyACM0
+pio run -e panelan-lvgl-controller-i2c-ab-3
+pio run -e panelan-lvgl-controller-i2c-ab-3 -t upload --upload-port /dev/ttyACM0
+pio run -e panelan-lvgl-controller-i2c-ab-4
+pio run -e panelan-lvgl-controller-i2c-ab-4 -t upload --upload-port /dev/ttyACM0
+```
+
+Use the matching env with `pio device monitor -e <env> --port /dev/ttyACM0
+--baud 115200`, then reset with the monitor already attached. Substitute the
+actual port. Uploader-induced reset is **not** a cold boot: for cold-start
+comparisons remove/reapply board and external mini power as appropriate, then
+start capture before resetting; record reset reason and power sequence.
+
+Stage 1 (`PANELAN_I2C_AB_STAGE=1`) adds an explicit OLATB=0x7f all-CS-high
+write after MCP init/shared reset and before first mini SPI selection; a failed
+write stops mini initialization on that boot. Stage 2 (`=2`) performs a normal
+`deselect()` immediately after each TFT's `tft.init()` returns, before rotation
+and splash; it reselects that TFT before drawing. Failure of either operation
+aborts that panel attempt and takes the existing 1-second init retry path,
+with a best-effort all-high cleanup on failure. This reproduction env explicitly
+uses legacy SPI2 even though the normal firmware uses SPI3. Stage 3 (`=3`) first probes
+without a panel selected or initialized: it requests all CS high via MCP, then
+initializes a separate LovyanGFX SPI2 bus (mode 0, 10 MHz, MOSI 10, SCLK 11,
+MISO -1, DC 14). It probes I2C after bus init, after an empty SPI lock/config
+transaction (no clocks), after one unaddressed command byte 0x00, and after
+`bus.release()`. This separates those lifecycle steps. If a precondition fails,
+it skips the byte. The A/B stage-3 update path is paused after setup, so it does
+not subsequently initialize/draw minis; the main controller and MCP switch reads
+remain active.
+Stage 4 (`=4`) is a no-panel/no-CS control through the installed ESP-IDF SPI
+master API instead of LovyanGFX. It mimics LovyanGFX's GPIO14 D/C setup and
+high/low/high levels, with MCP all-high writes after each D/C transition; then
+it checks SPI bus init, device add, a polling one-byte 0x00 transfer (10 MHz,
+mode 0, no hardware CS), device removal/bus free, with MCP all-high writes
+between phases. Return codes are recorded. The probe does not select, initialize,
+or draw a TFT, and the A/B stage-4 update path is paused for the run. This compares LovyanGFX's
+direct-register bus lifecycle with the ESP-IDF SPI driver while matching D/C
+behavior. It still cannot rule out physical signal differences on the board.
+
+Buffered `I2C/SPI A/B stage=N boundary=B success=0/1 display=D` records bracket
+these actions: boundary 0=start, 1=high write (stages 1/3) or deselect (stage 2),
+2=bus init (stage 3) or reselect (stage 2), 3=post-bus-init high write
+(stage 3), 4=empty SPI transaction/post-check, 5=byte sent/wait/end (stage 3),
+6=post-transfer high write before bus release, 7=bus release, 8=post-release
+high write (stage 3, even if a precondition failed). Stage 4 uses 0=start,
+1=pre-SPI all-high, 2=D/C output
+setup, 3=post-setup all-high, 4=D/C low, 5=post-low all-high, 6=D/C restore,
+7=post-restore all-high, 8=IDF bus init, 9=post-init all-high, 10=device add,
+11=post-add all-high, 12=IDF transfer, 13=post-transfer all-high, 14=device
+removal/bus free, 15=post-release all-high. The `detail` value carries raw
+ESP-IDF/GPIO status values at operations that return them.
+Boundary 4 has `success=0` when no byte was sent because
+bus init or the post-init high check failed; no subsequent
+boundary after an initial high-write failure means SPI was skipped. Stage 2
+marks each display individually. Compare these
+with existing `MCP write`, `MCP error`, `MCP sample` and `MCP intent` records;
+the existing readback occurs only after a failed all-high write recovers on
+retry, not on every A/B step. Even ACK and GPIOB readback cannot prove the
+physical CS voltage at a TFT. Use a scope/logic analyzer for that question.
+No serial printing occurs inside the SPI transfer.
+
+## SPI host A/B result
+
+Two uploader-started SPI3-host runs produced no MCP status-5 timeouts; both
+completed all six live-card draws and connected to Spark. In the earlier normal
+SPI2-host captures, every panel init was followed by an all-CS-high timeout.
+The SPI3 A/B kept the same pin mapping, 10 MHz clock, mode, panel order, CS, and
+reset behavior. Stage 3 localized failures to the LovyanGFX default-host bus
+init/release boundaries: a no-clock transaction and a byte transfer, followed
+by successful I2C probes, did not independently trigger the failure. Stage 4's
+raw IDF bus/transfer with equivalent D/C transitions had successful probes.
+On ESP32-S3, LovyanGFX's default SPI2 path restarts Arduino `SPI` with
+`SPI.end()`/`SPI.begin()`; the non-default SPI3 path avoids that lifecycle. This
+evidence prompted the normal mini backend to use SPI3.
+These are software-reset tests, not cold boots, and do not prove cold-boot or
+random blank-display reliability. See `PanelLanMiniSPI.h` and local captures
+`logs/i2c-ab-stage5-spi3-20261015-070607.log` and
+`logs/i2c-ab-stage5-spi3-20261015-070706.log` (captures are not committed).
+
 Build with `pio run -e panelan-lvgl-controller`. With the board attached, start
 the 115200-baud USB CDC monitor **before** resetting the board:
 
@@ -130,7 +218,7 @@ one-second liveness interval, runs `i2c_hw_fsm_reset()`, and returns
 one-second wait precisely; it does not explain why that transaction produces
 no I2C interrupt/event.
 
-The mini SPI path uses SPI2 and GPIO10/11/14; the MCP uses I2C0/Wire on GPIO12/13.
+The normal mini SPI path uses SPI3 and GPIO10/11/14; the MCP uses I2C0/Wire on GPIO12/13.
 LovyanGFX's Arduino SPI transaction path takes and releases its SPI host mutex;
 that mutex is separate from the I2C0 locks. No shared lock, GPIO, or application
 global-Wire caller tying the SPI transaction to I2C0 was found in the inspected

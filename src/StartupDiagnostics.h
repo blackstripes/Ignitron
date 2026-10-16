@@ -4,11 +4,19 @@ namespace StartupDiagnostics {
 enum Event : unsigned char {
     StageBoundary, ResetReason, PreviousBreadcrumb, McpWrite, McpFault,
     McpIntent, ResetBoundary, PanelBoundary, MiniMessage,
-    WireRestart, WirePause, McpProbe, WireError, WireRetry, WireBegin, WireRead
+    WireRestart, WirePause, McpProbe, WireError, WireRetry, WireBegin, WireRead,
+    I2cAbBoundary
 };
 enum Fault : unsigned char { NotReady, InvalidSelect, Overlap, InvalidDeselect, SelectFailed, DeselectFailed, SetupFailed };
 enum PanelPhase : unsigned char { InitCall, InitDone, SplashBegin, SplashDone, LiveBegin, LiveDone, InitRetry, DrawRetry };
 enum Message : unsigned char { SpiBegin, McpReady, McpDisabled, PanelReady, CardSent };
+// A/B boundaries: stage 3 uses 0=start, 1=pre-SPI CS-high write,
+// 2=SPI bus init, 3=post-init CS-high write, 4=empty SPI transaction and
+// post-check, 5=byte transaction, 6=post-transfer CS-high write, 7=bus release,
+// 8=post-release CS-high.
+// Stage 2 uses 0=start, 1=post-init deselect, 2=reselect result.
+// Stage 4 uses boundaries 0-15 around raw IDF bus init, add-device, transfer,
+// and release, with MCP high-write checks between each phase where possible.
 }
 
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)

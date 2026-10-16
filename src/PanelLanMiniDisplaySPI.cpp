@@ -8,6 +8,10 @@
 #include "PanelLanMiniMCP23017.h"
 #include "StartupDiagnostics.h"
 #include "controller/HardwarePresetNames.h"
+#if defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 4
+#include <driver/gpio.h>
+#include <driver/spi_master.h>
+#endif
 
 namespace {
 // Rotation maps the portrait row offset onto landscape X. The integrated
@@ -20,6 +24,134 @@ PanelLanMiniSPI tft5(0);
 PanelLanMiniSPI tft6(0);
 PanelLanMiniSPI *const tfts[] = {&tft1, &tft2, &tft3, &tft4, &tft5, &tft6};
 PanelLanMiniMCP23017 miniSelect;
+
+#if defined(PANELAN_I2C_AB_STAGE)
+#if PANELAN_I2C_AB_STAGE < 1 || PANELAN_I2C_AB_STAGE > 4
+#error "PANELAN_I2C_AB_STAGE must be 1, 2, 3, or 4"
+#endif
+void abMark(uint8_t boundary, bool success = false, uint8_t display = 0, uint32_t detail = 0) {
+    StartupDiagnostics::record(StartupDiagnostics::I2cAbBoundary, PANELAN_I2C_AB_STAGE,
+                               boundary, success, detail ? detail : display);
+}
+#endif
+
+#if defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 3
+void runNoCsSpiProbe() {
+    abMark(0);
+    // Do not clock SPI unless the MCP has ACKed an explicit all-CS-high write.
+    if (!miniSelect.diagnosticAllCsHigh()) { abMark(1); return; }
+    abMark(1, true);
+    lgfx::Bus_SPI bus; // Independent bus instance; no panel object or panel init.
+    auto cfg = bus.config();
+    cfg.spi_host = SPI2_HOST;
+    cfg.spi_mode = 0;
+    cfg.freq_write = 10000000;
+    cfg.pin_mosi = 10;
+    cfg.pin_sclk = 11;
+    cfg.pin_miso = -1;
+    cfg.pin_dc = 14;
+    bus.config(cfg);
+    const bool initialized = bus.init();
+    abMark(2, initialized);
+    const bool afterInit = miniSelect.diagnosticAllCsHigh();
+    abMark(3, afterInit);
+    bool sent = false;
+    if (initialized && afterInit) {
+        // Control: exercise LovyanGFX SPI host lock/config setup without clocks.
+        bus.beginTransaction();
+        bus.endTransaction();
+    }
+    const bool afterEmptyTransaction = miniSelect.diagnosticAllCsHigh();
+    abMark(4, afterEmptyTransaction);
+    if (initialized && afterInit && afterEmptyTransaction) {
+        bus.beginTransaction();
+        sent = bus.writeCommand(0x00, 8); // No CS asserted; harmless one-byte command.
+        bus.wait();
+        bus.endTransaction();
+    }
+    abMark(5, sent);
+    const bool afterTransfer = miniSelect.diagnosticAllCsHigh();
+    abMark(6, afterTransfer);
+    bus.release();
+    abMark(7, initialized);
+    abMark(8, miniSelect.diagnosticAllCsHigh()); // Post-release OLATB write; recovery probe if needed.
+}
+#endif
+
+#if defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 4
+void runIdfNoCsSpiProbe() {
+    abMark(0);
+    if (!miniSelect.diagnosticAllCsHigh()) { abMark(1); return; }
+    abMark(1, true);
+
+    // Match the LovyanGFX DC setup without issuing any SPI clocks: init sets
+    // DC high/output, command mode drives it low, and endTransaction restores it.
+    const esp_err_t dcHighLevel = gpio_set_level(GPIO_NUM_14, 1);
+    const esp_err_t dcDirection = gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
+    const bool dcConfigured = dcHighLevel == ESP_OK && dcDirection == ESP_OK;
+    abMark(2, dcConfigured, 0, static_cast<uint32_t>(dcDirection != ESP_OK ? dcDirection : dcHighLevel));
+    const bool afterDcSetup = miniSelect.diagnosticAllCsHigh();
+    abMark(3, afterDcSetup);
+    const esp_err_t dcLow = gpio_set_level(GPIO_NUM_14, 0);
+    abMark(4, dcLow == ESP_OK, 0, static_cast<uint32_t>(dcLow));
+    const bool afterDcLow = miniSelect.diagnosticAllCsHigh();
+    abMark(5, afterDcLow);
+    const esp_err_t dcRestore = gpio_set_level(GPIO_NUM_14, 1);
+    abMark(6, dcRestore == ESP_OK, 0, static_cast<uint32_t>(dcRestore));
+    const bool afterDcRestore = miniSelect.diagnosticAllCsHigh();
+    abMark(7, afterDcRestore);
+
+    spi_bus_config_t busConfig{};
+    busConfig.mosi_io_num = 10;
+    busConfig.miso_io_num = -1;
+    busConfig.sclk_io_num = 11;
+    busConfig.quadwp_io_num = -1;
+    busConfig.quadhd_io_num = -1;
+    busConfig.max_transfer_sz = 1;
+    busConfig.flags = SPICOMMON_BUSFLAG_MASTER;
+    busConfig.intr_flags = 0;
+    const esp_err_t busResult = spi_bus_initialize(SPI2_HOST, &busConfig, SPI_DMA_DISABLED);
+    abMark(8, busResult == ESP_OK, 0, static_cast<uint32_t>(busResult));
+    if (busResult != ESP_OK) return;
+
+    const bool afterInit = miniSelect.diagnosticAllCsHigh();
+    abMark(9, afterInit);
+
+    spi_device_interface_config_t deviceConfig{};
+    deviceConfig.clock_speed_hz = 10000000;
+    deviceConfig.mode = 0;
+    deviceConfig.spics_io_num = -1; // MCP retains all six physical CS lines HIGH.
+    deviceConfig.queue_size = 1;
+    deviceConfig.flags = SPI_DEVICE_HALFDUPLEX;
+    spi_device_handle_t device = nullptr;
+    const esp_err_t addResult = spi_bus_add_device(SPI2_HOST, &deviceConfig, &device);
+    abMark(10, addResult == ESP_OK, 0, static_cast<uint32_t>(addResult));
+    const bool afterAdd = miniSelect.diagnosticAllCsHigh();
+    abMark(11, afterAdd);
+
+    esp_err_t transferResult = ESP_ERR_INVALID_STATE;
+    if (dcConfigured && afterDcSetup && afterDcLow && afterDcRestore && afterInit &&
+        addResult == ESP_OK && afterAdd) {
+        const esp_err_t txDc = gpio_set_level(GPIO_NUM_14, 0);
+        uint8_t harmlessByte = 0x00;
+        spi_transaction_t transaction{};
+        transaction.length = 8;
+        transaction.tx_buffer = &harmlessByte;
+        if (txDc == ESP_OK) transferResult = spi_device_polling_transmit(device, &transaction);
+        gpio_set_level(GPIO_NUM_14, 1);
+    }
+    abMark(12, transferResult == ESP_OK, 0, static_cast<uint32_t>(transferResult));
+    const bool afterTransfer = miniSelect.diagnosticAllCsHigh();
+    abMark(13, afterTransfer);
+
+    esp_err_t removeResult = ESP_OK;
+    if (device) removeResult = spi_bus_remove_device(device);
+    const esp_err_t freeResult = spi_bus_free(SPI2_HOST);
+    abMark(14, removeResult == ESP_OK && freeResult == ESP_OK,
+           0, static_cast<uint32_t>(removeResult != ESP_OK ? removeResult : freeResult));
+    abMark(15, miniSelect.diagnosticAllCsHigh());
+}
+#endif
 
 void drawSplash(PanelLanMiniSPI &tft) {
     constexpr uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFE0, 0xF81F, 0x07FF};
@@ -169,6 +301,25 @@ void PanelLanMiniDisplay::initPanels() {
         StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::InitCall);
         tft.init();
         StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::InitDone, 0, millis() - initAt);
+#if defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 2
+        abMark(0, true, display);
+        const bool released = miniSelect.deselect();
+        abMark(1, released, display);
+        if (!released) {
+            miniSelect.deselect(); // Best-effort cleanup; never draw on uncertain CS.
+            miniRetryAt_ = millis() + 1000;
+            StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::InitRetry);
+            return;
+        }
+        const bool reselected = miniSelect.select(display);
+        abMark(2, reselected, display);
+        if (!reselected) {
+            miniSelect.deselect(); // Best-effort all-high before the existing retry path.
+            miniRetryAt_ = millis() + 1000;
+            StartupDiagnostics::record(StartupDiagnostics::PanelBoundary, display, StartupDiagnostics::InitRetry);
+            return;
+        }
+#endif
         tft.setRotation(1); // 90 degrees clockwise: 160x80 landscape
         // CS remains asserted; retain progress without serial I/O until deselect.
         StartupDiagnostics::mark(StartupDiagnostics::tftInit(display), true, false);
@@ -199,6 +350,18 @@ void PanelLanMiniDisplay::begin() {
         return;
     }
     miniReady_ = true;
+#if defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 1
+    abMark(0);
+    const bool high = miniSelect.diagnosticAllCsHigh();
+    abMark(1, high);
+    if (!high) { miniReady_ = false; return; } // Do not start SPI with uncertain CS.
+#elif defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 3
+    runNoCsSpiProbe();
+    return; // No TFT init, splash or live mini drawing in this variant.
+#elif defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 4
+    runIdfNoCsSpiProbe();
+    return; // Raw ESP-IDF SPI test only; no TFT init, splash or live mini drawing.
+#endif
     initPanels();
 }
 
@@ -207,6 +370,9 @@ bool PanelLanMiniDisplay::readSwitches(uint8_t &pressed) {
 }
 
 void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVGLUI::View view, uint8_t browsedBank, uint8_t presetCount) {
+#if defined(PANELAN_I2C_AB_STAGE) && (PANELAN_I2C_AB_STAGE == 3 || PANELAN_I2C_AB_STAGE == 4)
+    return;
+#endif
     if (!miniReady_) return;
     const uint32_t now = millis();
     if (static_cast<int32_t>(now - miniRetryAt_) < 0) return;

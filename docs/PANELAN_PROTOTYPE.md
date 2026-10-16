@@ -367,7 +367,7 @@ normal Spark testing.
   externally tied to regulated 3.3 V for maximum backlight, with common ground.
   The 2.8-inch panel backlight is set to brightness 255 (maximum); user
   brightness adjustment is deferred. The default renderer
-  uses hardware SPI2 (LovyanGFX, mode 0, 10 MHz), not LVGL. The wall-powered
+  uses hardware SPI3 (LovyanGFX, mode 0, 10 MHz), not LVGL. The wall-powered
   `panelan-lvgl-controller-spi-mini` build was visually verified with the main
   touchscreen: the mini shows `P1` on Preset and changes to `GATE` on FX.
   That same SPI backend is now the default `panelan-lvgl-controller` build.
@@ -418,7 +418,7 @@ normal Spark testing.
    copy. Names use measured built-in proportional 18pt/12pt bold fonts with
    ellipsis as needed; unsupported non-ASCII characters become `?`. Other pages
    remain honest context cards, not the utility actions pictured in miniUI3.
-   Cards draw directly to `PanelLanMiniSPI` over SPI2 using the validated
+   Cards draw directly to `PanelLanMiniSPI` over SPI3 using the validated
    primitives; the 160x80 sprite/`pushSprite` path was removed after it produced
    diagonal artifacts. The direct-drawn artwork has now been visually checked:
    the diagonal streaks and left-edge rainbow column are gone. Cache keys cover
@@ -456,7 +456,7 @@ Use the IO10/11/14 and MCP23017 wiring above and regulated external 3.3 V for VC
 common ground, and the stable 5 V wall supply for the PanelLan board; do not
 connect two USB power sources simultaneously. Both SPI controller targets exclude
 the GPIO renderer and raw trace commands. They use the standalone LovyanGFX ST7735S
-SPI2_HOST mode-0 10 MHz profile (80x160 glass, portrait offset 26,1, rotated
+SPI3_HOST mode-0 10 MHz profile (80x160 glass, portrait offset 26,1, rotated
 90° CW to 160x80 logical landscape; the integrated mini starts at landscape
 X offset 0 to avoid its observed left-edge RAM column). LovyanGFX does not
 own CS or reset pins: the MCP driver preloads all GPB0..6 high, pulses shared
@@ -474,30 +474,41 @@ least five seconds, then draws dark state-driven cards with slot/FX cues and a
     physical switch actions; MODE and TAP/TUNER are utility inputs without their own
     mini display. Looper primary actions remain unassigned pending separate hardware
     verification.
- No pixel readback exists: five of six connected panels have shown an image;
-TFT5 (GPB4 CS) has backlight but no image.
-A successful build or serial draw
-message alone does **not** establish that SPI pixels are visible on other setups.
+No pixel readback exists. Blank-display failures were previously intermittent
+and appeared on different minis (occasionally more than one); they were not
+specific to TFT5. A successful build or serial draw message alone does **not**
+establish that SPI pixels are visible.
 The standalone `panelan-mini-tft-bringup` and GPIO fallback remain separate;
 do not use trace raw GPIO commands with an SPI controller target.
 
 The earlier integrated LovyanGFX SPI2 mini renderer stayed black. The trace-only
 GPIO raw full-RAM rainbow then rendered visibly with the wall supply, and the
-direct-GPIO state renderer was visually verified on Preset and FX. The newer
-integrated SPI profile is now also visually verified under wall power; the exact
-reason the earlier SPI2 attempt failed remains unknown. With PC USB
+direct-GPIO state renderer was visually verified on Preset and FX. The integrated
+SPI3 profile is now also visually verified under wall power. The SPI2-host I2C
+timeout was reproduced after LovyanGFX bus init/release; SPI3-host runs had no
+I2C timeouts. The prior intermittent blank-display symptom remains unexplained.
+With PC USB
 power VCC/BLK measured 1.26 V; with the 5 V 1 A wall supply both measured 3.3 V.
 Use the wall supply for hardware testing and do not connect both USB power
 sources simultaneously.
+
+#### Cold-boot visual acceptance
+
+The SPI3 controller configuration completed **10 consecutive successful cold
+boots**: all six mini TFTs initialized and the normal UI appeared on each boot.
+Displays 1–4 and 6 briefly show snow/static before their rainbow startup screen;
+display 5 typically goes directly to rainbow. All six then operate correctly.
+This is a visual observation only; no display initialization, SPI/I2C setting,
+timing, or Spark transport behavior was changed for this acceptance result.
 
 Source trace against installed LovyanGFX **1.2.30** and PanelLan:
 
 - `PanelLan/src/board/sc05_x/sc05x{.cpp,_pin.h}` assigns the main screen to
   `Bus_Parallel8` (LCD_CAM), touch to I2C1 on 8/9, and exposes IO10-14 externally.
-  There is no main-screen SPI2 owner or pin overlap in that profile.
+  There is no main-screen SPI3 owner or pin overlap in that profile.
 - `PanelLanLVGLUI::flushDisplay()` ends its transaction before marking LVGL
   ready. Main and mini rendering run sequentially on the Arduino task. The
-  default mini path uses hardware SPI2; the GPIO fallback and trace profiles
+  default mini path uses hardware SPI3; the GPIO fallback and trace profiles
   bitbang and never configure the SPI mini bus.
 - Setup initializes main/LVGL objects, controller/filesystem/BLE, then mini and
   its first frame. BLE scanning already runs asynchronously during mini setup.

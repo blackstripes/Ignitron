@@ -14,7 +14,15 @@ public:
     // 90-degree rotation; preserve the standalone portrait default of one.
     explicit PanelLanMiniSPI(uint8_t landscapeXOffset = 1) {
         auto busConfig = bus_.config();
+        // The legacy stage-2 A/B profile deliberately reproduces the former
+        // SPI2 path. Normal firmware avoids that default path, which restarts
+        // Arduino's global SPI bus (SPI.end()/begin()) during panel init/release.
+#if defined(PANELAN_I2C_AB_LEGACY_SPI2)
         busConfig.spi_host = SPI2_HOST;
+#else
+        // Normal mini bus uses SPI3; pins, mode, and clock are unchanged.
+        busConfig.spi_host = SPI3_HOST;
+#endif
         busConfig.spi_mode = 0;
         busConfig.freq_write = 10000000;
         busConfig.pin_mosi = 10;

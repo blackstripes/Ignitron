@@ -127,6 +127,9 @@ void drain() {
                           r.b == InitRetry ? "init retry" : "draw retry", static_cast<unsigned long>(r.value)); break;
         case MiniMessage:
             Serial.printf("mini message=%u display=%u detail=%lu\n", r.a, r.b, static_cast<unsigned long>(r.value)); break;
+        case I2cAbBoundary:
+            Serial.printf("I2C/SPI A/B stage=%u boundary=%u success=%u display=%lu\n",
+                          r.a, r.b, r.c, static_cast<unsigned long>(r.value)); break;
         case WireRestart:
         case WireBegin:
         case WireRead:
