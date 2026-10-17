@@ -4,7 +4,8 @@
 confirmed working. Immediate mini-card intent feedback and opt-in action timing
 milestones are implemented; the Spark confirmation path, firmware deadline,
 diagnostic transport behavior, BLE settings, and retry cadence remain unchanged.
-ACK-triggered early verification remains a separate candidate and is not enabled.
+ACK-triggered early verification is now a separate compile-time experiment,
+**disabled in every PlatformIO environment** pending focused live validation.
 
 ## Established baseline
 
@@ -70,10 +71,9 @@ host diagnostic.
 - The early-verification proposal remains technically promising: the historical
   500-action baseline had about a one-second ACK grace before a roughly 652 ms
   correlated full query, while current controller confirmation p50 was 1,739 ms.
-  However, no early-query behavior was implemented or exercised live here. Keep
-  the existing path in place until focused stale/conflicting-response/deadline
-  regressions and the required roughly 150-action live run can be performed in a
-  safe operator window. A generic ACK remains non-authoritative.
+  The live run did not exercise early-query behavior. The opt-in helper exists,
+  but must remain disabled until a safe operator window for the required roughly
+  150-action live run. A generic ACK remains non-authoritative.
 - Physical visual confirmation of the new preset-position order and live
   `mini_first`/`mini_final` measurements remain outstanding. The serial monitor's
   `LiveDone` events do not prove visible pixels.
@@ -92,7 +92,7 @@ measurement.
 
 ### B. Evaluate safe confirmation-speed optimization
 
-Candidate only; not implemented:
+Implemented as a **default-off candidate**, not enabled or tested on hardware:
 
 ```text
 FX command
@@ -101,7 +101,14 @@ FX command
   → confirm only from Spark-owned matching state
 ```
 
-The ACK would trigger verification sooner but would remain non-authoritative. The
+Only an explicit `-DPANELAN_EARLY_FX_VERIFY=1` at compile time enables the
+candidate; no checked-in PlatformIO environment sets it. The controller drains
+the active command's matching `04/15` ACK and skips the first 1000 ms grace
+only when the observed amp name is exactly `Spark 2`. A missing/mismatched ACK,
+NEO Core, and all default builds retain the 1000 ms grace. Transport Busy may
+defer the query; it is not forced through the scheduler. Later attempts still
+use the 5000 ms response window and the original command's 15000 ms deadline.
+The ACK triggers verification sooner but remains non-authoritative. The
 measured components make a confirmed-state latency around **0.65–0.75 s**
 plausible; it is not a measured result. Do not change the firmware deadline,
 retry cadence, response-lane behavior, or Spark correlation rules.
@@ -140,14 +147,15 @@ the variable and the change is independently testable.
    controller confirmation latency.
 3. Run the desktop/Bleak versus ESP32/NimBLE `03/15` vs `04/15` A/B if still
    useful and safe on an isolated connection.
-4. Implement ACK-triggered early full-preset verification behind a narrowly
-   scoped change; the ACK must not confirm state.
-5. Run focused host regressions for correlation, deadlines, stale/conflicting
-   observations, and controller proof.
+4. [Done, default-off] Implement ACK-triggered early full-preset verification
+   behind a narrowly scoped compile-time change; the ACK must not confirm state.
+5. [Done for host models] Run focused host regressions for correlation, deadlines,
+   stale/conflicting observations, and controller proof in both default and
+   candidate modes. This does not substitute for an on-device validation.
 6. Run about 150 FX actions and compare confirmation latency and reliability.
 7. Only then decide whether another 500-action acceptance is warranted.
 
 Items not completed in this task remain open in the checklist above. In
 particular, visual mini-card latency still needs an FX-view run, physical layout
-confirmation is still requested, and early verification still needs its focused
-regressions plus a safe 150-action live run before it could be enabled.
+confirmation is still requested, and early verification still needs a safe
+150-action live run before it could be enabled in shipping firmware.

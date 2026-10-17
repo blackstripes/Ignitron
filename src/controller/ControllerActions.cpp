@@ -1026,9 +1026,11 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             cancelFxRequest(state_, &dataControl, true, "full preset reported conflicting FX state");
         } else {
             // Neither ACK nor a pre-ACK old-state full reply confirms or
-            // conflicts. Query after the grace period even without ACK, and
-            // wait a full response window before replacing fragmented replies.
-            if (fxFullPresetRetry_.due(millis(), fxSentAtMs_)) {
+            // conflicts. The opt-in Spark 2 path skips only the initial grace
+            // after a matching command ACK; silence and NEO keep the grace.
+            // Wait a full response window before replacing fragmented replies.
+            if (fxFullPresetRetry_.due(millis(), fxSentAtMs_,
+                                       fxAckReceived_ && snapshot.ampName == AMP_NAME_SPARK_2)) {
                 // NEO may omit both ACK and FX_ONOFF. A still-owned fragmented
                 // response must not be superseded by the retry cadence.
                 if (fxFullPresetRetry_.attempted() &&

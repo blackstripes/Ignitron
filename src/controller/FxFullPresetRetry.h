@@ -18,10 +18,19 @@ public:
     bool expired(uint32_t now, uint32_t commandSentAt) const {
         return uint32_t(now - commandSentAt) >= kDeadlineMs;
     }
-    bool due(uint32_t now, uint32_t commandSentAt) const {
+    // Only the first verification may skip the grace, and only for a caller-
+    // validated Spark 2 command ACK in the opt-in experiment. Retries and the
+    // command deadline remain anchored to the original send.
+    bool due(uint32_t now, uint32_t commandSentAt, bool spark2MatchingAck = false) const {
+#if defined(PANELAN_EARLY_FX_VERIFY) && PANELAN_EARLY_FX_VERIFY
+        const bool early = spark2MatchingAck;
+#else
+        (void)spark2MatchingAck;
+        const bool early = false;
+#endif
         return !expired(now, commandSentAt) &&
-            (!attempted_ ? uint32_t(now - commandSentAt) >= kAckGraceMs :
-                           uint32_t(now - lastAttemptMs_) >= kResponseWindowMs);
+            (!attempted_ ? (early || uint32_t(now - commandSentAt) >= kAckGraceMs) :
+                            uint32_t(now - lastAttemptMs_) >= kResponseWindowMs);
     }
     void attemptedAt(uint32_t now, bool sent, uint8_t message, uint32_t revisionBeforeSend,
                      bool ackReceived) {

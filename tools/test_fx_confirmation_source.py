@@ -7,6 +7,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FxConfirmationSourceTest(unittest.TestCase):
+    def test_early_query_is_default_off_and_spark2_ack_only(self):
+        config = (ROOT / 'platformio.ini').read_text()
+        actions = (ROOT / 'src/controller/ControllerActions.cpp').read_text()
+        retry = (ROOT / 'src/controller/FxFullPresetRetry.h').read_text()
+        self.assertNotIn('PANELAN_EARLY_FX_VERIFY', config)
+        self.assertIn('fxAckReceived_ && snapshot.ampName == AMP_NAME_SPARK_2', actions)
+        self.assertIn('#if defined(PANELAN_EARLY_FX_VERIFY) && PANELAN_EARLY_FX_VERIFY', retry)
+        self.assertIn('(void)spark2MatchingAck;', retry)
+
     def test_confirmation_helper_commits_bookkeeping_before_diagnostics(self):
         helper = (ROOT / 'src/controller/FxConfirmation.h').read_text()
         ordered = ('confirmState();', 'recordTelemetry();', 'recordPersistent();',

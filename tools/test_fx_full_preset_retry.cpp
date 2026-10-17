@@ -12,6 +12,7 @@ struct FxDriver {
     uint8_t expected = 0;
     bool pending = false;
     bool acked = false;
+    bool spark2 = false;
     bool enabled = true;
     bool failed = false;
     bool ready = true;
@@ -32,7 +33,7 @@ struct FxDriver {
     }
     bool tick(uint32_t now, bool sendSucceeds, uint8_t newMessage) {
         timeout(now);
-        if (!pending || !retry.due(now, sentAt)) return false;
+        if (!pending || !retry.due(now, sentAt, acked && spark2)) return false;
         expected = 0; // revoke Spark publication gate even if the send fails
         retry.attemptedAt(now, sendSucceeds, newMessage, revision, acked);
         if (sendSucceeds) expected = newMessage;
@@ -99,6 +100,59 @@ struct FxDriver {
 };
 
 int main() {
+    FxDriver early;
+    early.spark2 = true;
+    assert(early.toggle());
+    early.ack(0x15, 6); // wrong message
+    early.ack(0x14, 7); // wrong subcommand
+    assert(!early.tick(101, true, 50));
+    early.ack(0x15, 7);
+    assert(early.pending && !early.retry.attempted()); // ACK alone is not success
+#if defined(PANELAN_EARLY_FX_VERIFY) && PANELAN_EARLY_FX_VERIFY
+    assert(early.tick(101, true, 50)); // scheduler's first opportunity after matching ACK
+    assert(early.retry.querySentAfterAck() && early.pending);
+    assert(!early.tick(1100, true, 51)); // no second initial query at grace boundary
+    assert(!early.tick(5100, true, 51)); // unchanged response window
+    assert(early.tick(5101, true, 51));
+    early.full(5102, 50, true); // superseded reply cannot confirm
+    assert(early.pending && early.expected == 51);
+    early.full(5103, 51, true);
+    assert(!early.pending && !early.failed);
+
+    assert(early.toggle());
+    early.ack(0x15, 7);
+    assert(early.tick(101, true, 56));
+    early.full(102, 56, false); // only the post-ACK correlated reply conflicts
+    assert(early.failed && !early.pending && !early.ready);
+
+    FxDriver deadline;
+    deadline.spark2 = true;
+    assert(deadline.toggle());
+    deadline.ack(0x15, 7);
+    assert(deadline.tick(101, true, 52));
+    assert(deadline.tick(5101, true, 53));
+    assert(deadline.tick(10101, true, 54));
+    assert(!deadline.tick(15100, true, 55));
+    deadline.full(15100, 54, true); // even a matching reply at deadline fails
+    assert(deadline.failed && !deadline.pending && !deadline.ready);
+#else
+    assert(!early.tick(101, true, 50)); // flag absent (or 0): unchanged grace
+    assert(early.tick(1100, true, 50));
+    assert(early.pending && early.retry.querySentAfterAck());
+#endif
+
+    FxDriver neo;
+    assert(neo.toggle()); // matching ACK on NEO still waits
+    neo.ack(0x15, 7);
+    assert(!neo.tick(101, true, 60));
+    assert(neo.tick(1100, true, 60));
+    FxDriver noMatch;
+    noMatch.spark2 = true;
+    assert(noMatch.toggle());
+    noMatch.ack(0x15, 8);
+    assert(!noMatch.tick(1099, true, 61));
+    assert(noMatch.tick(1100, true, 61) && !noMatch.retry.querySentAfterAck());
+
     FxDriver silent;
     assert(silent.toggle());
     assert(!silent.tick(1099, true, 40));
