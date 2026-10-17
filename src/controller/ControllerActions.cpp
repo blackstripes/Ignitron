@@ -58,19 +58,26 @@ bool ControllerActions::requestHardwarePreset(uint8_t preset) {
     presetTraceQueryMsg_ = 0; // A new intent revokes old readiness correlation.
     // Keep a timed-out refresh's message id for a late diagnostic response.
 #endif
-    PRESET_TRACE("event=accept id=%lu target=%u confirmed=%u", static_cast<unsigned long>(id),
-                 preset, snapshot.confirmedHardwarePreset);
+    PRESET_TRACE("event=accept id=%lu kind=preset target=%u confirmed=%u input_at=%lu", static_cast<unsigned long>(id),
+                 preset, snapshot.confirmedHardwarePreset,
+                 static_cast<unsigned long>(physicalInputAtMs_ ? physicalInputAtMs_ : millis()));
     const bool defer = sentPreset_ != 0;
     presetTargets_.select(preset, defer);
 #ifdef PANELAN_PRESET_TRACE
-    if (defer) { presetTraceDeferredId_ = id; presetTraceDeferredAtMs_ = millis(); }
-    else { presetTraceId_ = id; presetTraceStartedAtMs_ = millis(); }
+    if (defer) { presetTraceDeferredId_ = id; presetTraceDeferredAtMs_ = physicalInputAtMs_ ? physicalInputAtMs_ : millis(); }
+    else { presetTraceId_ = id; presetTraceStartedAtMs_ = physicalInputAtMs_ ? physicalInputAtMs_ : millis(); }
 #endif
     if (!defer) {
         presetBeforeRequest_ = snapshot.confirmedHardwarePreset;
     }
     // Pending is the latest requested destination, not a sent/confirmed value.
     state_.beginHardwarePresetRequest(preset);
+#ifdef PANELAN_PRESET_TRACE
+    state_.traceMiniAction(id, physicalInputAtMs_ ? physicalInputAtMs_ : millis(), preset, false, false);
+    PRESET_TRACE("event=pending id=%lu kind=preset target=%u input_at=%lu desired=%u confirmed=%u",
+                 static_cast<unsigned long>(id), preset,
+                 static_cast<unsigned long>(state_.snapshot().miniInputAtMs), preset, snapshot.confirmedHardwarePreset);
+#endif
     state_.invalidatePresetData();
     PRESET_TRACE("event=queued id=%lu target=%u elapsed=0", static_cast<unsigned long>(id), preset);
     return true;
@@ -98,6 +105,15 @@ bool ControllerActions::requestFxToggle(uint8_t slot) {
     fxChainIdentityBeforeRequest_ = snapshot.fxChainIdentity;
     fxFullPresetObservationRevisionBeforeRequest_ = SparkDataControl::fullPresetObservationRevision();
     state_.beginFxToggleRequest(slot, queuedFxDesiredEnabled_);
+#ifdef PANELAN_PRESET_TRACE
+    fxTraceId_ = ++presetTraceNextId_;
+    fxTraceInputAtMs_ = physicalInputAtMs_ ? physicalInputAtMs_ : millis();
+    PRESET_TRACE("event=accept id=%lu kind=fx slot=%u desired=%u input_at=%lu", static_cast<unsigned long>(fxTraceId_),
+                 slot, queuedFxDesiredEnabled_, static_cast<unsigned long>(fxTraceInputAtMs_));
+    state_.traceMiniAction(fxTraceId_, fxTraceInputAtMs_, slot, true, false, queuedFxDesiredEnabled_);
+    PRESET_TRACE("event=pending id=%lu kind=fx slot=%u desired=%u confirmed=%u",
+                 static_cast<unsigned long>(fxTraceId_), slot, queuedFxDesiredEnabled_, fx.enabled);
+#endif
     return true;
 }
 
@@ -231,6 +247,9 @@ void ControllerActions::cancelFxRequest(ControllerState &state, SparkDataControl
 }
 
 void ControllerActions::clearFxRequest() {
+#ifdef PANELAN_PRESET_TRACE
+    fxTraceId_ = 0;
+#endif
     queuedFxSlot_ = kNoFxSlot;
     sentFxSlot_ = kNoFxSlot;
     queuedFxDesiredEnabled_ = false;
@@ -690,7 +709,16 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             PRESET_TRACE("event=number_confirm id=%lu target=%u confirmed=%u elapsed=%lu",
                          static_cast<unsigned long>(presetTraceId_), sentPreset_, snapshot.confirmedHardwarePreset,
                          static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
-            state_.confirmHardwarePresetRequest(sentPreset_);
+            state_.confirmHardwarePresetRequest(sentPreset_, true);
+#ifdef PANELAN_PRESET_TRACE
+            PRESET_TRACE("event=authoritative id=%lu kind=preset target=%u input_elapsed=%lu",
+                         static_cast<unsigned long>(presetTraceId_), sentPreset_,
+                         static_cast<unsigned long>(millis() - presetTraceStartedAtMs_));
+            if (state_.snapshot().miniActionId == presetTraceId_ &&
+                state_.snapshot().pendingHardwarePreset == 0) {
+                state_.traceMiniAction(presetTraceId_, state_.snapshot().miniInputAtMs, sentPreset_, false, true);
+            }
+#endif
             SparkDataControl::recordControllerPresetConfirm();
             persistentEventLog.record(PersistentEvent::PresetConfirmed, sentPreset_, true);
             state_.invalidatePresetData();
@@ -958,15 +986,31 @@ void ControllerActions::process(SparkDataControl &dataControl) {
             const uint8_t message = sentFxMessageNumber_;
             const std::string model = sentFxModelName_; // clearFxRequest resets the model.
             const uint32_t elapsed = millis() - fxSentAtMs_;
+#ifdef PANELAN_PRESET_TRACE
+            const uint32_t actionId = fxTraceId_;
+            const uint32_t inputAt = fxTraceInputAtMs_;
+            const bool desiredEnabled = sentFxDesiredEnabled_;
+#endif
             confirmFxRequest(
-                [&] { state_.confirmFxToggleRequest(slot); },
+                [&] {
+                    state_.confirmFxToggleRequest(slot);
+#ifdef PANELAN_PRESET_TRACE
+                    state_.traceMiniAction(actionId, inputAt, slot, true, true, desiredEnabled);
+#endif
+                },
                 [&] { SparkDataControl::recordControllerFxConfirm(); },
                 [&] { persistentEventLog.record(PersistentEvent::FxConfirmed, slot, true); },
                 [&] { clearFxRequest(); },
                 [&, elapsed] {
                     traceFullResult();
-                    PRESET_TRACE("event=fx_confirmed slot=%u msg=%u source=%s elapsed=%lu", slot, message, source,
+                    PRESET_TRACE("event=fx_confirmed id=%lu slot=%u msg=%u source=%s elapsed=%lu",
+                                 static_cast<unsigned long>(actionId), slot, message, source,
                                  static_cast<unsigned long>(elapsed));
+#ifdef PANELAN_PRESET_TRACE
+                    PRESET_TRACE("event=authoritative id=%lu kind=fx slot=%u source=%s input_elapsed=%lu",
+                                 static_cast<unsigned long>(actionId), slot, source,
+                                 static_cast<unsigned long>(millis() - inputAt));
+#endif
                     Serial.printf("Controller: FX %u (%s) confirmed by %s\n", slot, model.c_str(), description);
                 });
         };

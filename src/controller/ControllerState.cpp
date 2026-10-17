@@ -6,6 +6,7 @@
 #include "PersistentEventLog.h"
 #include "FlightRecorder.h"
 #include "controller/HardwarePresetNames.h"
+#include "controller/MiniActionPresentation.h"
 
 #include <Arduino.h>
 
@@ -56,6 +57,14 @@ std::string makeFxChainIdentity(const Preset &preset) {
 
 void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     ControllerSnapshot next = snapshot_;
+    const uint32_t now = millis();
+    if (next.presetActionFailed && MiniActionPresentation::failureBadgeExpired(now, presetFailedAtMs_)) {
+        next.presetActionFailed = false;
+        next.failedHardwarePreset = 0;
+    }
+    for (size_t i = 0; i < next.fxSlots.size(); ++i)
+        if (next.fxSlots[i].actionFailed && MiniActionPresentation::failureBadgeExpired(now, fxFailedAtMs_[i]))
+            next.fxSlots[i].actionFailed = false;
     const bool linkEstablished = SparkDataControl::isAmpConnected();
 
     if (!linkEstablished) {
@@ -65,6 +74,7 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
         next.sparkStateStale = true;
         next.identityKnown = false;
         next.fullPresetObservedForLink = false;
+        next.locallyVerifiedHardwarePreset = 0;
         next.hardwarePresetNames.fill("");
         // Tuner mode is Spark-owned. A dropped link cannot leave the UI in a
         // falsely active/muted-looking tuner surface; retain at most the last
@@ -81,14 +91,18 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
         lastLooperSettingsRevision_ = 0;
         lastLooperCommandRevision_ = 0;
         if (next.pendingHardwarePreset != 0) {
+            next.failedHardwarePreset = next.pendingHardwarePreset;
             next.pendingHardwarePreset = 0;
             next.presetActionFailed = true;
+            presetFailedAtMs_ = now;
         }
-        for (ControllerFxSlot &slot : next.fxSlots) {
+        for (size_t i = 0; i < next.fxSlots.size(); ++i) {
+            ControllerFxSlot &slot = next.fxSlots[i];
             if (slot.pending) {
                 slot.pending = false;
                 slot.pendingDesiredEnabled = false;
                 slot.actionFailed = true;
+                fxFailedAtMs_[i] = now;
             }
         }
         wasLinkEstablished_ = false;
@@ -105,6 +119,7 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
         // and require a later complete response before declaring readiness.
         fullPresetObservationRevisionAtLink_ = SparkDataControl::fullPresetObservationRevision();
         fullPresetObservedForLink_ = false;
+        next.locallyVerifiedHardwarePreset = 0;
     }
     wasLinkEstablished_ = true;
     if (expectedStartupFullPresetMessageNumber_ != 0 &&
@@ -146,6 +161,8 @@ void ControllerState::refreshFromSpark(SparkDataControl &dataControl) {
     const int reportedPreset = status.currentPresetNumber();
     const int maxHardwarePreset = SparkPresetControl::getInstance().numberOfHWBanks() * PRESETS_PER_BANK;
     next.confirmedHardwarePreset = reportedPreset >= 1 && reportedPreset <= maxHardwarePreset ? reportedPreset : 0;
+    if (next.confirmedHardwarePreset != next.locallyVerifiedHardwarePreset || next.fullPresetObservedForLink)
+        next.locallyVerifiedHardwarePreset = 0;
     next.fxChainIdentity = makeFxChainIdentity(activePreset);
     next.tunerActive = dataControl.subMode() == SUB_MODE_TUNER;
     next.tunerSampleKnown = status.tunerSampleRevision() != 0;
@@ -254,8 +271,16 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
         snapshot_.looperPending == next.looperPending && snapshot_.looperActionFailed == next.looperActionFailed &&
         snapshot_.looperClearArmed == next.looperClearArmed &&
         snapshot_.confirmedHardwarePreset == next.confirmedHardwarePreset &&
+        snapshot_.locallyVerifiedHardwarePreset == next.locallyVerifiedHardwarePreset &&
         snapshot_.pendingHardwarePreset == next.pendingHardwarePreset &&
         snapshot_.presetActionFailed == next.presetActionFailed &&
+        snapshot_.failedHardwarePreset == next.failedHardwarePreset &&
+#ifdef PANELAN_PRESET_TRACE
+        snapshot_.miniActionId == next.miniActionId && snapshot_.miniInputAtMs == next.miniInputAtMs &&
+        snapshot_.miniActionTarget == next.miniActionTarget && snapshot_.miniActionFx == next.miniActionFx &&
+        snapshot_.miniActionConfirmed == next.miniActionConfirmed &&
+        snapshot_.miniActionDesiredEnabled == next.miniActionDesiredEnabled &&
+#endif
         snapshot_.fxSlots == next.fxSlots) {
         return;
     }
@@ -266,20 +291,25 @@ void ControllerState::publishIfChanged(const ControllerSnapshot &next) {
 void ControllerState::beginHardwarePresetRequest(uint8_t preset) {
     ControllerSnapshot next = snapshot_;
     next.pendingHardwarePreset = preset;
+    next.locallyVerifiedHardwarePreset = 0;
     next.presetActionFailed = false;
+    next.failedHardwarePreset = 0;
     publishIfChanged(next);
 }
 
-void ControllerState::confirmHardwarePresetRequest(uint8_t preset) {
+void ControllerState::confirmHardwarePresetRequest(uint8_t preset, bool numberVerified) {
     if (snapshot_.pendingHardwarePreset != preset) return;
     ControllerSnapshot next = snapshot_;
     next.pendingHardwarePreset = 0;
+    if (numberVerified) next.locallyVerifiedHardwarePreset = preset;
     next.presetActionFailed = false;
     publishIfChanged(next);
 }
 
 void ControllerState::failHardwarePresetRequest() {
     ControllerSnapshot next = snapshot_;
+    if (next.pendingHardwarePreset || !next.presetActionFailed) presetFailedAtMs_ = millis();
+    next.failedHardwarePreset = MiniActionPresentation::failedTargetAfterFailure(next);
     next.pendingHardwarePreset = 0;
     next.presetActionFailed = true;
     publishIfChanged(next);
@@ -312,6 +342,7 @@ void ControllerState::failFxToggleRequest(uint8_t slot) {
         return;
     }
     ControllerSnapshot next = snapshot_;
+    if (next.fxSlots[slot].pending || !next.fxSlots[slot].actionFailed) fxFailedAtMs_[slot] = millis();
     next.fxSlots[slot].pending = false;
     next.fxSlots[slot].pendingDesiredEnabled = false;
     next.fxSlots[slot].actionFailed = true;
@@ -323,3 +354,16 @@ void ControllerState::confirmLooperRequest() { ControllerSnapshot next = snapsho
 void ControllerState::failLooperRequest() { ControllerSnapshot next = snapshot_; next.looperPending = false; next.looperActionFailed = true; publishIfChanged(next); }
 void ControllerState::armLooperClear() { ControllerSnapshot next = snapshot_; next.looperClearArmed = true; publishIfChanged(next); }
 void ControllerState::disarmLooperClear() { ControllerSnapshot next = snapshot_; next.looperClearArmed = false; publishIfChanged(next); }
+#ifdef PANELAN_PRESET_TRACE
+void ControllerState::traceMiniAction(uint32_t id, uint32_t inputAt, uint8_t target, bool fx, bool confirmed,
+                                      bool desiredEnabled) {
+    ControllerSnapshot next = snapshot_;
+    next.miniActionId = id;
+    next.miniInputAtMs = inputAt;
+    next.miniActionTarget = target;
+    next.miniActionFx = fx;
+    next.miniActionConfirmed = confirmed;
+    next.miniActionDesiredEnabled = desiredEnabled;
+    publishIfChanged(next);
+}
+#endif

@@ -21,7 +21,7 @@ class MiniSpiSourceTest(unittest.TestCase):
         self.assertIn('const uint8_t display = miniInitialized_ + 1;', source)
         self.assertIn('PanelLanMiniSPI &tft = *tfts[miniInitialized_];', source)
         self.assertIn('if (miniInitialized_ < miniCount_)', source)
-        self.assertIn('for (uint8_t i = 0; i < miniCount_; ++i)', source)
+        self.assertIn('for (uint8_t order = 0; order < miniCount_; ++order)', source)
         self.assertIn('const uint8_t display = i + 1;', source)
         self.assertIn('miniSelect.select(display)', source)
         self.assertIn('miniSelect.deselect()', source)
@@ -29,19 +29,20 @@ class MiniSpiSourceTest(unittest.TestCase):
     def test_preset_and_fx_use_corresponding_snapshot_slots(self):
         source = (ROOT / 'src/PanelLanMiniDisplaySPI.cpp').read_text()
         self.assertIn('HardwarePresetNames::label(snapshot.hardwarePresetNames, target)', source)
-        self.assertIn('snapshot.confirmedHardwarePreset == target', source)
+        self.assertIn('MiniActionPresentation::presetConfirmed(snapshot, target)', source)
         self.assertIn('PhysicalPresetLayout::positions[i]', source)
         self.assertIn('browsedBank * 4 + position.slot', source)
         self.assertIn('target <= presetCount', source)
         self.assertIn('BANK%c', source)
         self.assertIn('const uint8_t display = i + 1;', source)
-        self.assertIn('for (uint8_t i = 0; i < miniCount_; ++i)', source)
+        self.assertIn('for (uint8_t order = 0; order < miniCount_; ++order)', source)
         self.assertIn('constexpr const char *fxNames[] = {"GATE", "COMP", "DRIVE", "MOD", "DELAY", "REVERB"};', source)
         self.assertIn('strcpy(card.name, fxNames[i]);', source)
         self.assertIn('const ControllerFxSlot &slot = snapshot.fxSlots[i];', source)
         self.assertIn('constexpr uint16_t fxAccents[] = {gateGreen, compTeal, driveRed, modPurple, delayBlue, reverbOrange};', source)
         self.assertIn('const uint16_t fxAccent = fxAccents[i];', source)
-        for field in ('slot.pending', 'slot.actionFailed', '!slot.known', 'slot.enabled'):
+        for field in ('slot.pending', 'slot.actionFailed', 'slot.known', 'MiniActionPresentation::fxEnabled(slot)',
+                      'MiniActionPresentation::fxAuthoritative(snapshot, i)', 'card.failed = slot.actionFailed'):
             self.assertIn(field, source)
 
     def test_mcp_display_one_through_six_select_active_low_gpb_zero_through_five(self):

@@ -96,7 +96,18 @@ void pollPhysicalSwitches() {
     const uint8_t count = static_cast<uint8_t>(presetControl.numberOfHWBanks() * PRESETS_PER_BANK);
     physicalRouting.observe(controllerState.snapshot(), count);
     physicalSwitches.sample(valid, pressed, now, [&](uint8_t key, PhysicalSwitches::Kind kind) {
+#ifdef PANELAN_PRESET_TRACE
+        const uint32_t previousActionId = controllerState.snapshot().miniActionId;
+        controllerActions.tracePhysicalInput(now);
+#endif
         physicalRouting.event(key, kind, count, controllerState.snapshot(), panelLanDisplay, controllerActions);
+#ifdef PANELAN_PRESET_TRACE
+        controllerActions.tracePhysicalInput(0);
+        const uint32_t actionId = controllerState.snapshot().miniActionId;
+        Serial.printf("PRESET_TRACE t=%lu event=physical key=%u kind=%s id=%lu\n",
+                      static_cast<unsigned long>(now), key, kind == PhysicalSwitches::Kind::Short ? "short" : "long",
+                      static_cast<unsigned long>(actionId != previousActionId ? actionId : 0));
+#endif
     });
 }
 #endif

@@ -1,10 +1,10 @@
 # Deferred Spark 2 FX confirmation latency optimization
 
-**Status: deliberately deferred.** Finish the remaining mini displays, switches,
-wiring, power/decoupling, and physical controller integration before resuming FX
-latency work. The existing FX implementation, firmware deadline, diagnostic
-harness, BLE settings, and confirmation semantics are frozen during hardware
-bring-up.
+**Status: resumed for assessment.** All six mini displays have been visually
+confirmed working. Immediate mini-card intent feedback and opt-in action timing
+milestones are implemented; the Spark confirmation path, firmware deadline,
+diagnostic transport behavior, BLE settings, and retry cadence remain unchanged.
+ACK-triggered early verification remains a separate candidate and is not enabled.
 
 ## Established baseline
 
@@ -48,6 +48,35 @@ pending-request cleanup; its firmware `elapsed` is independently checked by the
 host diagnostic.
 
 ## Future investigation opportunities
+
+### Current mini-feedback measurement and early-verification decision (2026-10-17)
+
+- The previous firmware had no correlated input-to-mini-draw milestones, so a
+  pre-change visual-latency distribution is unavailable. New `PANELAN_PRESET_TRACE`
+  milestones are documented in `docs/MINI_ACTION_FEEDBACK.md`.
+- A 12-action live Spark 2 inverse-pair diagnostic completed **12/12 confirmed**,
+  with 12 correlated full-preset verifications, no retries, deferrals, or
+  transport/parser anomalies. Actions ran through the CLI while the mini
+  renderer remained in Preset view, so there were correctly no FX-card
+  `mini_first`/`mini_final` events; this run does **not** measure mini visual
+  latency. Full-confirmed state was restored for each FX slot by its pair.
+- In this sample, input-to-authoritative confirmation from the new trace had
+  p50 **1,918.5 ms**, nearest-rank p95 **2,097 ms**, max **2,097 ms**. The
+  diagnostic's host command-send-to-confirm metric was p50 **1,754 ms**, p95
+  **1,861 ms**, max **1,943 ms**. These are controller confirmation timings,
+  not audible FX latency. The small sample and CLI input path are not a physical
+  switch or 150-action acceptance run. Raw serial: `/tmp/opencode/panelan_fx_20261017_122956_813945.log`;
+  summary output: `/home/pzwolinski/.local/share/opencode/tool-output/tool_14aea5181001Wz2iaVfBZ7Fi7r`.
+- The early-verification proposal remains technically promising: the historical
+  500-action baseline had about a one-second ACK grace before a roughly 652 ms
+  correlated full query, while current controller confirmation p50 was 1,739 ms.
+  However, no early-query behavior was implemented or exercised live here. Keep
+  the existing path in place until focused stale/conflicting-response/deadline
+  regressions and the required roughly 150-action live run can be performed in a
+  safe operator window. A generic ACK remains non-authoritative.
+- Physical visual confirmation of the new preset-position order and live
+  `mini_first`/`mini_final` measurements remain outstanding. The serial monitor's
+  `LiveDone` events do not prove visible pixels.
 
 ### A. Measure actual audio latency
 
@@ -100,7 +129,8 @@ Only if the desktop A/B justifies them, test **one variable at a time**:
 - timing;
 - BLE central stack.
 
-Do not experiment with these during the current hardware bring-up.
+Do not experiment with these unless the controlled desktop/NimBLE A/B justifies
+the variable and the change is independently testable.
 
 ## Resume checklist
 
@@ -117,6 +147,7 @@ Do not experiment with these during the current hardware bring-up.
 6. Run about 150 FX actions and compare confirmation latency and reliability.
 7. Only then decide whether another 500-action acceptance is warranted.
 
-Until this checklist is resumed, the current priority is physical hardware:
-complete the six mini displays, switches, wiring, power/decoupling, and physical
-controller integration.
+Items not completed in this task remain open in the checklist above. In
+particular, visual mini-card latency still needs an FX-view run, physical layout
+confirmation is still requested, and early verification still needs its focused
+regressions plus a safe 150-action live run before it could be enabled.

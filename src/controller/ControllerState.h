@@ -85,8 +85,20 @@ struct ControllerSnapshot {
     bool looperActionFailed = false;
     bool looperClearArmed = false;
     uint8_t confirmedHardwarePreset = 0;
+    // Verified local switch number while the new full FX chain is still syncing.
+    // Not a second number authority; valid only on this link and for this number.
+    uint8_t locallyVerifiedHardwarePreset = 0;
     uint8_t pendingHardwarePreset = 0;
     bool presetActionFailed = false;
+    uint8_t failedHardwarePreset = 0;
+#ifdef PANELAN_PRESET_TRACE
+    uint32_t miniActionId = 0;
+    uint32_t miniInputAtMs = 0;
+    uint8_t miniActionTarget = 0; // one-based preset, zero-based FX slot
+    bool miniActionFx = false;
+    bool miniActionConfirmed = false;
+    bool miniActionDesiredEnabled = false;
+#endif
     uint32_t revision = 0;
 };
 
@@ -106,7 +118,7 @@ public:
     void beginHardwarePresetRequest(uint8_t preset);
     // Only clear the presentation if it still represents this command; a
     // newer deferred intent may already own the pending slot.
-    void confirmHardwarePresetRequest(uint8_t preset);
+    void confirmHardwarePresetRequest(uint8_t preset, bool numberVerified = false);
     void failHardwarePresetRequest();
     void beginFxToggleRequest(uint8_t slot, bool desiredEnabled);
     void confirmFxToggleRequest(uint8_t slot);
@@ -116,6 +128,10 @@ public:
     void failLooperRequest();
     void armLooperClear();
     void disarmLooperClear();
+#ifdef PANELAN_PRESET_TRACE
+    void traceMiniAction(uint32_t id, uint32_t inputAt, uint8_t target, bool fx, bool confirmed,
+                         bool desiredEnabled = false);
+#endif
 
 private:
     ControllerSnapshot snapshot_;
@@ -126,6 +142,8 @@ private:
     uint32_t lastLooperStatusRevision_ = 0;
     uint32_t lastLooperSettingsRevision_ = 0;
     uint32_t lastLooperCommandRevision_ = 0;
+    uint32_t presetFailedAtMs_ = 0;
+    std::array<uint32_t, 6> fxFailedAtMs_{};
 
     void publishIfChanged(const ControllerSnapshot &next);
 };

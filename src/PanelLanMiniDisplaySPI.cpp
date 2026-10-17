@@ -9,6 +9,7 @@
 #include "StartupDiagnostics.h"
 #include "controller/HardwarePresetNames.h"
 #include "controller/PhysicalPresetLayout.h"
+#include "controller/MiniActionPresentation.h"
 #if defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 4
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
@@ -191,6 +192,8 @@ struct Card {
     Layout layout = Layout::Other;
     Mark mark = Mark::Dash;
     bool filled = false;
+    bool pending = false;
+    bool failed = false;
 };
 
 // These built-in fonts cover ASCII. Collapse an unsupported UTF-8 codepoint
@@ -264,6 +267,8 @@ void drawCard(PanelLanMiniSPI &g, const Card &card) {
     g.setTextWrap(false);
     g.drawRoundRect(2, 2, 156, 76, 4, card.accent);
     g.drawRoundRect(3, 3, 154, 74, 3, card.accent);
+    if (card.pending) g.fillCircle(149, 11, 4, amber);
+    if (card.failed) g.fillCircle(149, 11, 4, red);
     if (card.layout == Layout::Gate) {
         nameLine(g, card.name, 21, white);
     } else {
@@ -385,7 +390,19 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
     // disconnected or BLE setup is slow. Afterwards use only SPI2 for state cards.
     if (now - splashAt_ < 5000) return;
     if (!miniUiComplete_) StartupDiagnostics::mark(StartupDiagnostics::MiniUiUpdate, false);
-    for (uint8_t i = 0; i < miniCount_; ++i) {
+    // On a crowded update, service the actionable card before unrelated cards.
+    uint8_t priority = miniCount_;
+    if (view == PanelLanLVGLUI::View::Fx) {
+        for (uint8_t j = 0; j < miniCount_; ++j)
+            if (snapshot.fxSlots[j].pending) priority = j;
+    } else if (view == PanelLanLVGLUI::View::Preset) {
+        for (uint8_t j = 0; j < miniCount_; ++j)
+            if (PhysicalPresetLayout::positions[j].role == PhysicalPresetLayout::Role::Slot &&
+                snapshot.pendingHardwarePreset == browsedBank * 4 + PhysicalPresetLayout::positions[j].slot) priority = j;
+    }
+    for (uint8_t order = 0; order < miniCount_; ++order) {
+        const uint8_t i = order == 0 && priority < miniCount_ ? priority :
+            priority < miniCount_ && order <= priority ? order - 1 : order;
         const uint8_t display = i + 1;
         Card card;
         switch (view) {
@@ -406,12 +423,12 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
                      target <= presetCount ? HardwarePresetNames::label(snapshot.hardwarePresetNames, target) : "UNAVAILABLE");
             if (target > presetCount) { card.accent = muted; strcpy(card.status, "UNAVAILABLE"); }
             else if (snapshot.pendingHardwarePreset == target) { card.accent = amber; card.mark = Mark::Dots; }
-            else if (snapshot.presetActionFailed) { card.accent = red; card.mark = Mark::Bang; }
-            else if (snapshot.sparkStateStale || !snapshot.confirmedHardwarePreset) {
-                card.accent = amber;
-            } else if (snapshot.confirmedHardwarePreset == target) {
+            else if (MiniActionPresentation::presetConfirmed(snapshot, target)) {
                 card.accent = amber; card.filled = true; card.mark = Mark::Wave;
+            } else if (snapshot.sparkStateStale || !snapshot.confirmedHardwarePreset) {
+                card.accent = amber;
             } else { card.accent = muted; card.mark = Mark::Dash; }
+            card.failed = MiniActionPresentation::presetFailed(snapshot, target);
             break;
         }
         case PanelLanLVGLUI::View::Fx: {
@@ -419,14 +436,20 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
             strcpy(card.name, fxNames[i]);
             const ControllerFxSlot &slot = snapshot.fxSlots[i];
             const uint16_t fxAccent = fxAccents[i];
-            if (slot.pending) { card.accent = amber; card.mark = Mark::Dots; }
-            else if (slot.actionFailed) { card.accent = red; card.mark = Mark::Bang; }
-            else if (snapshot.sparkStateStale || !slot.known) card.accent = amber;
-            else {
+            if (slot.pending && !snapshot.sparkStateStale && slot.known) {
+                const bool enabled = MiniActionPresentation::fxEnabled(slot);
+                strcpy(card.status, enabled ? "ON" : "OFF");
+                card.accent = enabled ? fxAccent : muted;
+                card.filled = true;
+                card.pending = true;
+            }
+            else if (MiniActionPresentation::fxAuthoritative(snapshot, i)) {
                 strcpy(card.status, slot.enabled ? "ON" : "OFF");
                 card.accent = slot.enabled ? fxAccent : muted;
                 card.filled = true;
             }
+            else if (snapshot.sparkStateStale || !slot.known) card.accent = amber;
+            card.failed = slot.actionFailed && !slot.pending;
             break;
         }
         case PanelLanLVGLUI::View::Looper:
@@ -466,10 +489,10 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
         char key[sizeof(lastCard_[i])];
         // Include all visible fields. Length prefixes prevent delimiter collisions
         // in Spark-provided names; every field fits in the mini-only cache buffer.
-        snprintf(key, sizeof(key), "%02u:%s|%s|%u|%u|%u|%u", static_cast<unsigned>(strlen(card.name)),
-                 card.name, card.status, card.accent, static_cast<unsigned>(card.layout),
-                 static_cast<unsigned>(card.mark), card.filled);
-        if (cardDrawn_[i] && view == lastView_[i] && !strcmp(key, lastCard_[i])) continue;
+        snprintf(key, sizeof(key), "%02u:%s|%s|%u|%u|%u|%u|%u|%u", static_cast<unsigned>(strlen(card.name)),
+                  card.name, card.status, card.accent, static_cast<unsigned>(card.layout),
+                  static_cast<unsigned>(card.mark), card.filled, card.pending, card.failed);
+        if (!MiniActionPresentation::needsRedraw(cardDrawn_[i], view == lastView_[i], lastCard_[i], key)) continue;
         if (!miniSelect.select(display)) {
             miniSelect.deselect();
             miniRetryAt_ = millis() + 1000;
@@ -491,6 +514,38 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
         lastView_[i] = view;
         strcpy(lastCard_[i], key);
         cardDrawn_[i] = true;
+#ifdef PANELAN_PRESET_TRACE
+        const bool actionCard = snapshot.miniActionId &&
+            ((view == PanelLanLVGLUI::View::Fx && snapshot.miniActionFx && i == snapshot.miniActionTarget) ||
+             (view == PanelLanLVGLUI::View::Preset && !snapshot.miniActionFx &&
+              PhysicalPresetLayout::positions[i].role == PhysicalPresetLayout::Role::Slot &&
+              browsedBank * 4 + PhysicalPresetLayout::positions[i].slot == snapshot.miniActionTarget));
+        if (actionCard) {
+            if (!snapshot.miniActionConfirmed &&
+                ((snapshot.miniActionFx && snapshot.fxSlots[i].pending && !snapshot.sparkStateStale &&
+                  snapshot.fxSlots[i].known) ||
+                 (!snapshot.miniActionFx && snapshot.pendingHardwarePreset == snapshot.miniActionTarget)) &&
+                firstDrawId_ != snapshot.miniActionId) {
+                firstDrawId_ = snapshot.miniActionId;
+                Serial.printf("PRESET_TRACE t=%lu event=mini_first id=%lu kind=%s target=%u input_elapsed=%lu\n",
+                              static_cast<unsigned long>(millis()), static_cast<unsigned long>(snapshot.miniActionId),
+                              snapshot.miniActionFx ? "fx" : "preset", snapshot.miniActionTarget,
+                              static_cast<unsigned long>(millis() - snapshot.miniInputAtMs));
+            } else if (snapshot.miniActionConfirmed && finalDrawId_ != snapshot.miniActionId &&
+                        ((snapshot.miniActionFx &&
+                          MiniActionPresentation::fxConfirmedDirection(snapshot, i, snapshot.miniActionDesiredEnabled) &&
+                          card.filled) ||
+                         (!snapshot.miniActionFx && !snapshot.pendingHardwarePreset &&
+                          MiniActionPresentation::presetConfirmed(snapshot, snapshot.miniActionTarget) &&
+                          card.filled && !card.failed && card.mark == Mark::Wave))) {
+                finalDrawId_ = snapshot.miniActionId;
+                Serial.printf("PRESET_TRACE t=%lu event=mini_final id=%lu kind=%s target=%u input_elapsed=%lu\n",
+                              static_cast<unsigned long>(millis()), static_cast<unsigned long>(snapshot.miniActionId),
+                              snapshot.miniActionFx ? "fx" : "preset", snapshot.miniActionTarget,
+                              static_cast<unsigned long>(millis() - snapshot.miniInputAtMs));
+            }
+        }
+#endif
         if (view == PanelLanLVGLUI::View::Preset)
             StartupDiagnostics::record(StartupDiagnostics::MiniMessage, StartupDiagnostics::CardSent, display,
                                        snapshot.confirmedHardwarePreset);

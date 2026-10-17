@@ -107,7 +107,7 @@ for failed attempts); `fx_full_result` reports the matched query's ACK status.
 After an authoritative FX observation, controller state, telemetry, the persistent
 `FxConfirmed` event and pending-request cleanup complete before serial output.
 With `PANELAN_PRESET_TRACE`, confirmation emits
-`event=fx_confirmed slot=<n> msg=<original FX msg> source=FX_ONOFF|full_preset elapsed=<ms>`
+`event=fx_confirmed id=<action id> slot=<n> msg=<original FX msg> source=FX_ONOFF|full_preset elapsed=<ms>`
 after cleanup; `elapsed` is captured at the controller confirmation decision
 against the original FX send, before bookkeeping/output. The human-readable
 confirmation follows it. Host sequencing and correlation model:

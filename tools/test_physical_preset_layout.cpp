@@ -20,9 +20,10 @@ struct UI {
 };
 struct Actions {
     std::vector<int> presets, fx;
+    int taps = 0;
     void requestHardwarePreset(int target) { presets.push_back(target); }
     void requestFxToggle(int slot) { fx.push_back(slot); }
-    void requestTapTempo() {}
+    void requestTapTempo() { ++taps; }
 };
 int main() {
     using PhysicalPresetLayout::Role;
@@ -36,8 +37,8 @@ int main() {
     Snapshot s;
     UI ui;
     Actions a;
-    auto press = [&](int key, int count = 8) {
-        routing.event(key, PhysicalSwitches::Kind::Short, count, s, ui, a);
+    auto press = [&](int key, int count = 8, PhysicalSwitches::Kind kind = PhysicalSwitches::Kind::Short) {
+        routing.event(key, kind, count, s, ui, a);
     };
     press(1); assert(routing.browsedBank() == 0);
     for (int key : {0, 3, 4, 5}) press(key);
@@ -59,4 +60,8 @@ int main() {
     assert((a.fx == std::vector<int>{0, 1, 2, 3, 4, 5}));
     press(7); // TAP, not an FX or Preset key
     assert(a.fx.size() == 6 && a.presets.size() == 9);
+    press(6); assert(ui.view == View::Preset); // MODE still cycles from FX
+    press(7, 8, PhysicalSwitches::Kind::Long); assert(ui.view == View::Tuner); // TAP/TUNER long press
+    press(0); press(7); // Performance/tap actions are suppressed in tuner view.
+    assert(a.fx.size() == 6 && a.presets.size() == 9 && a.taps == 1);
 }

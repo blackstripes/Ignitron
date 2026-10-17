@@ -63,7 +63,7 @@ checked for pinned identity/preset and connection changes, even if uncorrelated
 or too old to gate. Each FX direction is read
 from the controller send line, not assumed from the harness toggle sequence.
 An action counts as confirmed only when the matching post-bookkeeping
-`PRESET_TRACE event=fx_confirmed slot=<n> msg=<FX msg> source=FX_ONOFF|full_preset elapsed=<ms>`
+`PRESET_TRACE event=fx_confirmed id=<action id> slot=<n> msg=<FX msg> source=FX_ONOFF|full_preset elapsed=<ms>`
 event is paired with the appropriate matching Spark-owned observation and its
 controller-reported `elapsed` is below the unchanged 15-second firmware action
 deadline. The harness allows a bounded 30-second host-only proof-delivery window

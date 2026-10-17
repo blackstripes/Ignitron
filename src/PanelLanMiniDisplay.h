@@ -39,6 +39,10 @@ private:
     char lastCard_[miniCount_][96]{};
     bool cardDrawn_[miniCount_]{};
     bool miniUiComplete_ = false;
+#ifdef PANELAN_PRESET_TRACE
+    uint32_t firstDrawId_ = 0;
+    uint32_t finalDrawId_ = 0;
+#endif
 #else
     struct Panel : lgfx::Panel_ST7735S {
         using lgfx::Panel_ST7735S::getInitCommands;

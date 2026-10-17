@@ -28,7 +28,7 @@ class PhysicalSwitchSourceTest(unittest.TestCase):
                       '{Role::Slot, 1}', '{Role::Slot, 2}', '{Role::Slot, 3}'):
             self.assertIn(entry, layout)
         self.assertIn('snapshot.pendingHardwarePreset == target', mini)
-        self.assertIn('snapshot.confirmedHardwarePreset == target', mini)
+        self.assertIn('MiniActionPresentation::presetConfirmed(snapshot, target)', mini)
         self.assertIn('previous ? browsedBank > 0 : (browsedBank + 1) * 4 < presetCount', mini)
 
     def test_shared_tap_path(self):

@@ -35,7 +35,7 @@ class FxConfirmationSourceTest(unittest.TestCase):
         self.assertIn('SparkDataControl::recordControllerFxConfirm()', completion)
         self.assertIn('persistentEventLog.record(PersistentEvent::FxConfirmed, slot, true)', completion)
         self.assertIn('clearFxRequest()', completion)
-        self.assertIn('event=fx_confirmed slot=%u msg=%u source=%s elapsed=%lu', completion)
+        self.assertIn('event=fx_confirmed id=%lu slot=%u msg=%u source=%s elapsed=%lu', completion)
         self.assertIn('Serial.printf("Controller: FX %u (%s) confirmed by %s', completion)
         self.assertLess(completion.index('confirmFxRequest('), completion.index('event=fx_confirmed'))
         self.assertLess(completion.index('event=fx_confirmed'), completion.index('Serial.printf('))

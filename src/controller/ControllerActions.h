@@ -26,6 +26,10 @@ public:
     // Queues one model-specific bypass/on-off request. Confirmation is based
     // exclusively on a fresh Spark-owned slot observation, never an ACK.
     bool requestFxToggle(uint8_t slot);
+#ifdef PANELAN_PRESET_TRACE
+    // Set only by the main-loop physical switch router for this event.
+    void tracePhysicalInput(uint32_t at) { physicalInputAtMs_ = at; }
+#endif
     bool requestTapTempo();
     // Entry is confirmed by Spark TUNER_ON. Spark 2 does not reliably emit
     // TUNER_OFF for a native exit, so exit uses the established preset-mode
@@ -76,6 +80,9 @@ private:
     bool presetTraceConnectionObserved_ = false;
     uint32_t presetTraceId_ = 0;
     uint32_t presetTraceNextId_ = 0;
+    uint32_t physicalInputAtMs_ = 0;
+    uint32_t fxTraceId_ = 0;
+    uint32_t fxTraceInputAtMs_ = 0;
     uint32_t presetTraceDeferredId_ = 0;
     uint32_t presetTraceDeferredAtMs_ = 0;
     uint32_t presetTraceStartedAtMs_ = 0;
