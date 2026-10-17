@@ -1,11 +1,13 @@
 #include "PanelLanLVGLUI.h"
 #include "FlightRecorder.h"
+#include "FlightDisplayHealth.h"
 #include "controller/ControllerActions.h"
 
 #include <esp_heap_caps.h>
 #include <cmath>
 
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
+namespace FlightDisplayHealth { Counters health; Progress progress; }
 
 namespace {
 PanelLanLVGLUI *uiInstance = nullptr;
@@ -369,13 +371,18 @@ void drawDevicePortrait(lv_event_t *event) {
 }
 
 void PanelLanLVGLUI::flushDisplay(lv_display_t *display, const lv_area_t *area, uint8_t *pixelMap) {
+    const uint32_t started = millis();
+    FlightDisplayHealth::progress.flushStart(started);
     const uint32_t width = area->x2 - area->x1 + 1;
     const uint32_t height = area->y2 - area->y1 + 1;
     uiInstance->tft_.startWrite();
     uiInstance->tft_.setAddrWindow(area->x1, area->y1, width, height);
     uiInstance->tft_.writePixels(reinterpret_cast<uint16_t *>(pixelMap), width * height, true);
     uiInstance->tft_.endWrite();
+    const uint32_t duration = millis() - started;
+    FlightDisplayHealth::health.flushed(millis(), duration);
     lv_display_flush_ready(display);
+    FlightDisplayHealth::progress.flushDone();
 }
 
 void PanelLanLVGLUI::readTouch(lv_indev_t *, lv_indev_data_t *data) {
@@ -430,6 +437,11 @@ void PanelLanLVGLUI::begin() {
     lv_display_set_color_format(display_, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(display_, drawBuffer_, nullptr, sizeof(drawBuffer_), LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(display_, flushDisplay);
+    // REFR_REQUEST fires only after LVGL accepts an area for refresh; INVALIDATE_AREA
+    // can also be raised for internal sizing/overlap checks and is counted separately.
+    lv_display_add_event_cb(display_, [](lv_event_t *) { FlightDisplayHealth::health.request(millis()); }, LV_EVENT_REFR_REQUEST, nullptr);
+    lv_display_add_event_cb(display_, [](lv_event_t *) { FlightDisplayHealth::health.invalidationCallback(); }, LV_EVENT_INVALIDATE_AREA, nullptr);
+    lv_display_add_event_cb(display_, [](lv_event_t *) { FlightDisplayHealth::health.refreshReady(); }, LV_EVENT_REFR_READY, nullptr);
 
     lv_indev_t *touch = lv_indev_create();
     lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
@@ -1210,19 +1222,24 @@ bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
     // PPM is intentionally simple: the host capture tool can save it without
     // a graphics dependency, then compare the physical LVGL composition with
     // the concept image.
-    output.printf("IGNITRON_SCREENSHOT_PPM %u %u\nP6\n%u %u\n255\n",
-                  kDisplayWidth, kDisplayHeight, kDisplayWidth, kDisplayHeight);
-    uint8_t row[kDisplayWidth * 3];
-    const uint16_t *pixels = reinterpret_cast<const uint16_t *>(snapshot.data);
-    for (uint16_t y = 0; y < kDisplayHeight; ++y) {
-        for (uint16_t x = 0; x < kDisplayWidth; ++x) {
-            const uint16_t pixel = pixels[y * kDisplayWidth + x];
-            row[x * 3] = (pixel >> 8) & 0xF8;
-            row[x * 3 + 1] = (pixel >> 3) & 0xFC;
-            row[x * 3 + 2] = (pixel << 3) & 0xF8;
+    {
+#ifdef PANELAN_MINI_SPI_MODE
+        FlightDisplayHealth::ScopedDiagnosticOutput outputScope(FlightDisplayHealth::progress, []() -> uint32_t { return millis(); });
+#endif
+        output.printf("IGNITRON_SCREENSHOT_PPM %u %u\nP6\n%u %u\n255\n",
+                      kDisplayWidth, kDisplayHeight, kDisplayWidth, kDisplayHeight);
+        uint8_t row[kDisplayWidth * 3];
+        const uint16_t *pixels = reinterpret_cast<const uint16_t *>(snapshot.data);
+        for (uint16_t y = 0; y < kDisplayHeight; ++y) {
+            for (uint16_t x = 0; x < kDisplayWidth; ++x) {
+                const uint16_t pixel = pixels[y * kDisplayWidth + x];
+                row[x * 3] = (pixel >> 8) & 0xF8;
+                row[x * 3 + 1] = (pixel >> 3) & 0xFC;
+                row[x * 3 + 2] = (pixel << 3) & 0xF8;
+            }
+            output.write(row, sizeof(row));
+            delay(0);
         }
-        output.write(row, sizeof(row));
-        delay(0);
     }
     heap_caps_free(capture);
     return true;
@@ -1331,14 +1348,26 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
 }
 
 void PanelLanLVGLUI::update(const ControllerSnapshot &snapshot) {
+    FlightDisplayHealth::health.serviceBegin = millis();
+    ++FlightDisplayHealth::health.serviceBegins;
+    FlightDisplayHealth::progress.serviceStart(FlightDisplayHealth::health.serviceBegin);
     const uint32_t now = millis();
     lv_tick_inc(now - lastLvglTickAt_);
     lastLvglTickAt_ = now;
     if (renderedRevision_ != snapshot.revision) {
+        ++FlightDisplayHealth::health.revisions;
         renderedRevision_ = snapshot.revision;
         renderStatus(snapshot);
     }
     lv_timer_handler();
+    FlightDisplayHealth::progress.serviceDone();
+    FlightDisplayHealth::health.serviceEnd = millis();
+    const uint32_t serviceMs = FlightDisplayHealth::health.serviceEnd - FlightDisplayHealth::health.serviceBegin;
+    if (serviceMs > FlightDisplayHealth::health.maxServiceMs) FlightDisplayHealth::health.maxServiceMs = serviceMs;
+    ++FlightDisplayHealth::health.services;
+    if (FlightDisplayHealth::health.pendingAlarm(millis()))
+        FlightRecorder::record(FlightRecorder::DisplayPending, 0,
+                               FlightDisplayHealth::clamp(millis() - FlightDisplayHealth::health.requestedAt));
 }
 
 #endif

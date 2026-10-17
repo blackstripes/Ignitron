@@ -63,6 +63,14 @@ inline Status status(const State &s) {
             return Partial;
     return Valid;
 }
+// Read-only traversal shared by startup replay/dump and host retention tests.
+template <typename Visitor> void visit(const State &s, Visitor visitor) {
+    if (!validMeta(s)) return;
+    for (unsigned i = 0; i < s.pending.header.count; ++i) {
+        const auto record = FlightRing::at(s.pending, i);
+        visitor(i, record, FlightRing::matchesSnapshot(s.pending.header, record, i));
+    }
+}
 inline void boot(State &s, uint16_t summary, uint16_t rawReasons) {
     const bool prior = FlightRing::valid(s.current.header);
     // Only a validated ACK permits replacement. Unknown or torn metadata with
@@ -87,14 +95,10 @@ inline void boot(State &s, uint16_t summary, uint16_t rawReasons) {
     const uint32_t nextSequence = prior ? s.current.header.nextSequence : 1;
     FlightRing::initialize(s.current, nextBoot, nextSequence);
 }
-inline void acknowledge(State &s) {
-    // Keep the snapshot bytes; only a complete ACK permits the next latch.
-    if (validMeta(s)) setAck(s);
-}
-inline bool acknowledgeAfterOutput(State &s, bool allWritesAccepted,
-                                  bool streamWriteError, bool serialStillConnected) {
-    if (!allWritesAccepted || streamWriteError || !serialStillConnected || !validMeta(s)) return false;
-    acknowledge(s);
+inline bool acknowledge(State &s, uint16_t expectedBootId) {
+    // A partial snapshot is still retrievable but must not be silently discarded.
+    if (!expectedBootId || status(s) != Valid || s.pending.header.boot != expectedBootId) return false;
+    setAck(s);
     return validAck(s);
 }
 }

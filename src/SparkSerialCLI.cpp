@@ -89,13 +89,26 @@ void SparkSerialCLI::execute(String command) {
     } else if (verb == "flight") {
         if (args == "status") FlightRecorder::status(Serial);
         else if (args == "dump") FlightRecorder::dump(Serial);
+        else if (args.startsWith("ack ")) {
+            String id = args.substring(4);
+            // Decimal only, no whitespace/sign/suffix; reject overflow and zero.
+            uint32_t parsed = 0;
+            bool valid = id.length() > 0;
+            for (unsigned i = 0; i < id.length(); ++i) {
+                if (id[i] < '0' || id[i] > '9') { valid = false; break; }
+                parsed = parsed * 10 + (id[i] - '0');
+                if (parsed > 65535) { valid = false; break; }
+            }
+            Serial.println(valid && parsed && FlightRecorder::acknowledgePending(parsed)
+                               ? "Flight pending acknowledged" : "Flight ack rejected; pending unchanged");
+        }
         else if (args == "test-restart") {
             FlightRecorder::record(FlightRecorder::RestartIntent, 0xFE);
             Serial.println("TEST: flight-recorder software restart requested");
             Serial.flush();
             ESP.restart();
         }
-        else Serial.println("Usage: flight status|dump");
+        else Serial.println("Usage: flight status|dump|ack <boot-id>|test-restart");
     } else if (verb == "preset") {
         handlePreset(args);
     } else if (verb == "bank") {
@@ -163,7 +176,8 @@ void SparkSerialCLI::printHelp() {
     Serial.println("  status");
     Serial.println("  report                  Print compact counters since boot (alias: diagnostics)");
     Serial.println("  log status|dump|clear confirm");
-    Serial.println("  flight status|dump      RTC pending/current trace (dump acknowledges pending)");
+    Serial.println("  flight status|dump      RTC pending/current trace (read-only)");
+    Serial.println("  flight ack <boot-id>    acknowledge saved, valid pending trace");
     Serial.println("  flight test-restart     TEST ONLY: marked software restart of MCU");
     Serial.println("  amp                     Request amp identity");
     Serial.println("  refresh                 Request current preset");

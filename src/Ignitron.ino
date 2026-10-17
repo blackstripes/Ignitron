@@ -12,6 +12,7 @@
 #include "SparkStatus.h"
 #include "PersistentEventLog.h"
 #include "StartupDiagnostics.h"
+#include "FlightDisplayHealth.h"
 #ifndef HEADLESS_SERIAL_MODE
 #include "SparkButtonHandler.h"
 #include "SparkDisplayControl.h"
@@ -35,6 +36,24 @@
 #endif
 
 using namespace std;
+
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+// ESP32-S3 Arduino loop runs on core 1. This observer cannot service LVGL or
+// the controller; it only detects stalled progress and writes bounded RTC records.
+static void displayHealthObserver(void *) {
+    FlightDisplayHealth::Observer observer;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        const uint32_t now = millis();
+        observer.poll(FlightDisplayHealth::progress, now,
+            [](FlightDisplayHealth::Stall state, FlightDisplayHealth::Stall previous, uint16_t age) {
+                FlightRecorder::record(FlightRecorder::DisplayStall, static_cast<uint8_t>(state),
+                                       state == FlightDisplayHealth::None ? previous : age);
+            });
+        FlightDisplayHealth::progress.observerStackBytes.store(uxTaskGetStackHighWaterMark(nullptr), std::memory_order_relaxed);
+    }
+}
+#endif
 
 // Device Info Definitions
 const string DEVICE_NAME = "Ignitron";
@@ -298,16 +317,57 @@ void setup() {
     StartupDiagnostics::mark(StartupDiagnostics::InitComplete, true);
     StartupDiagnostics::drain(); // All mini SPI selections have been released.
 #endif
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+    FlightDisplayHealth::progress.loop(millis());
+    // 2048 FreeRTOS stack bytes; idle priority, below BLE and the Arduino loop.
+    if (xTaskCreatePinnedToCore(displayHealthObserver, "displayHealth", 2048, nullptr,
+                                tskIDLE_PRIORITY, nullptr, 0) != pdPASS)
+        FlightRecorder::record(FlightRecorder::TaskFailure, 0x84);
+#endif
 }
 
 void loop() {
 #ifdef PANELAN_MINI_SPI_MODE
+    // Ordinary frames only publish progress; a core-0 observer detects hard stalls.
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
+    static uint32_t previousIterations = 0, previousServices = 0, previousBegins = 0, previousRequests = 0;
+    static uint32_t previousReady = 0, previousFlushes = 0, previousInvalidations = 0, previousRevisions = 0;
+    auto &dh = FlightDisplayHealth::health;
+    dh.loop(millis());
+    FlightDisplayHealth::progress.loop(dh.lastLoop);
+#endif
     StartupDiagnostics::drain(); // Controller task, before any mini drawing this pass.
     static uint32_t lastHeartbeat = millis();
     const uint32_t heartbeatNow = millis();
     if (heartbeatNow - lastHeartbeat >= 10000) {
         lastHeartbeat = heartbeatNow;
         FlightRecorder::heapSample(0x40);
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
+        // Compact records per 10s; detail selects units. Counts are deltas,
+        // ms durations/ages saturate; service begin/end is sampled separately.
+        FlightRecorder::record(FlightRecorder::DisplayHealth, 0, FlightDisplayHealth::clamp(dh.iterations - previousIterations));
+        FlightRecorder::record(FlightRecorder::DisplayHealth, 1, FlightDisplayHealth::clamp(dh.maxGap));
+        FlightRecorder::record(FlightRecorder::DisplayProgress, 0, FlightDisplayHealth::clamp(dh.services - previousServices));
+        FlightRecorder::record(FlightRecorder::DisplayProgress, 1, FlightDisplayHealth::pair(dh.requests - previousRequests, dh.ready - previousReady));
+        FlightRecorder::record(FlightRecorder::DisplayProgress, 2, FlightDisplayHealth::clamp(dh.flushes - previousFlushes));
+        FlightRecorder::record(FlightRecorder::DisplayProgress, 3, FlightDisplayHealth::pair(dh.invalidations - previousInvalidations, dh.revisions - previousRevisions));
+        FlightRecorder::record(FlightRecorder::DisplayProgress, 4, FlightDisplayHealth::pair(dh.serviceBegins - previousBegins, dh.services - previousServices));
+        FlightRecorder::record(FlightRecorder::DisplayTiming, 0, FlightDisplayHealth::pair(dh.lastFlushMs, dh.maxFlushMs));
+        FlightRecorder::record(FlightRecorder::DisplayTiming, 1, FlightDisplayHealth::clamp(dh.flushes ? heartbeatNow - dh.lastFlush : 0));
+        FlightRecorder::record(FlightRecorder::DisplayTiming, 2, FlightDisplayHealth::pair(heartbeatNow - dh.serviceBegin, heartbeatNow - dh.serviceEnd));
+        FlightRecorder::record(FlightRecorder::DisplayTiming, 3, FlightDisplayHealth::clamp(dh.maxServiceMs));
+        FlightRecorder::record(FlightRecorder::DisplayState, static_cast<uint8_t>(controllerState.snapshot().connectionPhase),
+            FlightDisplayHealth::pair(SparkDataControl::isAmpConnected() ? 1 : 0, dh.pending ? 1 : 0));
+        FlightRecorder::record(FlightRecorder::DisplayState, 0x80,
+            FlightDisplayHealth::pair(uxTaskGetStackHighWaterMark(nullptr) / 64, ESP.getFreeHeap() / 4096));
+        FlightRecorder::record(FlightRecorder::DisplayState, 0x81,
+            FlightDisplayHealth::clamp(FlightDisplayHealth::progress.observerStackBytes.load(std::memory_order_relaxed)));
+        if (dh.slowestFlush) FlightRecorder::record(FlightRecorder::DisplaySlow, 0, FlightDisplayHealth::clamp(dh.slowestFlush));
+        previousIterations = dh.iterations; previousServices = dh.services; previousBegins = dh.serviceBegins;
+        previousRequests = dh.requests; previousReady = dh.ready; previousFlushes = dh.flushes;
+        previousInvalidations = dh.invalidations; previousRevisions = dh.revisions;
+        dh.maxGap = 0; dh.maxFlushMs = 0; dh.maxServiceMs = 0; dh.slowestFlush = 0;
+#endif
         if (Serial) {
             Serial.printf("[startup %lu ms] heartbeat ampConnected=%u", static_cast<unsigned long>(heartbeatNow),
                           static_cast<unsigned>(SparkDataControl::isAmpConnected()));

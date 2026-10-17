@@ -1,5 +1,8 @@
 #include "PersistentEventLog.h"
 #include "FlightRecorder.h"
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+#include "FlightDisplayHealth.h"
+#endif
 
 #include <LittleFS.h>
 #include <string.h>
@@ -197,6 +200,9 @@ const char *PersistentEventLog::eventName(uint8_t event) const {
     return event < sizeof(names) / sizeof(names[0]) ? names[event] : "unknown";
 }
 void PersistentEventLog::printRecord(Stream &out, const Record &record) const {
+#if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE) && defined(PANELAN_MINI_SPI_MODE)
+    FlightDisplayHealth::ScopedDiagnosticOutput outputScope(FlightDisplayHealth::progress, []() -> uint32_t { return millis(); });
+#endif
     out.printf("%lu %lu %s %u%s\n", static_cast<unsigned long>(record.sequence), static_cast<unsigned long>(record.atMs), eventName(record.event), record.value, record.flags ? " urgent" : "");
 }
 void PersistentEventLog::printStatus(Stream &out) const {

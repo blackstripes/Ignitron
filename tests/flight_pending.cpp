@@ -1,5 +1,6 @@
 #include "../src/FlightPending.h"
 #include <cassert>
+#include <cstring>
 
 // Simulated RTC_NOINIT: each static state survives calls to boot().
 static FlightPending::State rtc, damagedAck, damagedPending, orphanedPending, fresh;
@@ -39,22 +40,33 @@ int main() {
     assert(rtc.meta.summary == 0x405 && rtc.meta.rawReasons == 0x0706);
     assert(FlightRing::at(rtc.pending, 0).ms == 17);
     assert(rtc.current.header.count == 0);
-    auto shortWrite = rtc;
-    assert(!acknowledgeAfterOutput(shortWrite, false, false, true));
-    assert(status(shortWrite) == Valid);
-    auto disconnected = rtc;
-    assert(!acknowledgeAfterOutput(disconnected, true, false, false));
-    assert(status(disconnected) == Valid);
-    auto streamError = rtc;
-    assert(!acknowledgeAfterOutput(streamError, true, true, true));
-    assert(status(streamError) == Valid);
-    assert(acknowledgeAfterOutput(rtc, true, false, true));
+    // Replay/dump are read-only; writing bytes to a Stream cannot acknowledge.
+    const auto savedBoot = rtc.pending.header.boot;
+    auto beforeRead = rtc;
+    unsigned replayed = 0, dumped = 0;
+    visit(rtc, [&](unsigned, const FlightRing::Record &, bool valid) { assert(valid); ++replayed; });
+    visit(rtc, [&](unsigned, const FlightRing::Record &, bool valid) { assert(valid); ++dumped; });
+    assert(replayed == 2 && dumped == 2 && std::memcmp(&beforeRead, &rtc, sizeof(rtc)) == 0);
+    assert(!acknowledge(rtc, 0) && !acknowledge(rtc, savedBoot + 1));
+    assert(status(rtc) == Valid);
+    auto partial = rtc;
+    // Pending remains readable even if a slot is damaged.
+    partial.pending.records[0].crc ^= 1;
+    assert(status(partial) == Partial && !acknowledge(partial, savedBoot));
+    assert(partial.pending.header.boot == savedBoot);
+    assert(acknowledge(rtc, savedBoot));
     assert(validAck(rtc) && status(rtc) == Unavailable);
     assert(rtc.meta.crc == check(rtc.meta, uint16_t(0)));
     FlightRing::append(rtc.current, 42, 1, 0, 0);
     boot(rtc, 0x306, 0x0303);
     assert(status(rtc) == Valid && rtc.meta.summary == 0x306);
     assert(FlightRing::at(rtc.pending, 0).ms == 42);
+    // TEST-only software restart intent is just an ordinary retained record;
+    // it must not acknowledge or overwrite the pending capture on USB reset.
+    FlightRing::append(rtc.current, 43, 3, 0xfe, 0);
+    boot(rtc, 0x0c00, 0x1615);
+    assert(status(rtc) == Valid && rtc.meta.summary == 0x306);
+    assert(!acknowledge(rtc, uint16_t(rtc.pending.header.boot + 1)));
 
     // A bad pending marker must not be mistaken for an ACK, even with a
     // valid prior current ring. The pending bytes and reason stay untouched.
@@ -63,13 +75,16 @@ int main() {
     const auto pendingMeta = damagedPending.meta;
     const auto pendingHeader = damagedPending.pending.header;
     assert(status(damagedPending) == Corrupt);
+    unsigned quarantined = 0;
+    visit(damagedPending, [&](unsigned, const FlightRing::Record &, bool) { ++quarantined; });
+    assert(quarantined == 0);
     boot(damagedPending, 0x0c00, 0x1615);
     assert(status(damagedPending) == Corrupt);
     assert(damagedPending.meta.marker == pendingMeta.marker &&
            damagedPending.meta.crc == pendingMeta.crc &&
            damagedPending.meta.summary == pendingMeta.summary);
     assert(damagedPending.pending.header.crc == pendingHeader.crc);
-    acknowledge(damagedPending);
+    assert(!acknowledge(damagedPending, damagedPending.pending.header.boot));
     assert(status(damagedPending) == Corrupt);
 
     // Even without a valid current ring, a pending header with a damaged
@@ -91,7 +106,7 @@ int main() {
 
     // A damaged ACK (including its marker bytes) also cannot authorize a copy.
     damagedAck = rtc;
-    acknowledge(damagedAck);
+    assert(acknowledge(damagedAck, damagedAck.pending.header.boot));
     assert(validAck(damagedAck));
     FlightRing::append(damagedAck.current, 55, 1, 0, 0);
     damagedAck.meta.marker ^= 1;
@@ -108,6 +123,7 @@ int main() {
 
     // Recognizable but invalid pending metadata is quarantined as well.
     ++rtc.meta.layout;
+    assert(!acknowledge(rtc, rtc.pending.header.boot));
     assert(status(rtc) == Corrupt);
     boot(rtc, 0x0c00, 0x1615);
     assert(status(rtc) == Corrupt && rtc.meta.summary == 0x306);

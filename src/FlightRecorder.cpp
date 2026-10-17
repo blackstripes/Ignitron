@@ -1,6 +1,7 @@
 #include "FlightRecorder.h"
 #include "FlightPending.h"
 #include "FlightHeapSample.h"
+#include "FlightDisplayHealth.h"
 #include <esp_system.h>
 #include <esp_attr.h>
 #include <esp_rom_sys.h>
@@ -47,10 +48,12 @@ bool send(Stream &out, const char *format, ...) {
     va_start(args, format);
     const int n = vsnprintf(line, sizeof(line), format, args);
     va_end(args);
-    return n > 0 && n < int(sizeof(line)) && out.write(reinterpret_cast<const uint8_t *>(line), n) == size_t(n);
+    if (n <= 0 || n >= int(sizeof(line))) return false;
+    FlightDisplayHealth::ScopedDiagnosticOutput outputScope(FlightDisplayHealth::progress, []() -> uint32_t { return millis(); });
+    return out.write(reinterpret_cast<const uint8_t *>(line), n) == size_t(n);
 }
 bool printRecord(Stream &out, const FlightRing::Record &r) {
-    return send(out, " boot=%u seq=%lu ms=%lu event=%u detail=%u value=%u\n", r.boot,
+    return send(out, "[flight current] boot=%u seq=%lu ms=%lu event=%u detail=%u value=%u\n", r.boot,
                (unsigned long)r.sequence, (unsigned long)r.ms, r.event, r.detail, r.value);
 }
 uint16_t goodPending() {
@@ -107,8 +110,8 @@ void status(Stream &out) {
     const auto h = retained.current.header;
     portEXIT_CRITICAL(&mux);
     const bool pending = FlightPending::validMeta(retained);
-    out.printf("Flight pending=%s good=%u/%u overwritten=%u current=%s boot=%u count=%u/%u overwritten=%u next=%lu RTC=%u bytes\n",
-                 pendingLabel(), goodPending(),
+    out.printf("Flight pending=%s boot=%u good=%u/%u overwritten=%u current=%s boot=%u count=%u/%u overwritten=%u next=%lu RTC=%u bytes\n",
+                  pendingLabel(), pending ? retained.pending.header.boot : 0, goodPending(),
                  pending ? retained.pending.header.count : 0,
                  pending ? retained.pending.header.overwritten : 0,
                  label(FlightRing::valid(h) ? Valid : Corrupt), h.boot, h.count,
@@ -126,27 +129,30 @@ void replay(Stream &out) {
     if (&out == &Serial && !Serial) return;
     out.clearWriteError();
     if (!FlightPending::validMeta(retained)) {
-        send(out, "[flight] pending=%s; no validated prior trace; currentReset=%s IDF=%u rawCPU0=%u rawCPU1=%u\n",
-             pendingLabel(), resetClass(summary & 255, rawReasons & 255, rawReasons >> 8),
+        send(out, "[flight] pending=%s boot=0; no validated prior trace; currentReset=%s IDF=%u rawCPU0=%u rawCPU1=%u\n",
+              pendingLabel(), resetClass(summary & 255, rawReasons & 255, rawReasons >> 8),
              summary & 255, rawReasons & 255, rawReasons >> 8);
         return;
     }
-    bool sent = send(out, "[flight] pending=%s valid=%u/%u overwritten=%u detectedReset=%s IDF=%u rawCPU0=%u rawCPU1=%u\n",
-                 pendingLabel(), goodPending(), retained.pending.header.count,
+    send(out, "[flight] pending=%s boot=%u valid=%u/%u overwritten=%u detectedReset=%s IDF=%u rawCPU0=%u rawCPU1=%u\n",
+                  pendingLabel(), retained.pending.header.boot, goodPending(), retained.pending.header.count,
                  retained.pending.header.overwritten,
                  resetClass(retained.meta.summary & 255, retained.meta.rawReasons & 255,
                             retained.meta.rawReasons >> 8), retained.meta.summary & 255,
                  retained.meta.rawReasons & 255, retained.meta.rawReasons >> 8);
-    for (unsigned i = 0; i < retained.pending.header.count; ++i) {
-        const auto r = FlightRing::at(retained.pending, i);
-        if (FlightRing::matchesSnapshot(retained.pending.header, r, i))
-            sent = send(out, "[flight pending] boot=%u seq=%lu ms=%lu event=%u detail=%u value=%u\n",
-                        r.boot, (unsigned long)r.sequence, (unsigned long)r.ms,
-                        r.event, r.detail, r.value) && sent;
-        else sent = send(out, "[flight pending] slot=%u corrupt\n", i) && sent;
-    }
-    FlightPending::acknowledgeAfterOutput(retained, sent, out.getWriteError(),
-                                           &out != &Serial || static_cast<bool>(Serial));
+    FlightPending::visit(retained, [&](unsigned i, const FlightRing::Record &r, bool valid) {
+        if (valid)
+            send(out, "[flight pending] boot=%u seq=%lu ms=%lu event=%u detail=%u value=%u\n",
+                         r.boot, (unsigned long)r.sequence, (unsigned long)r.ms,
+                         r.event, r.detail, r.value);
+        else send(out, "[flight pending] slot=%u corrupt\n", i);
+    });
+}
+bool acknowledgePending(uint16_t expectedBootId) {
+    portENTER_CRITICAL(&mux);
+    const bool ok = FlightPending::acknowledge(retained, expectedBootId);
+    portEXIT_CRITICAL(&mux);
+    return ok;
 }
 void dump(Stream &out) {
     status(out);
@@ -161,9 +167,8 @@ void dump(Stream &out) {
         // Sequence might advance while dumping: identify overwritten/torn slots.
         const auto r = retained.current.records[(h.write + FlightRing::capacity - h.count + i) % FlightRing::capacity];
         portEXIT_CRITICAL(&mux);
-        out.print("[flight current]");
         if (FlightRing::matchesSnapshot(h, r, i)) printRecord(out, r);
-        else out.printf(" slot=%u overwritten/torn/corrupt\n", i);
+        else send(out, "[flight current] slot=%u overwritten/torn/corrupt\n", i);
     }
 }
 }
@@ -174,5 +179,6 @@ void heapSample(uint8_t) {}
 void status(Stream &out) { out.println("Flight recorder unavailable in this profile"); }
 void dump(Stream &out) { status(out); }
 void replay(Stream &) {} uint16_t resetSummary() { return 0; }
+bool acknowledgePending(uint16_t) { return false; }
 }
 #endif

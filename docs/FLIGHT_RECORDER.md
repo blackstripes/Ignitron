@@ -4,8 +4,14 @@ In the normal `panelan-lvgl-controller` profile, `flight status` reports the
 pending RTC trace integrity and its detecting reset classification; `flight dump` prints
 that snapshot and the current trace. Startup attempts replay **if** USB CDC is
 open after the bounded wait. If no console was available, reopen it and use
-`flight dump` before another reset. `log status|dump` still reads the separate
-LittleFS event log; `boot-reset` is appended there after initialization (high
+`flight dump` before another reset. **Save the capture on the host first**, then
+use `flight ack <boot-id>` with the decimal pending boot ID printed by status,
+replay, or dump. Neither replay nor dump acknowledges pending data. Missing,
+non-decimal, zero, overflowing, wrong/stale IDs and partial/corrupt pending
+snapshots are rejected without changing the pending state. The reported
+pending boot ID is zero when metadata is unavailable or quarantined (do not
+acknowledge that ID). `log status|dump` still reads the separate LittleFS event
+log; `boot-reset` is appended there after initialization (high
 byte category: 0 unknown, 1 power-on, 2 external, 3 software, 4 panic,
 5 interrupt WDT, 6 task WDT, 7 other WDT, 8 deep sleep, 9 brownout, 10 SDIO,
 11 USB-UART chip, 12 USB-JTAG chip; low byte is `esp_reset_reason`). The normal
@@ -55,11 +61,10 @@ value=slot), 10 parser (0 reject/2 inbound request; ordinary successes omitted),
   Event 14 is emitted when a screenshot buffer request in SPIRAM fails; its
   associated sample reports internal/general heap only and cannot establish
   whether sufficient PSRAM was available.
- This change adds no RTC or static RAM fields: the existing 16-byte records
+  These samples add no RTC fields: the existing 16-byte records
  and saturating overwrite counter are reused. In the normal controller build,
  `retained` remains 2100 bytes and the independent breadcrumb 16 bytes;
- the RTC slow segment remains 2136 bytes total. The build reports 157768 bytes
- RAM used out of 327680 (no additional static RAM for heap sampling).
+  the RTC slow segment remains 2136 bytes total.
 
 At boot, only a CRC-validated ACK state and a valid prior current ring permit
 copying that ring into the separate RTC pending ring before initializing the
@@ -92,15 +97,13 @@ for that header's slot. Concurrently overwritten or torn slots are labeled
 does not freeze the ring while printing. A torn append may leave
 a valid old header with an overwritten slot (partial), or an invalid header
 (corrupt). Replay prints only a validated pending header, labeling bad records;
-`partial` is still retrievable. Pending is acknowledged (validated ACK written) only
-after all pending lines have been sent without reported Stream write failure and,
-for Serial, while USB CDC remains open. Startup attempts this once if Serial is
-open; `flight dump` also acknowledges on successful pending output. `flight status`
-never acknowledges. The current ring is not cleared by acknowledgment; the
+ `partial` is still retrievable. Pending is acknowledged (validated ACK written) only
+ by explicit `flight ack <boot-id>` after the operator has saved a complete valid
+ capture. Startup replay, dump, and status are read-only. The current ring is not cleared by acknowledgment; the
 next boot can latch it as a new pending snapshot. If output is missed, interrupted,
 or no Serial connection is present, pending remains available for later CLI dump
-or a later boot's auto-replay. Neither a dump nor replay can guarantee the host
-actually saved bytes already accepted by USB; capture the console output externally.
+ or a later boot's auto-replay. Neither a dump nor replay can guarantee the host
+ actually saved bytes already accepted by USB; capture the console output externally.
 RTC_NOINIT is not flash: retention across power loss/brownout is
 not guaranteed; corrupt metadata is not silently replaced.
 The first reset is captured before the serial wait; the existing startup
@@ -134,7 +137,78 @@ not establish that no crash occurred.
  Host validation: `g++ -std=c++17 -Wall -Wextra -Werror tests/flight_ring.cpp -o /tmp/flight_ring_test && /tmp/flight_ring_test`,
  `g++ -std=c++17 -Wall -Wextra -Werror tests/flight_pending.cpp -o /tmp/flight_pending_test && /tmp/flight_pending_test`, and
  `g++ -std=c++17 -Wall -Wextra -Werror tests/flight_heap_sample.cpp -o /tmp/flight_heap_sample_test && /tmp/flight_heap_sample_test`.
-A supervised retention check is: issue `flight dump`, issue
-`flight test-restart`, then verify the marked restart intent, `ESP_RST_SW`,
-previous event sequence, and pending acknowledgment after replay. No hardware
-or core extraction was performed for this implementation.
+ For the monitoring helper also run `g++ -std=c++17 -Wall -Wextra -Werror tests/flight_display_health.cpp -o /tmp/flight_display_health_test && /tmp/flight_display_health_test`.
+ A supervised retention check is: save `flight dump`, then `flight ack <boot-id>`, issue
+ `flight test-restart`, then verify the marked restart intent, `ESP_RST_SW`,
+ previous event sequence, and pending remaining until explicit acknowledgment. No hardware
+ or core extraction was performed for this implementation.
+
+## Passive main display samples
+
+Only the SPI-mini LVGL controller records these. Loop, LVGL display callbacks
+and flush run synchronously on the Arduino loop. RAM counters are sampled every
+10 seconds (no per-frame RTC/Serial/filesystem output). Events 17–20 are the
+periodic samples (each event uses a 16-byte ring slot): 17 detail 0 = loop
+iterations since sample, 1 = maximum loop-entry gap in ms; 18 detail 0 = LVGL
+services since sample, 1 = accepted refresh-request count (low byte) and refresh-ready
+count (high byte), 2 = flush count, 3 = invalid-area callback count (low byte) and changed
+ controller revisions (high byte), 4 = LVGL service begins (low byte) and
+ ends (high byte); 19 detail 0 = last and maximum completed
+flush duration in ms (bytes), 1 = age since last completed flush (ms, zero if
+none), 2 = age of service start/end (bytes), 3 = max service duration (ms);
+ 20 detail = connection phase, value low byte = BLE connected flag, high byte =
+ pending accepted refresh-request flag; detail 0x80 = main-loop task stack high-water mark
+  (low byte, ESP-IDF FreeRTOS stack bytes / 64) and free heap (high byte, 4 KiB units);
+ detail 0x81 = observer stack high-water mark in bytes (zero if unavailable). All
+bytes saturate at 255, 16-bit measurements at 65535; heap minimum is already
+reported by event 16 detail 0x40. Loop gap and duration maxima reset each
+sample. Main-loop stack is measured on that task; observer high-water is
+measured by the observer itself. Neither measures NimBLE or other workers.
+The maximum loop gap can include synchronous diagnostic CLI work (for example,
+streaming a screenshot); the observer suppresses stall classification only
+during known output, not the recorded loop-gap measurement.
+ 15 health/heap records per 10 seconds mean a quiet 64-slot current
+ ring holds roughly 43 seconds; `overwritten` shows loss (including other
+ events). Event 21 reports the slowest completed flush >=50 ms **once per
+ health interval** (value ms), not from the flush callback. Event 22 is a
+  one-shot accepted refresh request outstanding >=2000 ms (value ms); refresh-ready clears
+  pending even for clipped/no-op refreshes, and a later request starts a new pending period.
+  Completed partial flushes remain pending until refresh-ready. Display callbacks subscribe
+  only to refresh-request, invalidate-area and refresh-ready. The raw invalid-area callback
+  count can include LVGL's internal sizing/overlap checks and is not a count of visible dirty
+  rectangles. A static UI with advancing loop iterations
+ and LVGL service (refresh counters may remain flat), but no pending invalidation
+  or flush, is
+  explicitly non-stalled. An accepted refresh request without refresh-ready or flush
+  is distinguishable from this case; an in-progress flush without completion is
+  classified separately. An accepted request is not proof of visible changed pixels;
+ `writePixels` has no readback, and completion/`lv_display_flush_ready` only
+ confirms software progress. No telemetry proves visible pixels.
+
+ A core-0 observer (Arduino loop is core 1) starts after mini/setup initialization;
+ creation failure is event 13 detail 0x84. Its 2048-byte FreeRTOS task stack
+ is allocated at task creation, idle priority below BLE, sampling every 500 ms.
+ It performs no serial, filesystem, watchdog or restart operations. Atomically
+ published loop-entry, LVGL-service and flush start/end state is inspected for
+ >=2000 ms inactivity. Event 23 detail 1 = ControllerLoopStall (no loop entry),
+ 2 = LvglServiceStall (service in progress), 3 = DisplayFlushStall (flush in
+  progress, highest priority); value is elapsed ms saturated at 65535. Ages
+  use modular millis subtraction for intervals shorter than half the uint32
+  range; a timestamp published just after the observer samples `now` has age
+  zero rather than an unsigned-wrap false alarm. Known synchronous serial
+   output temporarily exempts only loop-entry stalls and resets loop progress
+   on exit: individual event-record writes in `log dump` and `flight dump`,
+   plus screenshot header/PPM streaming after snapshot capture. File reads,
+   snapshot allocation/capture and dump preparation remain monitored. LVGL
+   service and display flush stalls remain observable. Detail
+ 0 is recovery, value = prior class. Only transitions are recorded, including
+ recovery/reclassification, not repeated polls. An observer unable to run
+ (scheduler/core starvation) cannot record a stall. Resolution is limited by
+ 500 ms polling; a reset before the observer runs can still lose the transition.
+ The periodic sampling consumes 14 x 16 = 224 retained record bytes per quiet
+ ten-second interval, plus an optional slow flush and stall transitions;
+ overwritten slots are counted. Normal build RAM 157904/327680, flash
+  1556573/3342336; RTC slow segment remains 2136/8192 bytes including the
+ 2100-byte retained state. The observer's 2048-byte dynamic stack is additional
+ to static RAM and the sampled high-water mark measures remaining stack, not
+ peak allocation. No hardware validation was performed.
