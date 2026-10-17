@@ -16,12 +16,17 @@ int main() {
     fx.enabled = true;
     fx.pendingDesiredEnabled = false;
     assert(!MiniActionPresentation::fxEnabled(fx) && fx.enabled);
+    assert(!s.sparkStateStale && fx.known); // main may show desired OFF, but confirmed is still ON
     fx.pending = false; // confirmation: Spark observation wins
     assert(MiniActionPresentation::fxEnabled(fx));
     fx.actionFailed = true; // timeout/conflict: no optimistic value survives
     assert(MiniActionPresentation::fxEnabled(fx));
     fx.enabled = false;
     s.sparkStateStale = true; // disconnect: no pending appearance is permitted
+    fx.pending = true;
+    fx.pendingDesiredEnabled = true;
+    assert(!MiniActionPresentation::fxAuthoritative(s, 0));
+    fx.pending = false;
     assert(!fx.pending && !MiniActionPresentation::fxEnabled(fx));
 
     s.pendingHardwarePreset = 4;

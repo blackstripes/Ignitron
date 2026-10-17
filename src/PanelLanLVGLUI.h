@@ -21,6 +21,10 @@ public:
     enum class View : uint8_t { Preset, Fx, Looper, Tuner, Device };
     void begin();
     void update(const ControllerSnapshot &snapshot);
+#ifdef PANELAN_PRESET_TRACE
+    // Called after the mini display has been serviced for this loop.
+    void drainMainTrace();
+#endif
     View activeView() const { return static_cast<View>(activeScreen_); }
     // Physical navigation uses the same tuner/modal path as bottom navigation.
     void physicalNavigate(View view);
@@ -50,6 +54,7 @@ private:
     lv_obj_t *fxTiles_[6]{};
     lv_obj_t *fxIcons_[6]{};
     lv_obj_t *fxStateLabels_[6]{};
+    lv_obj_t *fxErrorLabels_[6]{};
     lv_obj_t *presetPicker_ = nullptr;
     lv_obj_t *presetButtons_[4]{};
     lv_obj_t *detailPage_ = nullptr;
@@ -83,6 +88,7 @@ private:
     lv_obj_t *detailTileIcons_[6]{};
     lv_obj_t *detailTileLabels_[6]{};
     lv_obj_t *detailTileStateLabels_[6]{};
+    lv_obj_t *detailTileMarkers_[6]{};
     lv_obj_t *navButtons_[5]{};
     lv_obj_t *navLabels_[5]{};
     lv_obj_t *navIcons_[5]{};
@@ -104,6 +110,18 @@ private:
     InjectedTouch injectedTouches_[kInjectedTouchQueueSize]{};
     uint8_t injectedTouchHead_ = 0;
     uint8_t injectedTouchCount_ = 0;
+#ifdef PANELAN_PRESET_TRACE
+    struct MainTrace {
+        lv_obj_t *card = nullptr;
+        uint32_t id = 0, inputAt = 0, completedAt = 0;
+        uint8_t target = 0;
+        bool fx = false, final = false, dirty = false, refreshed = false, ready = false;
+    } mainTrace_;
+    uint32_t mainFirstId_ = 0, mainFinalId_ = 0;
+    bool mainTraceMatches(const ControllerSnapshot &snapshot) const;
+    void traceMain(const ControllerSnapshot &snapshot, lv_obj_t *card, bool dirty);
+    void printMainTrace();
+#endif
 
     static void flushDisplay(lv_display_t *display, const lv_area_t *area, uint8_t *pixelMap);
     static void readTouch(lv_indev_t *, lv_indev_data_t *data);

@@ -136,6 +136,9 @@ void updatePanelLanScreens() {
 #endif
     panelLanMiniDisplay.update(snapshot, panelLanDisplay.activeView(), physicalRouting.browsedBank(),
                                static_cast<uint8_t>(presetControl.numberOfHWBanks() * PRESETS_PER_BANK));
+#ifdef PANELAN_PRESET_TRACE
+    panelLanDisplay.drainMainTrace();
+#endif
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     PanelLanMiniDisplay::traceHardware("after mini update");
 #endif

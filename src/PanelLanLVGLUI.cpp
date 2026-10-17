@@ -2,15 +2,56 @@
 #include "FlightRecorder.h"
 #include "FlightDisplayHealth.h"
 #include "controller/ControllerActions.h"
+#include "controller/MiniActionPresentation.h"
 
 #include <esp_heap_caps.h>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 
 #if defined(PANELAN_SC05X_MODE) && defined(PANELAN_LVGL_UI_MODE)
 namespace FlightDisplayHealth { Counters health; Progress progress; }
 
 namespace {
 PanelLanLVGLUI *uiInstance = nullptr;
+
+bool setText(lv_obj_t *obj, const char *text) {
+    if (std::strcmp(lv_label_get_text(obj), text) == 0) return false;
+    lv_label_set_text(obj, text);
+    return true;
+}
+
+bool setColor(lv_obj_t *obj, lv_style_prop_t prop, lv_color_t color) {
+    lv_color_t old;
+    switch (prop) {
+    case LV_STYLE_BG_COLOR: old = lv_obj_get_style_bg_color(obj, LV_PART_MAIN); break;
+    case LV_STYLE_BG_GRAD_COLOR: old = lv_obj_get_style_bg_grad_color(obj, LV_PART_MAIN); break;
+    case LV_STYLE_BORDER_COLOR: old = lv_obj_get_style_border_color(obj, LV_PART_MAIN); break;
+    default: old = lv_obj_get_style_text_color(obj, LV_PART_MAIN); break;
+    }
+    if (lv_color_eq(old, color)) return false;
+    switch (prop) {
+    case LV_STYLE_BG_COLOR: lv_obj_set_style_bg_color(obj, color, 0); break;
+    case LV_STYLE_BG_GRAD_COLOR: lv_obj_set_style_bg_grad_color(obj, color, 0); break;
+    case LV_STYLE_BORDER_COLOR: lv_obj_set_style_border_color(obj, color, 0); break;
+    default: lv_obj_set_style_text_color(obj, color, 0); break;
+    }
+    return true;
+}
+
+void show(lv_obj_t *obj, bool visible) {
+    if (lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN) == visible) {
+        if (visible) lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+template <typename... Args>
+bool setFormatted(lv_obj_t *obj, const char *format, Args... args) {
+    char text[128];
+    snprintf(text, sizeof(text), format, args...);
+    return setText(obj, text);
+}
 
 // Looper colors communicate transport and intent; text always carries the
 // same meaning so recording, pending and unavailable remain unambiguous.
@@ -371,6 +412,15 @@ void drawDevicePortrait(lv_event_t *event) {
 }
 
 void PanelLanLVGLUI::flushDisplay(lv_display_t *display, const lv_area_t *area, uint8_t *pixelMap) {
+#ifdef PANELAN_PRESET_TRACE
+    MainTrace &trace = uiInstance->mainTrace_;
+    if (trace.dirty && trace.card && !lv_obj_has_flag(trace.card, LV_OBJ_FLAG_HIDDEN)) {
+        lv_area_t bounds;
+        lv_obj_get_coords(trace.card, &bounds);
+        if (area->x1 <= bounds.x2 && area->x2 >= bounds.x1 &&
+            area->y1 <= bounds.y2 && area->y2 >= bounds.y1) trace.refreshed = true;
+    }
+#endif
     const uint32_t started = millis();
     FlightDisplayHealth::progress.flushStart(started);
     const uint32_t width = area->x2 - area->x1 + 1;
@@ -441,7 +491,16 @@ void PanelLanLVGLUI::begin() {
     // can also be raised for internal sizing/overlap checks and is counted separately.
     lv_display_add_event_cb(display_, [](lv_event_t *) { FlightDisplayHealth::health.request(millis()); }, LV_EVENT_REFR_REQUEST, nullptr);
     lv_display_add_event_cb(display_, [](lv_event_t *) { FlightDisplayHealth::health.invalidationCallback(); }, LV_EVENT_INVALIDATE_AREA, nullptr);
-    lv_display_add_event_cb(display_, [](lv_event_t *) { FlightDisplayHealth::health.refreshReady(); }, LV_EVENT_REFR_READY, nullptr);
+    lv_display_add_event_cb(display_, [](lv_event_t *) {
+        FlightDisplayHealth::health.refreshReady();
+#ifdef PANELAN_PRESET_TRACE
+        MainTrace &trace = uiInstance->mainTrace_;
+        if (trace.dirty && trace.refreshed && uiInstance->mainTraceMatches(uiInstance->latestSnapshot_)) {
+            trace.completedAt = millis();
+            trace.ready = true;
+        }
+#endif
+    }, LV_EVENT_REFR_READY, nullptr);
 
     lv_indev_t *touch = lv_indev_create();
     lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
@@ -525,6 +584,7 @@ void PanelLanLVGLUI::createUi() {
         lv_obj_align(tile, LV_ALIGN_TOP_MID, fxX[fx], 143);
         lv_obj_set_style_bg_color(tile, lv_color_hex(0x151F25), 0);
         lv_obj_set_style_border_color(tile, lv_color_hex(0x34454F), 0);
+        lv_obj_set_style_bg_grad_dir(tile, LV_GRAD_DIR_VER, 0);
         lv_obj_set_style_border_width(tile, 1, 0);
         lv_obj_set_style_radius(tile, 5, 0);
         lv_obj_set_style_pad_all(tile, 0, 0);
@@ -543,6 +603,12 @@ void PanelLanLVGLUI::createUi() {
         lv_obj_set_style_text_font(fxStateLabels_[fx], &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_align(fxStateLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(fxStateLabels_[fx], LV_ALIGN_TOP_RIGHT, -3, 2);
+        fxErrorLabels_[fx] = lv_label_create(tile);
+        lv_label_set_text(fxErrorLabels_[fx], "!");
+        lv_obj_set_style_text_font(fxErrorLabels_[fx], &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(fxErrorLabels_[fx], lv_color_hex(0xFF6C76), 0);
+        lv_obj_align(fxErrorLabels_[fx], LV_ALIGN_TOP_LEFT, 2, 2);
+        lv_obj_add_flag(fxErrorLabels_[fx], LV_OBJ_FLAG_HIDDEN);
     }
 
     presetPicker_ = lv_obj_create(screen);
@@ -719,6 +785,7 @@ void PanelLanLVGLUI::createUi() {
         lv_obj_set_size(tile, 98, 77);
         lv_obj_align(tile, LV_ALIGN_TOP_MID, detailX[fx], fx < 3 ? 3 : 85);
         lv_obj_set_style_border_width(tile, 2, 0);
+        lv_obj_set_style_bg_grad_dir(tile, LV_GRAD_DIR_VER, 0);
         lv_obj_set_style_radius(tile, 7, 0);
         lv_obj_set_style_pad_all(tile, 0, 0);
         lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
@@ -741,6 +808,10 @@ void PanelLanLVGLUI::createUi() {
         lv_obj_set_style_text_align(detailTileStateLabels_[fx], LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_font(detailTileStateLabels_[fx], &lv_font_montserrat_12, 0);
         lv_obj_align(detailTileStateLabels_[fx], LV_ALIGN_BOTTOM_MID, 0, -3);
+        detailTileMarkers_[fx] = lv_label_create(tile);
+        lv_obj_set_style_text_font(detailTileMarkers_[fx], &lv_font_montserrat_12, 0);
+        lv_obj_align(detailTileMarkers_[fx], LV_ALIGN_TOP_RIGHT, -3, 2);
+        lv_obj_add_flag(detailTileMarkers_[fx], LV_OBJ_FLAG_HIDDEN);
     }
 
     lv_obj_t *nav = lv_obj_create(screen);
@@ -911,24 +982,17 @@ void PanelLanLVGLUI::renderNavigation() {
 void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
     const bool isFxPage = activeScreen_ == Screen::Fx;
     lv_obj_set_height(detailPage_, 180);
-    auto showOnly = [](lv_obj_t *page, bool visible) {
-        if (visible) lv_obj_remove_flag(page, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
-    };
+    auto showOnly = [](lv_obj_t *page, bool visible) { show(page, visible); };
     showOnly(looperPage_, activeScreen_ == Screen::Looper);
     showOnly(tunerPage_, activeScreen_ == Screen::Tuner);
     showOnly(devicePage_, activeScreen_ == Screen::Device);
     for (uint8_t fx = 0; fx < 6; ++fx) {
-        if (isFxPage) {
-            lv_obj_remove_flag(detailTiles_[fx], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(detailTiles_[fx], LV_OBJ_FLAG_HIDDEN);
-        }
+        show(detailTiles_[fx], isFxPage);
     }
     if (isFxPage) {
         // The concept gives the entire body to six effects. Status already
         // belongs to the persistent header; an extra title shrinks the cards.
-        lv_label_set_text(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
+        setText(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
         static const lv_color_t kFxAccents[] = {
             lv_color_hex(0x00E65D), lv_color_hex(0x48D8BC), lv_color_hex(0xFF3044),
             lv_color_hex(0xA497E9), lv_color_hex(0x00ABFF), lv_color_hex(0xA99BEA),
@@ -941,21 +1005,19 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
         for (uint8_t fx = 0; fx < 6; ++fx) {
             const ControllerFxSlot &slot = snapshot.fxSlots[fx];
             const bool needsSync = snapshot.sparkStateStale || !slot.known;
-            // Pending and failed requests deliberately retain the confirmed
-            // card body. Only ControllerState can change `enabled`; this
-            // renderer only makes the trust level legible.
-            const bool confirmedEnabled = slot.known && slot.enabled;
+            // Pending intent changes presentation only, never confirmed state.
+            const bool visibleEnabled = !needsSync && MiniActionPresentation::fxEnabled(slot);
             const bool pending = !needsSync && slot.pending;
-            const bool failed = !needsSync && !pending && slot.actionFailed;
+            const bool failed = !pending && slot.actionFailed;
             const char *name = slot.known ? slot.label.c_str() : kFxNames[fx];
-            lv_label_set_text(detailTileLabels_[fx], name);
-            const lv_color_t confirmedAccent = confirmedEnabled ? kFxAccents[fx] : lv_color_hex(0x96A5B7);
-            lv_color_t border = confirmedEnabled ? confirmedAccent : lv_color_hex(0x4B5965);
-            lv_color_t iconColor = confirmedAccent;
+            bool dirty = setText(detailTileLabels_[fx], name);
+            const lv_color_t accent = visibleEnabled ? kFxAccents[fx] : lv_color_hex(0x96A5B7);
+            lv_color_t border = visibleEnabled ? accent : lv_color_hex(0x4B5965);
+            lv_color_t iconColor = accent;
             lv_color_t stateColor = lv_color_hex(0xDCE7EF);
-            const char *state = confirmedEnabled ? "ON" : "OFF";
-            lv_color_t background = confirmedEnabled ? kFxOnBackgrounds[fx] : lv_color_hex(0x242D35);
-            lv_color_t gradient = confirmedEnabled
+            const char *state = visibleEnabled ? "ON" : "OFF";
+            lv_color_t background = visibleEnabled ? kFxOnBackgrounds[fx] : lv_color_hex(0x242D35);
+            lv_color_t gradient = visibleEnabled
                                       ? lv_color_mix(kFxOnBackgrounds[fx], lv_color_black(), 110)
                                       : lv_color_hex(0x101820);
 
@@ -969,27 +1031,31 @@ void PanelLanLVGLUI::renderDetailPage(const ControllerSnapshot &snapshot) {
                 border = lv_color_hex(0x7B6135);
                 iconColor = lv_color_hex(0xD9B877);
                 stateColor = lv_color_hex(0xD9B877);
-            } else if (pending) {
-                state = slot.pendingDesiredEnabled ? "TURNING ON" : "TURNING OFF";
-                border = lv_color_hex(0xD9B877);
-                iconColor = lv_color_hex(0xFFD06A);
-                stateColor = lv_color_hex(0xFFD06A);
-            } else if (failed) {
-                state = "RETRY";
-                border = lv_color_hex(0xFF5965);
-                iconColor = lv_color_hex(0xFF6C76);
-                stateColor = lv_color_hex(0xFF6C76);
             }
 
-            lv_label_set_text(detailTileStateLabels_[fx], state);
-            lv_obj_set_style_bg_color(detailTiles_[fx], background, 0);
-            lv_obj_set_style_bg_grad_color(detailTiles_[fx], gradient, 0);
-            lv_obj_set_style_bg_grad_dir(detailTiles_[fx], LV_GRAD_DIR_VER, 0);
-            lv_obj_set_style_border_color(detailTiles_[fx], border, 0);
-            lv_obj_set_style_text_color(detailTileIcons_[fx], iconColor, 0);
-            lv_obj_invalidate(detailTileIcons_[fx]);
-            lv_obj_set_style_text_color(detailTileLabels_[fx], lv_color_hex(0xF1F4F7), 0);
-            lv_obj_set_style_text_color(detailTileStateLabels_[fx], stateColor, 0);
+            // The corner status is the only pending/failure annotation; the
+            // body and ON/OFF colors are identical to their confirmed versions.
+            dirty |= setText(detailTileStateLabels_[fx], state);
+            const bool marked = pending || failed;
+            if (marked) {
+                dirty |= setText(detailTileMarkers_[fx], pending ? "*" : "!");
+                dirty |= setColor(detailTileMarkers_[fx], LV_STYLE_TEXT_COLOR,
+                                  lv_color_hex(pending ? 0xFFD06A : 0xFF6C76));
+            }
+            const bool wasHidden = lv_obj_has_flag(detailTileMarkers_[fx], LV_OBJ_FLAG_HIDDEN);
+            show(detailTileMarkers_[fx], marked);
+            dirty |= wasHidden == marked;
+            dirty |= setColor(detailTiles_[fx], LV_STYLE_BG_COLOR, background);
+            dirty |= setColor(detailTiles_[fx], LV_STYLE_BG_GRAD_COLOR, gradient);
+            dirty |= setColor(detailTiles_[fx], LV_STYLE_BORDER_COLOR, border);
+            dirty |= setColor(detailTileIcons_[fx], LV_STYLE_TEXT_COLOR, iconColor);
+            dirty |= setColor(detailTileLabels_[fx], LV_STYLE_TEXT_COLOR, lv_color_hex(0xF1F4F7));
+            dirty |= setColor(detailTileStateLabels_[fx], LV_STYLE_TEXT_COLOR, stateColor);
+#ifdef PANELAN_PRESET_TRACE
+            if (snapshot.miniActionFx && snapshot.miniActionTarget == fx &&
+                !lv_obj_has_flag(detailPage_, LV_OBJ_FLAG_HIDDEN))
+                traceMain(snapshot, detailTiles_[fx], dirty);
+#endif
         }
         return;
     }
@@ -1246,6 +1312,11 @@ bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
 }
 
 void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
+#ifdef PANELAN_PRESET_TRACE
+    // Unrelated revisions may arrive before LVGL refreshes the dirty card.
+    // A superseding action or changed confirmation stage revokes the old arm.
+    if (mainTrace_.dirty && !mainTraceMatches(snapshot)) mainTrace_ = {};
+#endif
     latestSnapshot_ = snapshot;
     reconcileExternalTuner(snapshot);
     const bool linkEstablished = snapshot.connectionPhase == ControllerConnectionPhase::Identifying ||
@@ -1257,38 +1328,39 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
                                      ? "RECONNECTING"
                                      : snapshot.connectionPhase == ControllerConnectionPhase::Ready ? LV_SYMBOL_BLUETOOTH " CONNECTED"
                                      : linkEstablished ? LV_SYMBOL_BLUETOOTH " SYNCING" : "SEARCHING";
-    lv_label_set_text(connectionLabel_, connectionText);
-    lv_obj_set_style_text_color(connectionLabel_, accent, 0);
-    lv_obj_set_style_border_color(lv_obj_get_parent(connectionLabel_), accent, 0);
-    lv_label_set_text(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
+    setText(connectionLabel_, connectionText);
+    setColor(connectionLabel_, LV_STYLE_TEXT_COLOR, accent);
+    setColor(lv_obj_get_parent(connectionLabel_), LV_STYLE_BORDER_COLOR, accent);
+    setText(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
+    bool identityDirty = false;
     if (snapshot.pendingHardwarePreset != 0) {
-        lv_label_set_text_fmt(identityLabel_, "SELECTING PRESET %u", snapshot.pendingHardwarePreset);
+        identityDirty = setFormatted(identityLabel_, "SELECTING PRESET %u", snapshot.pendingHardwarePreset);
     } else if (snapshot.confirmedHardwarePreset != 0) {
-        lv_label_set_text_fmt(identityLabel_, snapshot.sparkStateStale ? "PRESET %u / SYNCING"
-                                                                      : "HARDWARE PRESET %u",
-                              snapshot.confirmedHardwarePreset);
+        identityDirty = setFormatted(identityLabel_, snapshot.sparkStateStale ? "PRESET %u / SYNCING"
+                                                                       : "HARDWARE PRESET %u",
+                               snapshot.confirmedHardwarePreset);
     } else if (linkEstablished) {
-        lv_label_set_text(identityLabel_, "READING YOUR PRESET");
+        identityDirty = setText(identityLabel_, "READING YOUR PRESET");
     } else {
-        lv_label_set_text(identityLabel_, "SPARK PEDAL CONTROLLER");
+        identityDirty = setText(identityLabel_, "SPARK PEDAL CONTROLLER");
     }
 
     if (!snapshot.presetName.empty()) {
-        lv_label_set_text(presetNameLabel_, snapshot.presetName.c_str());
+        setText(presetNameLabel_, snapshot.presetName.c_str());
     } else if (snapshot.confirmedHardwarePreset != 0) {
-        lv_label_set_text_fmt(presetNameLabel_, "PRESET %u", snapshot.confirmedHardwarePreset);
+        setFormatted(presetNameLabel_, "PRESET %u", snapshot.confirmedHardwarePreset);
     } else {
-        lv_label_set_text(presetNameLabel_, linkEstablished ? "SYNCING PRESET" : "YOUR TONE");
+        setText(presetNameLabel_, linkEstablished ? "SYNCING PRESET" : "YOUR TONE");
     }
-    lv_obj_set_style_text_color(presetNameLabel_, snapshot.sparkStateStale ? lv_color_hex(0xA8B3BC)
-                                                                        : lv_color_hex(0xF4F6F8), 0);
+    setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR, snapshot.sparkStateStale ? lv_color_hex(0xA8B3BC)
+                                                                         : lv_color_hex(0xF4F6F8));
     const bool hasUsefulDescription = !snapshot.presetDescription.empty() && snapshot.presetDescription != "Text";
-    lv_label_set_text(presetDescriptionLabel_, snapshot.presetActionFailed ? "Change not confirmed. Tap to retry."
+    setText(presetDescriptionLabel_, snapshot.presetActionFailed ? "Change not confirmed. Tap to retry."
                                             : !linkEstablished ? "Turn on your Spark device"
                                             : snapshot.sparkStateStale ? "Waiting for current Spark state"
                                             : hasUsefulDescription
                                                 ? snapshot.presetDescription.c_str()
-                                                : "Tap to choose a preset");
+                                                 : "Tap to choose a preset");
 
     for (uint8_t preset = 1; preset <= 4; ++preset) {
         lv_obj_t *button = presetButtons_[preset - 1];
@@ -1303,12 +1375,26 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
         const lv_color_t color = selected ? lv_palette_main(LV_PALETTE_GREEN)
                                : ready ? lv_palette_main(LV_PALETTE_BLUE)
                                          : lv_color_hex(0x28353D);
-        lv_obj_set_style_bg_color(button, color, 0);
+        bool buttonDirty = setColor(button, LV_STYLE_BG_COLOR, color);
+        buttonDirty |= setColor(button, LV_STYLE_BORDER_COLOR,
+                                lv_color_hex(selected && snapshot.pendingHardwarePreset == preset ? 0xFFD06A
+                                           : snapshot.presetActionFailed && snapshot.failedHardwarePreset == preset
+                                               ? 0xFF6C76 : 0x3B5868));
+#ifdef PANELAN_PRESET_TRACE
+        if (!snapshot.miniActionFx && snapshot.miniActionTarget == preset &&
+            !lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN))
+            traceMain(snapshot, button, buttonDirty);
+#endif
         // Input acceptance is owned by ControllerActions. Do not use LVGL's
         // disabled state here: its dimming makes the still-valid alternatives
         // look broken while a request is pending.
-        lv_obj_remove_state(button, LV_STATE_DISABLED);
+        if (lv_obj_has_state(button, LV_STATE_DISABLED)) lv_obj_remove_state(button, LV_STATE_DISABLED);
     }
+#ifdef PANELAN_PRESET_TRACE
+    if (!snapshot.miniActionFx && activeScreen_ == Screen::Preset &&
+        lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN))
+        traceMain(snapshot, identityLabel_, identityDirty);
+#endif
 
     static const lv_color_t kFxColors[] = {
         lv_color_hex(0x00E65D), lv_color_hex(0x48D8BC), lv_color_hex(0xFF3044),
@@ -1318,34 +1404,105 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     for (uint8_t fx = 0; fx < 6; ++fx) {
         const ControllerFxSlot &slot = snapshot.fxSlots[fx];
         const bool current = slot.known && !snapshot.sparkStateStale;
-        const bool enabled = current && slot.enabled;
+        const bool enabled = current && MiniActionPresentation::fxEnabled(slot);
         lv_obj_t *tile = fxTiles_[fx];
         lv_obj_t *label = lv_obj_get_child(tile, 0);
-        lv_label_set_text(label, kFxNames[fx]);
+        bool dirty = setText(label, kFxNames[fx]);
         // Unknown/stale is visibly distinct from a confirmed bypassed effect.
-        lv_label_set_text(fxStateLabels_[fx], current ? "" : "?");
-        lv_obj_set_style_text_color(fxStateLabels_[fx], lv_color_hex(0xD9B877), 0);
-        lv_obj_set_style_bg_color(tile, enabled ? lv_color_mix(kFxColors[fx], lv_color_black(), 65)
-                                              : lv_color_hex(0x242D35), 0);
-        lv_obj_set_style_bg_grad_color(tile, enabled ? lv_color_mix(kFxColors[fx], lv_color_black(), 20)
-                                                   : lv_color_hex(0x101820), 0);
-        lv_obj_set_style_bg_grad_dir(tile, LV_GRAD_DIR_VER, 0);
-        lv_obj_set_style_border_color(tile, enabled ? kFxColors[fx] : lv_color_hex(0x4B5965), 0);
-        lv_obj_set_style_text_color(fxIcons_[fx], enabled ? kFxColors[fx] : lv_color_hex(0x96A5B7), 0);
-        lv_obj_invalidate(fxIcons_[fx]);
+        dirty |= setText(fxStateLabels_[fx], !current ? "?" : slot.pending ? "*" : "");
+        dirty |= setColor(fxStateLabels_[fx], LV_STYLE_TEXT_COLOR,
+                           lv_color_hex(0xD9B877));
+        const bool failed = slot.actionFailed && !(current && slot.pending);
+        const bool errorHidden = lv_obj_has_flag(fxErrorLabels_[fx], LV_OBJ_FLAG_HIDDEN);
+        show(fxErrorLabels_[fx], failed);
+        dirty |= errorHidden == failed;
+        dirty |= setColor(tile, LV_STYLE_BG_COLOR, enabled ? lv_color_mix(kFxColors[fx], lv_color_black(), 65)
+                                               : lv_color_hex(0x242D35));
+        dirty |= setColor(tile, LV_STYLE_BG_GRAD_COLOR, enabled ? lv_color_mix(kFxColors[fx], lv_color_black(), 20)
+                                                    : lv_color_hex(0x101820));
+        dirty |= setColor(tile, LV_STYLE_BORDER_COLOR, enabled ? kFxColors[fx] : lv_color_hex(0x4B5965));
+        dirty |= setColor(fxIcons_[fx], LV_STYLE_TEXT_COLOR, enabled ? kFxColors[fx] : lv_color_hex(0x96A5B7));
+#ifdef PANELAN_PRESET_TRACE
+        if (snapshot.miniActionFx && snapshot.miniActionTarget == fx && activeScreen_ == Screen::Preset &&
+            lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN))
+            traceMain(snapshot, tile, dirty);
+#endif
     }
 
     if (snapshot.pendingHardwarePreset != 0) {
-        lv_label_set_text(actionStatusLabel_, "Switching preset...");
+        setText(actionStatusLabel_, "Switching preset...");
     } else if (snapshot.presetActionFailed) {
-        lv_label_set_text(actionStatusLabel_, "Preset switch was not confirmed");
+        setText(actionStatusLabel_, "Preset switch was not confirmed");
     } else {
-        lv_label_set_text(actionStatusLabel_, "Hardware presets ready");
+        setText(actionStatusLabel_, "Hardware presets ready");
     }
     if (activeScreen_ != Screen::Preset) {
         renderDetailPage(snapshot);
     }
 }
+
+#ifdef PANELAN_PRESET_TRACE
+bool PanelLanLVGLUI::mainTraceMatches(const ControllerSnapshot &s) const {
+    const MainTrace &trace = mainTrace_;
+    if (!trace.dirty || !trace.card || !s.miniActionId || trace.id != s.miniActionId ||
+        trace.inputAt != s.miniInputAtMs || trace.fx != s.miniActionFx ||
+        trace.target != s.miniActionTarget || trace.final != s.miniActionConfirmed) return false;
+    if (trace.fx) {
+        if (trace.target >= 6 ||
+            (trace.card != fxTiles_[trace.target] && trace.card != detailTiles_[trace.target])) return false;
+        if (trace.card == fxTiles_[trace.target]) {
+            if (activeScreen_ != Screen::Preset || !lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN)) return false;
+        } else if (activeScreen_ != Screen::Fx || lv_obj_has_flag(detailPage_, LV_OBJ_FLAG_HIDDEN)) return false;
+        return trace.final
+            ? MiniActionPresentation::fxConfirmedDirection(s, trace.target, s.miniActionDesiredEnabled)
+            : !s.sparkStateStale && s.fxSlots[trace.target].known && s.fxSlots[trace.target].pending;
+    }
+    if (trace.target < 1 || trace.target > 4 || activeScreen_ != Screen::Preset) return false;
+    const bool pickerOpen = !lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN);
+    if (trace.card != (pickerOpen ? presetButtons_[trace.target - 1] : identityLabel_)) return false;
+    return trace.final
+        ? !s.pendingHardwarePreset && MiniActionPresentation::presetConfirmed(s, trace.target)
+        : s.pendingHardwarePreset == trace.target;
+}
+
+void PanelLanLVGLUI::traceMain(const ControllerSnapshot &s, lv_obj_t *card, bool dirty) {
+    if (!dirty || !s.miniActionId) return;
+    const bool first = !s.miniActionConfirmed &&
+        (s.miniActionFx ? s.miniActionTarget < 6 && !s.sparkStateStale &&
+             s.fxSlots[s.miniActionTarget].known && s.fxSlots[s.miniActionTarget].pending
+           : s.pendingHardwarePreset == s.miniActionTarget);
+    const bool final = s.miniActionConfirmed &&
+        (s.miniActionFx ? s.miniActionTarget < 6 &&
+             MiniActionPresentation::fxConfirmedDirection(s, s.miniActionTarget, s.miniActionDesiredEnabled)
+           : !s.pendingHardwarePreset && MiniActionPresentation::presetConfirmed(s, s.miniActionTarget));
+    if ((!first || mainFirstId_ == s.miniActionId) && (!final || mainFinalId_ == s.miniActionId)) return;
+    if (mainTrace_.dirty && mainTraceMatches(s)) return;
+    mainTrace_ = {};
+    mainTrace_.card = card;
+    mainTrace_.id = s.miniActionId;
+    mainTrace_.inputAt = s.miniInputAtMs;
+    mainTrace_.target = s.miniActionTarget;
+    mainTrace_.fx = s.miniActionFx;
+    mainTrace_.final = final;
+    mainTrace_.dirty = true;
+}
+
+void PanelLanLVGLUI::printMainTrace() {
+    MainTrace &trace = mainTrace_;
+    if (!trace.ready) return;
+    if (trace.final) mainFinalId_ = trace.id;
+    else mainFirstId_ = trace.id;
+    Serial.printf("PRESET_TRACE t=%lu event=main_%s id=%lu kind=%s target=%u input_elapsed=%lu\n",
+                  static_cast<unsigned long>(trace.completedAt), trace.final ? "final" : "first",
+                  static_cast<unsigned long>(trace.id), trace.fx ? "fx" : "preset", trace.target,
+                  static_cast<unsigned long>(trace.completedAt - trace.inputAt));
+    trace = {};
+}
+
+void PanelLanLVGLUI::drainMainTrace() {
+    printMainTrace();
+}
+#endif
 
 void PanelLanLVGLUI::update(const ControllerSnapshot &snapshot) {
     FlightDisplayHealth::health.serviceBegin = millis();
