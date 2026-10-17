@@ -8,6 +8,7 @@
 #include "PanelLanMiniMCP23017.h"
 #include "StartupDiagnostics.h"
 #include "controller/HardwarePresetNames.h"
+#include "controller/PhysicalPresetLayout.h"
 #if defined(PANELAN_I2C_AB_STAGE) && PANELAN_I2C_AB_STAGE == 4
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
@@ -390,16 +391,18 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
         switch (view) {
         case PanelLanLVGLUI::View::Preset: {
             card.layout = Layout::Preset;
-            if (i >= 4) {
-                const bool available = i == 4 ? browsedBank > 0 : (browsedBank + 1) * 4 < presetCount;
-                snprintf(card.name, sizeof(card.name), "BANK%c", i == 4 ? '-' : '+');
+            const auto position = PhysicalPresetLayout::positions[i];
+            if (position.role != PhysicalPresetLayout::Role::Slot) {
+                const bool previous = position.role == PhysicalPresetLayout::Role::BankPrevious;
+                const bool available = previous ? browsedBank > 0 : (browsedBank + 1) * 4 < presetCount;
+                snprintf(card.name, sizeof(card.name), "BANK%c", previous ? '-' : '+');
                 snprintf(card.status, sizeof(card.status), available ? "TO %u" : "END",
-                         static_cast<unsigned>(browsedBank + (i == 4 ? 0 : 2)));
+                         static_cast<unsigned>(browsedBank + (previous ? 0 : 2)));
                 card.accent = available ? amber : muted;
                 break;
             }
-            const uint8_t target = static_cast<uint8_t>(browsedBank * 4 + display);
-            snprintf(card.name, sizeof(card.name), "P%u %s", display,
+            const uint8_t target = static_cast<uint8_t>(browsedBank * 4 + position.slot);
+            snprintf(card.name, sizeof(card.name), "P%u %s", position.slot,
                      target <= presetCount ? HardwarePresetNames::label(snapshot.hardwarePresetNames, target) : "UNAVAILABLE");
             if (target > presetCount) { card.accent = muted; strcpy(card.status, "UNAVAILABLE"); }
             else if (snapshot.pendingHardwarePreset == target) { card.accent = amber; card.mark = Mark::Dots; }

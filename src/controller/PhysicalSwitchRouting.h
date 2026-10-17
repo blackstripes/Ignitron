@@ -1,5 +1,6 @@
 #pragma once
 #include "PhysicalPresetBank.h"
+#include "PhysicalPresetLayout.h"
 #include "PhysicalSwitches.h"
 
 // UI/action adapter intentionally has no Spark transport dependency. View enum
@@ -47,9 +48,11 @@ public:
             return;
         }
         if (view == decltype(view)::Preset) {
-            if (key >= 4) bank_.step(key == 4 ? -1 : 1, count);
+            const auto position = PhysicalPresetLayout::positions[key];
+            if (position.role == PhysicalPresetLayout::Role::BankPrevious) bank_.step(-1, count);
+            else if (position.role == PhysicalPresetLayout::Role::BankNext) bank_.step(1, count);
             else {
-                const uint8_t target = bank_.target(key, count);
+                const uint8_t target = bank_.target(position.slot - 1, count);
                 if (target && s.connectionPhase == decltype(s.connectionPhase)::Ready && !s.sparkStateStale)
                     actions.requestHardwarePreset(target);
             }

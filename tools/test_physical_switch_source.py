@@ -17,10 +17,19 @@ class PhysicalSwitchSourceTest(unittest.TestCase):
         self.assertLess(app.index('pollPhysicalSwitches();'), app.index('if (!sparkConnected)'))
         self.assertIn('now - lastPollAt < 5', app)
         self.assertIn('physicalRouting.observe(controllerState.snapshot(), count)', app)
-        self.assertIn('const uint8_t target = static_cast<uint8_t>(browsedBank * 4 + display);', mini)
+        routing = (ROOT / 'controller/PhysicalSwitchRouting.h').read_text()
+        layout = (ROOT / 'controller/PhysicalPresetLayout.h').read_text()
+        self.assertIn('PhysicalPresetLayout::positions[i]', mini)
+        self.assertIn('PhysicalPresetLayout::positions[key]', routing)
+        self.assertIn('bank_.target(position.slot - 1, count)', routing)
+        self.assertIn('browsedBank * 4 + position.slot', mini)
+        self.assertIn('"P%u %s", position.slot', mini)
+        for entry in ('{Role::Slot, 4}', '{Role::BankPrevious, 0}', '{Role::BankNext, 0}',
+                      '{Role::Slot, 1}', '{Role::Slot, 2}', '{Role::Slot, 3}'):
+            self.assertIn(entry, layout)
         self.assertIn('snapshot.pendingHardwarePreset == target', mini)
         self.assertIn('snapshot.confirmedHardwarePreset == target', mini)
-        self.assertIn('i == 4 ? browsedBank > 0 : (browsedBank + 1) * 4 < presetCount', mini)
+        self.assertIn('previous ? browsedBank > 0 : (browsedBank + 1) * 4 < presetCount', mini)
 
     def test_shared_tap_path(self):
         app = (ROOT / 'controller/PhysicalSwitchRouting.h').read_text()

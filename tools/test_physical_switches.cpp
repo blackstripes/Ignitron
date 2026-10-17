@@ -84,31 +84,48 @@ int main() {
     auto e = [&](int i, PhysicalSwitches::Kind k = PhysicalSwitches::Kind::Short, int count = 8) {
         route.event(i, k, count, s, ui, a);
     };
+    using PhysicalPresetLayout::Role;
+    const auto &positions = PhysicalPresetLayout::positions;
+    assert(positions[0].role == Role::Slot && positions[0].slot == 4);
+    assert(positions[1].role == Role::BankPrevious);
+    assert(positions[2].role == Role::BankNext);
+    assert(positions[3].role == Role::Slot && positions[3].slot == 1);
+    assert(positions[4].role == Role::Slot && positions[4].slot == 2);
+    assert(positions[5].role == Role::Slot && positions[5].slot == 3);
     s.confirmedHardwarePreset = 6;
     route.observe(s, 8);
     assert(route.browsedBank() == 1);
-    e(4); assert(route.browsedBank() == 0);
+    e(1); assert(route.browsedBank() == 0);
     route.observe(s, 8); assert(route.browsedBank() == 0); // unchanged confirmation preserves browsing
     s.confirmedHardwarePreset = 7;
     route.observe(s, 8); assert(route.browsedBank() == 1);
     s.sparkStateStale = true;
     route.observe(s, 8);
     s.sparkStateStale = false;
-    e(4); assert(route.browsedBank() == 0);
+    e(1); assert(route.browsedBank() == 0);
     route.observe(s, 8); assert(route.browsedBank() == 1); // fresh after reconnect
     s.confirmedHardwarePreset = 1;
     route.observe(s, 8); assert(route.browsedBank() == 0);
-    e(0); e(5); assert(route.browsedBank() == 1);
-    e(0); e(3); assert((a.presets == std::vector<int>{1, 5, 8}));
-    e(5); assert(route.browsedBank() == 1);
-    e(4); assert(route.browsedBank() == 0);
-    e(5, PhysicalSwitches::Kind::Short, 4); assert(route.browsedBank() == 0);
+    e(1); assert(route.browsedBank() == 0); // previous disabled at first bank
+    e(0); e(3); e(4); e(5);
+    assert((a.presets == std::vector<int>{4, 1, 2, 3}));
+    e(2); assert(route.browsedBank() == 1);
+    e(0); e(3); e(4); e(5);
+    assert((a.presets == std::vector<int>{4, 1, 2, 3, 8, 5, 6, 7}));
+    e(2); assert(route.browsedBank() == 1); // next disabled at last bank
+    e(1); assert(route.browsedBank() == 0);
+    e(2, PhysicalSwitches::Kind::Short, 4); assert(route.browsedBank() == 0);
+    e(2, PhysicalSwitches::Kind::Short, 5); assert(route.browsedBank() == 1);
+    e(0, PhysicalSwitches::Kind::Short, 5); // unavailable P4 in partial bank
+    e(3, PhysicalSwitches::Kind::Short, 5);
+    assert(a.presets.back() == 5 && a.presets.size() == 9);
+    e(1); assert(route.browsedBank() == 0);
     e(6); assert(ui.view == View::Fx);
     for (int i = 0; i < 6; ++i) e(i);
     assert((a.fx == std::vector<int>{0,1,2,3,4,5}));
     e(6); assert(ui.view == View::Preset);
     e(6); s.looperCapability = Capability::Verified; e(6); assert(ui.view == View::Looper);
-    e(0); assert(a.presets.size() == 3 && a.fx.size() == 6); // looper inert
+    e(0); assert(a.presets.size() == 9 && a.fx.size() == 6); // looper inert
     e(6); assert(ui.view == View::Preset);
     e(7); assert(a.taps == 1);
     e(6); assert(ui.view == View::Fx);
@@ -120,10 +137,10 @@ int main() {
     e(7); assert(ui.view == View::Fx && ui.cancellations == 3 && a.taps == 1);
     e(7, PhysicalSwitches::Kind::Long); assert(ui.view == View::Tuner);
     s.tunerActive = true;
-    e(0); e(6); e(7); assert(ui.exits == 3 && a.taps == 1 && a.presets.size() == 3 && ui.view == View::Tuner);
+    e(0); e(6); e(7); assert(ui.exits == 3 && a.taps == 1 && a.presets.size() == 9 && ui.view == View::Tuner);
     s.tunerActive = false; ui.view = View::Device;
-    e(0); e(7); assert(a.taps == 2 && a.presets.size() == 3);
+    e(0); e(7); assert(a.taps == 2 && a.presets.size() == 9);
     ui.view = View::Preset; s.connectionPhase = Phase::Reconnecting; s.sparkStateStale = true;
     e(0); e(7); e(6); e(0);
-    assert(a.presets.size() == 3 && a.fx.size() == 6 && a.taps == 2);
+    assert(a.presets.size() == 9 && a.fx.size() == 6 && a.taps == 2);
 }
