@@ -17,7 +17,7 @@ class PresetCosmeticsTest(unittest.TestCase):
         self.assertIn("onPresetCardClicked, LV_EVENT_CLICKED", hero)
         self.assertIn("lv_obj_remove_flag(presetNameLabel_, LV_OBJ_FLAG_CLICKABLE)", hero)
         self.assertIn('!displayDescription.empty() && displayDescription != "Text"', UI)
-        self.assertIn('hasUsefulDescription ? displayDescription.c_str() : ""', UI)
+        self.assertIn('hasUsefulDescription && !fittedName.twoLine ? displayDescription.c_str() : ""', UI)
 
     def test_cabinet_artwork_without_overlay(self):
         cabinet = UI.split("void drawPresetCabinet(", 1)[1].split("void drawGlyph(", 1)[0]
@@ -32,17 +32,21 @@ class PresetCosmeticsTest(unittest.TestCase):
         ):
             self.assertIn(original, cabinet)
 
-    def test_fixed_single_line_measured_with_label_style(self):
-        self.assertIn("lv_obj_set_size(presetNameLabel_, 282, lv_font_get_line_height(&lv_font_montserrat_24))", UI)
+    def test_fixed_two_lines_measured_with_label_style(self):
+        self.assertIn("lv_obj_set_size(presetNameLabel_, 282, 2 * lv_font_get_line_height(&lv_font_montserrat_24))", UI)
+        self.assertIn("lv_obj_set_style_text_line_space(presetNameLabel_, 0, 0)", UI)
+        self.assertIn("lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0, 42)", UI)
+        self.assertIn("lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_MID, 0, 77)", UI)
+        self.assertIn("lv_obj_align(tile, LV_ALIGN_TOP_MID, fxX[fx], 143)", UI)
         self.assertIn("lv_label_set_long_mode(presetNameLabel_, LV_LABEL_LONG_CLIP)", UI)
         self.assertIn("lv_obj_set_style_text_align(presetNameLabel_, LV_TEXT_ALIGN_CENTER", UI)
         fitting = UI.split("const auto fittedName =", 1)[1].split("const std::string &displayDescription", 1)[0]
-        self.assertIn("PresetNamePresentation::singleLine(name, 282", fitting)
+        self.assertIn("PresetNamePresentation::fit(name, 282", fitting)
         self.assertIn("lv_text_get_size(&size, text", fitting)
         self.assertIn("lv_obj_get_style_text_font(presetNameLabel_, LV_PART_MAIN)", fitting)
         self.assertIn("lv_obj_get_style_text_letter_space(presetNameLabel_, LV_PART_MAIN)", fitting)
         self.assertIn("LV_COORD_MAX, LV_TEXT_FLAG_NONE", fitting)
-        self.assertIn("setText(presetNameLabel_, fittedName.c_str())", fitting)
+        self.assertIn("setText(presetNameLabel_, fittedName.text.c_str())", fitting)
 
     def test_static_lifecycle_and_changed_only_updates(self):
         # No asynchronous reveal to restart on Pending -> Ready, or survive

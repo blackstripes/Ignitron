@@ -544,7 +544,7 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_add_event_cb(hero, onPresetCardClicked, LV_EVENT_CLICKED, nullptr);
 
     presetNameLabel_ = lv_label_create(hero);
-    lv_obj_set_size(presetNameLabel_, 282, lv_font_get_line_height(&lv_font_montserrat_24));
+    lv_obj_set_size(presetNameLabel_, 282, 2 * lv_font_get_line_height(&lv_font_montserrat_24));
     // Pre-fit with LVGL pixel measurements. Unlike LONG_DOT this does not
     // mutate the label's text, so changed-only updates remain stable.
     // Deliberately static: no scrolling timer survives navigation or changes.
@@ -552,6 +552,8 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_remove_flag(presetNameLabel_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_text_color(presetNameLabel_, lv_color_white(), 0);
     lv_obj_set_style_text_font(presetNameLabel_, &lv_font_montserrat_24, 0);
+    // Explicit newlines only; line two starts exactly one font line below y42.
+    lv_obj_set_style_text_line_space(presetNameLabel_, 0, 0);
     lv_obj_set_style_text_align(presetNameLabel_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0, 42);
 
@@ -1328,20 +1330,20 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot,
         (presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending ||
          presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading);
     const char *name = showingPreview ? preview.name.c_str() : presetCard.name.c_str();
-    const auto fittedName = PresetNamePresentation::singleLine(name, 282, [&](const char *text) {
+    const auto fittedName = PresetNamePresentation::fit(name, 282, [&](const char *text) {
         lv_point_t size;
         lv_text_get_size(&size, text, lv_obj_get_style_text_font(presetNameLabel_, LV_PART_MAIN),
                          lv_obj_get_style_text_letter_space(presetNameLabel_, LV_PART_MAIN),
                          0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         return size.x;
     });
-    presetCardDirty |= setText(presetNameLabel_, fittedName.c_str());
+    presetCardDirty |= setText(presetNameLabel_, fittedName.text.c_str());
     presetCardDirty |= setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR,
                                 snapshot.sparkStateStale && !showingPreview ? lv_color_hex(0xA8B3BC)
                                                                              : lv_color_hex(0xF4F6F8));
     const std::string &displayDescription = showingPreview ? preview.description : snapshot.presetDescription;
     const bool hasUsefulDescription = !displayDescription.empty() && displayDescription != "Text";
-    const char *description = hasUsefulDescription ? displayDescription.c_str() : "";
+    const char *description = hasUsefulDescription && !fittedName.twoLine ? displayDescription.c_str() : "";
     presetCardDirty |= setText(presetDescriptionLabel_, description);
 
     for (uint8_t preset = 1; preset <= 4; ++preset) {
