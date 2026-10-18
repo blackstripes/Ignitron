@@ -1333,8 +1333,11 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     setColor(lv_obj_get_parent(connectionLabel_), LV_STYLE_BORDER_COLOR, accent);
     setText(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
     bool identityDirty = false;
-    if (snapshot.pendingHardwarePreset != 0) {
+    const auto presetCard = MiniActionPresentation::mainPresetCard(snapshot);
+    if (presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending) {
         identityDirty = setFormatted(identityLabel_, "SELECTING PRESET %u", snapshot.pendingHardwarePreset);
+    } else if (presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading) {
+        identityDirty = setFormatted(identityLabel_, "PRESET %u / LOADING", presetCard.target);
     } else if (snapshot.confirmedHardwarePreset != 0) {
         identityDirty = setFormatted(identityLabel_, snapshot.sparkStateStale ? "PRESET %u / SYNCING"
                                                                        : "HARDWARE PRESET %u",
@@ -1345,22 +1348,22 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
         identityDirty = setText(identityLabel_, "SPARK PEDAL CONTROLLER");
     }
 
-    if (!snapshot.presetName.empty()) {
-        setText(presetNameLabel_, snapshot.presetName.c_str());
-    } else if (snapshot.confirmedHardwarePreset != 0) {
-        setFormatted(presetNameLabel_, "PRESET %u", snapshot.confirmedHardwarePreset);
-    } else {
-        setText(presetNameLabel_, linkEstablished ? "SYNCING PRESET" : "YOUR TONE");
-    }
+    bool presetCardDirty = identityDirty;
+    presetCardDirty |= setText(presetNameLabel_, presetCard.name.c_str());
     setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR, snapshot.sparkStateStale ? lv_color_hex(0xA8B3BC)
                                                                          : lv_color_hex(0xF4F6F8));
     const bool hasUsefulDescription = !snapshot.presetDescription.empty() && snapshot.presetDescription != "Text";
-    setText(presetDescriptionLabel_, snapshot.presetActionFailed ? "Change not confirmed. Tap to retry."
-                                            : !linkEstablished ? "Turn on your Spark device"
-                                            : snapshot.sparkStateStale ? "Waiting for current Spark state"
-                                            : hasUsefulDescription
-                                                ? snapshot.presetDescription.c_str()
-                                                 : "Tap to choose a preset");
+    const char *description = snapshot.presetActionFailed &&
+                              presetCard.phase != MiniActionPresentation::MainPresetPhase::Pending
+                                  ? "Change not confirmed. Tap to retry."
+                              : presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending
+                                  ? "Selecting preset..."
+                              : presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading
+                                  ? "LOADING DETAILS"
+                              : !linkEstablished ? "Turn on your Spark device"
+                              : snapshot.sparkStateStale ? "Waiting for current Spark state"
+                              : hasUsefulDescription ? snapshot.presetDescription.c_str() : "Tap to choose a preset";
+    presetCardDirty |= setText(presetDescriptionLabel_, description);
 
     for (uint8_t preset = 1; preset <= 4; ++preset) {
         lv_obj_t *button = presetButtons_[preset - 1];
@@ -1375,16 +1378,11 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
         const lv_color_t color = selected ? lv_palette_main(LV_PALETTE_GREEN)
                                : ready ? lv_palette_main(LV_PALETTE_BLUE)
                                          : lv_color_hex(0x28353D);
-        bool buttonDirty = setColor(button, LV_STYLE_BG_COLOR, color);
-        buttonDirty |= setColor(button, LV_STYLE_BORDER_COLOR,
-                                lv_color_hex(selected && snapshot.pendingHardwarePreset == preset ? 0xFFD06A
-                                           : snapshot.presetActionFailed && snapshot.failedHardwarePreset == preset
-                                               ? 0xFF6C76 : 0x3B5868));
-#ifdef PANELAN_PRESET_TRACE
-        if (!snapshot.miniActionFx && snapshot.miniActionTarget == preset &&
-            !lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN))
-            traceMain(snapshot, button, buttonDirty);
-#endif
+        setColor(button, LV_STYLE_BG_COLOR, color);
+        setColor(button, LV_STYLE_BORDER_COLOR,
+                 lv_color_hex(selected && snapshot.pendingHardwarePreset == preset ? 0xFFD06A
+                              : snapshot.presetActionFailed && snapshot.failedHardwarePreset == preset
+                                  ? 0xFF6C76 : 0x3B5868));
         // Input acceptance is owned by ControllerActions. Do not use LVGL's
         // disabled state here: its dimming makes the still-valid alternatives
         // look broken while a request is pending.
@@ -1393,7 +1391,7 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
 #ifdef PANELAN_PRESET_TRACE
     if (!snapshot.miniActionFx && activeScreen_ == Screen::Preset &&
         lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN))
-        traceMain(snapshot, identityLabel_, identityDirty);
+        traceMain(snapshot, lv_obj_get_parent(presetNameLabel_), presetCardDirty);
 #endif
 
     static const lv_color_t kFxColors[] = {
@@ -1403,7 +1401,8 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     static const char *kFxNames[] = {"Gate", "Comp", "Drive", "Mod", "Delay", "Reverb"};
     for (uint8_t fx = 0; fx < 6; ++fx) {
         const ControllerFxSlot &slot = snapshot.fxSlots[fx];
-        const bool current = slot.known && !snapshot.sparkStateStale;
+        const bool current = slot.known && !snapshot.sparkStateStale &&
+                             presetCard.phase != MiniActionPresentation::MainPresetPhase::Pending;
         const bool enabled = current && MiniActionPresentation::fxEnabled(slot);
         lv_obj_t *tile = fxTiles_[fx];
         lv_obj_t *label = lv_obj_get_child(tile, 0);
@@ -1446,8 +1445,9 @@ bool PanelLanLVGLUI::mainTraceMatches(const ControllerSnapshot &s) const {
     const MainTrace &trace = mainTrace_;
     if (!trace.dirty || !trace.card || !s.miniActionId || trace.id != s.miniActionId ||
         trace.inputAt != s.miniInputAtMs || trace.fx != s.miniActionFx ||
-        trace.target != s.miniActionTarget || trace.final != s.miniActionConfirmed) return false;
+        trace.target != s.miniActionTarget) return false;
     if (trace.fx) {
+        if (trace.final != s.miniActionConfirmed) return false;
         if (trace.target >= 6 ||
             (trace.card != fxTiles_[trace.target] && trace.card != detailTiles_[trace.target])) return false;
         if (trace.card == fxTiles_[trace.target]) {
@@ -1457,24 +1457,33 @@ bool PanelLanLVGLUI::mainTraceMatches(const ControllerSnapshot &s) const {
             ? MiniActionPresentation::fxConfirmedDirection(s, trace.target, s.miniActionDesiredEnabled)
             : !s.sparkStateStale && s.fxSlots[trace.target].known && s.fxSlots[trace.target].pending;
     }
-    if (trace.target < 1 || trace.target > 4 || activeScreen_ != Screen::Preset) return false;
-    const bool pickerOpen = !lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN);
-    if (trace.card != (pickerOpen ? presetButtons_[trace.target - 1] : identityLabel_)) return false;
-    return trace.final
-        ? !s.pendingHardwarePreset && MiniActionPresentation::presetConfirmed(s, trace.target)
-        : s.pendingHardwarePreset == trace.target;
+    if (trace.target < 1 || trace.target > 8 || activeScreen_ != Screen::Preset) return false;
+    if (!lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN) ||
+        trace.card != lv_obj_get_parent(presetNameLabel_)) return false;
+    const auto presetView = MiniActionPresentation::mainPresetCard(s);
+    const auto phase = presetView.phase;
+    if (trace.presetPhase != static_cast<uint8_t>(phase)) return false;
+    return trace.final ? phase == MiniActionPresentation::MainPresetPhase::Ready &&
+                             !s.pendingHardwarePreset && s.confirmedHardwarePreset == trace.target
+                       : (phase == MiniActionPresentation::MainPresetPhase::Pending ||
+                          phase == MiniActionPresentation::MainPresetPhase::Loading) &&
+                             presetView.target == trace.target;
 }
 
 void PanelLanLVGLUI::traceMain(const ControllerSnapshot &s, lv_obj_t *card, bool dirty) {
     if (!dirty || !s.miniActionId) return;
-    const bool first = !s.miniActionConfirmed &&
+    const auto presetView = MiniActionPresentation::mainPresetCard(s);
+    const bool first =
         (s.miniActionFx ? s.miniActionTarget < 6 && !s.sparkStateStale &&
-             s.fxSlots[s.miniActionTarget].known && s.fxSlots[s.miniActionTarget].pending
-           : s.pendingHardwarePreset == s.miniActionTarget);
+              !s.miniActionConfirmed && s.fxSlots[s.miniActionTarget].known && s.fxSlots[s.miniActionTarget].pending
+            : presetView.target == s.miniActionTarget &&
+              (presetView.phase == MiniActionPresentation::MainPresetPhase::Pending ||
+               presetView.phase == MiniActionPresentation::MainPresetPhase::Loading));
     const bool final = s.miniActionConfirmed &&
         (s.miniActionFx ? s.miniActionTarget < 6 &&
-             MiniActionPresentation::fxConfirmedDirection(s, s.miniActionTarget, s.miniActionDesiredEnabled)
-           : !s.pendingHardwarePreset && MiniActionPresentation::presetConfirmed(s, s.miniActionTarget));
+              MiniActionPresentation::fxConfirmedDirection(s, s.miniActionTarget, s.miniActionDesiredEnabled)
+            : presetView.phase == MiniActionPresentation::MainPresetPhase::Ready &&
+              !s.pendingHardwarePreset && s.confirmedHardwarePreset == s.miniActionTarget);
     if ((!first || mainFirstId_ == s.miniActionId) && (!final || mainFinalId_ == s.miniActionId)) return;
     if (mainTrace_.dirty && mainTraceMatches(s)) return;
     mainTrace_ = {};
@@ -1482,6 +1491,7 @@ void PanelLanLVGLUI::traceMain(const ControllerSnapshot &s, lv_obj_t *card, bool
     mainTrace_.id = s.miniActionId;
     mainTrace_.inputAt = s.miniInputAtMs;
     mainTrace_.target = s.miniActionTarget;
+    mainTrace_.presetPhase = static_cast<uint8_t>(presetView.phase);
     mainTrace_.fx = s.miniActionFx;
     mainTrace_.final = final;
     mainTrace_.dirty = true;

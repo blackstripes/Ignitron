@@ -25,9 +25,16 @@ marker disappears on confirmation, leaving the requested ON/OFF body unchanged;
 a failure uses the fresh observed direction with a red marker. Stale/unknown
 cards say `?` or `SYNC` instead of asserting a direction, retaining a red
 failure marker during resync when the action failed. The picker moves to
-the pending preset, and the closed picker shows its number as `SELECTING`;
-neither invents a pending preset name or FX chain. Unchanged labels/styles do
-not request another dirty-area redraw of the FX icons.
+the pending preset. The large main preset card shows the latest pending target's
+validated hardware-slot cache name (or `PRESET N` without one), with `SELECTING`;
+it does not borrow the previous Spark name, description or FX chain. After
+correlated number verification, the card retains that slot name/fallback and
+shows `LOADING DETAILS` while the full preset remains stale. Only a fresh Ready
+snapshot restores Spark's active name and description and removes the transient
+marker. Failure returns to the last trustworthy Spark/stale presentation with
+the existing brief error text. Validated slot names are cleared on disconnect
+or amp identity change; no name is inferred from an old active preset. Unchanged
+labels/styles do not request another dirty-area redraw of the FX icons.
 
 The main-screen flash investigation found no reset/backlight/full-screen clear
 in the panel flush path. It did find that the bundled LVGL 9.3
@@ -72,9 +79,48 @@ intersected it; off-screen changes, no-op setters and unrelated redraws do not
 count. An armed card survives unrelated snapshot revisions until refresh, but
 a superseding action or a changed pending/confirmed stage cancels that arm;
 the current action and stage are checked again at refresh completion. A picker
-covering home FX cards cannot produce their milestones. FX final requires fresh
+covering home cards cannot produce their milestones. FX final requires fresh
 known confirmed ON/OFF matching the action's
-requested direction. Preset milestones track the pending selection/identity
-when the picker is closed or the selected picker button when open; final needs
-a verified number, not an unverified name or chain. These are software refresh
+requested direction. For presets, `main_first` marks the first visible pending
+or number-verified loading main-card update;
+`main_final` requires the fresh Ready/full-details main-card update, not just
+number confirmation. `number_confirm` can precede `main_first` if no pending
+card refresh completed; `full_refresh` precedes the Ready `main_final` refresh.
+An open picker covers the main card, so it does not produce preset main
+milestones (including for slots 5–8). These are software refresh
 completion observations, not proof of physical LCD pixels or Spark authority.
+
+## Preset-mode hardware spot check (2026-10-17)
+
+The default-off early FX verification flag remained disabled. With Spark 2
+initially Ready at hardware preset 4, a few serial-CLI preset selections across
+slots 1, 2, and 5 were made and then returned to slot 4. All observed changing
+requests received matching number confirmation and full-preset Ready; a final
+read-only status reported slot 4 Ready, with no pending or failed request. The
+test input timestamp is CLI action acceptance, not a physical footswitch edge.
+
+Using linear percentiles (same interpolation as the FX diagnostic harness),
+the five correlated action traces used for the table yielded:
+
+| Interval from accepted CLI request | n | p50 | p95 | max |
+| --- | ---: | ---: | ---: | ---: |
+| Main preset-card first flush | 5 | 67 ms | 67 ms | 67 ms |
+| Mini preset-card first draw | 3 | 102 ms | 102 ms | 102 ms |
+| Spark hardware-number confirmation | 5 | 512 ms | 520.8 ms | 522 ms |
+| Correlated full-preset Ready | 5 | 1,252 ms | 1,269 ms | 1,270 ms |
+| Main fully confirmed card update | 2 | 1,236.5 ms | 1,303.6 ms | 1,311 ms |
+| Mini fully confirmed card draw | 5 | 655 ms | 663.8 ms | 665 ms |
+
+The sample is small. Raw diagnostic captures for the target-1 and target-2
+pending draws contained both first-draw events. The paired stress transcript
+contained `main_first` for both actions but no `mini_first`; two other stress
+actions (preset 5 and its preset-4 restoration) produced neither first-draw
+event. Those missing events are excluded rather than assigned a latency. The
+observed main first flushes were prompt; the roughly 1.25 s full-preset Ready
+interval is Spark synchronization, not a delay before the main pending card
+appears. No physical footswitch input or pixel-level flicker was measured.
+
+Raw diagnostic captures: `/tmp/opencode/panelan_preset_diagnostic_20261017_185620.log`,
+`/tmp/opencode/panelan_preset_diagnostic_20261017_190245.log`,
+`/tmp/opencode/panelan_preset_diagnostic_20261017_190257.log`. Paired stress
+transcript: `/tmp/opencode/panelan_preset_latency_pair_20261017.log`.

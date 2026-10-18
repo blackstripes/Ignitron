@@ -118,6 +118,64 @@ int main() {
     s.pendingHardwarePreset = 0;
     assert(!MiniActionPresentation::presetFailed(s, 3));
 
+    // Main card uses only a validated slot cache for optimistic/loading names;
+    // Spark's old active name/description must not leak into either phase.
+    using MiniActionPresentation::MainPresetPhase;
+    using MiniActionPresentation::mainPresetCard;
+    ControllerSnapshot card;
+    card.connectionPhase = ControllerConnectionPhase::Ready;
+    card.sparkStateStale = false;
+    card.confirmedHardwarePreset = 2;
+    card.presetName = "Old Spark tone";
+    card.presetDescription = "Old description";
+    for (uint8_t target = 1; target <= 8; ++target) {
+        card.hardwarePresetNames[target - 1] = "Cached " + std::to_string(target);
+        card.pendingHardwarePreset = target;
+        auto view = mainPresetCard(card);
+        assert(view.phase == MainPresetPhase::Pending && view.target == target);
+        assert(view.name == card.hardwarePresetNames[target - 1] && view.name != card.presetName);
+        card.connectionPhase = ControllerConnectionPhase::Syncing;
+        card.sparkStateStale = true;
+        card.confirmedHardwarePreset = target;
+        card.pendingHardwarePreset = 0;
+        card.locallyVerifiedHardwarePreset = target;
+        view = mainPresetCard(card);
+        assert(view.phase == MainPresetPhase::Loading && view.name == "Cached " + std::to_string(target));
+        card.connectionPhase = ControllerConnectionPhase::Ready;
+        card.sparkStateStale = false;
+        card.locallyVerifiedHardwarePreset = 0;
+        card.presetName = "Spark " + std::to_string(target);
+        view = mainPresetCard(card);
+        assert(view.phase == MainPresetPhase::Ready && view.name == card.presetName);
+    }
+    card.pendingHardwarePreset = 7; // latest deferred selection wins
+    card.confirmedHardwarePreset = 8;
+    assert(mainPresetCard(card).name == "Cached 7");
+    card.pendingHardwarePreset = 3;
+    assert(mainPresetCard(card).name == "Cached 3");
+    card.hardwarePresetNames[2].clear();
+    assert(mainPresetCard(card).name == "PRESET 3");
+    card.hardwarePresetNames.fill(""); // disconnect/identity change revokes validated cache
+    assert(mainPresetCard(card).name == "PRESET 3");
+    card.pendingHardwarePreset = 0;
+    card.presetActionFailed = true;
+    card.confirmedHardwarePreset = 2;
+    card.presetName = "Last authoritative tone";
+    assert(mainPresetCard(card).phase == MainPresetPhase::Ready);
+    assert(mainPresetCard(card).name == card.presetName);
+    card.connectionPhase = ControllerConnectionPhase::Reconnecting;
+    card.sparkStateStale = true;
+    card.locallyVerifiedHardwarePreset = 0;
+    assert(mainPresetCard(card).phase == MainPresetPhase::Stale);
+    card.pendingHardwarePreset = 3; // even an inconsistent stale snapshot cannot claim a selection
+    assert(mainPresetCard(card).phase == MainPresetPhase::Stale);
+    card.pendingHardwarePreset = 0;
+    card.connectionPhase = ControllerConnectionPhase::Syncing;
+    assert(mainPresetCard(card).phase == MainPresetPhase::Stale); // no link-scoped number proof
+    card.locallyVerifiedHardwarePreset = 2;
+    assert(mainPresetCard(card).phase == MainPresetPhase::Loading);
+    assert(mainPresetCard(card).name == "PRESET 2");
+
     assert(!MiniActionPresentation::needsRedraw(true, true, "same", "same"));
     assert(MiniActionPresentation::needsRedraw(true, true, "old", "new"));
     assert(MiniActionPresentation::needsRedraw(false, true, "same", "same"));

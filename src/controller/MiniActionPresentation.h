@@ -17,6 +17,43 @@ inline bool presetConfirmed(const ControllerSnapshot &s, uint8_t target) {
             (s.connectionPhase == ControllerConnectionPhase::Syncing &&
              s.locallyVerifiedHardwarePreset == target));
 }
+// Main-card phases only: cached slot names are display metadata, never proof
+// of an active preset or of a refreshed signal chain.
+enum class MainPresetPhase : uint8_t { Stale, Pending, Loading, Ready };
+struct MainPresetCard {
+    MainPresetPhase phase;
+    uint8_t target;
+    std::string name;
+};
+inline MainPresetCard mainPresetCard(const ControllerSnapshot &s) {
+    const bool connected = s.connectionPhase == ControllerConnectionPhase::Identifying ||
+                           s.connectionPhase == ControllerConnectionPhase::Syncing ||
+                           s.connectionPhase == ControllerConnectionPhase::Ready;
+    MainPresetPhase phase = MainPresetPhase::Stale;
+    uint8_t target = s.confirmedHardwarePreset;
+    if (connected && s.pendingHardwarePreset >= 1 && s.pendingHardwarePreset <= s.hardwarePresetNames.size()) {
+        phase = MainPresetPhase::Pending;
+        target = s.pendingHardwarePreset;
+    } else if (connected && s.connectionPhase == ControllerConnectionPhase::Syncing &&
+               target >= 1 && target <= s.hardwarePresetNames.size() &&
+               s.locallyVerifiedHardwarePreset == target) {
+        phase = MainPresetPhase::Loading;
+    } else if (s.connectionPhase == ControllerConnectionPhase::Ready && !s.sparkStateStale) {
+        phase = MainPresetPhase::Ready;
+    }
+    std::string name;
+    if (phase == MainPresetPhase::Pending || phase == MainPresetPhase::Loading) {
+        name = s.hardwarePresetNames[target - 1];
+        if (name.empty()) name = "PRESET " + std::to_string(target);
+    } else if (!s.presetName.empty()) {
+        name = s.presetName;
+    } else if (target != 0) {
+        name = "PRESET " + std::to_string(target);
+    } else {
+        name = connected ? "SYNCING PRESET" : "YOUR TONE";
+    }
+    return {phase, target, name};
+}
 inline bool fxConfirmed(const ControllerSnapshot &s, uint8_t slot) {
     const auto &fx = s.fxSlots[slot];
     return !s.sparkStateStale && fx.known && !fx.pending && !fx.actionFailed;

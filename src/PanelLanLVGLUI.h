@@ -115,6 +115,7 @@ private:
         lv_obj_t *card = nullptr;
         uint32_t id = 0, inputAt = 0, completedAt = 0;
         uint8_t target = 0;
+        uint8_t presetPhase = 0; // derived main-card phase when armed
         bool fx = false, final = false, dirty = false, refreshed = false, ready = false;
     } mainTrace_;
     uint32_t mainFirstId_ = 0, mainFinalId_ = 0;

@@ -56,7 +56,7 @@ class MainActionTest(unittest.TestCase):
                         screens.index('panelLanDisplay.drainMainTrace();'))
         self.assertIn('#ifdef PANELAN_PRESET_TRACE\n    panelLanDisplay.drainMainTrace();\n#endif', screens)
         self.assertIn('MiniActionPresentation::fxConfirmedDirection(s, s.miniActionTarget, s.miniActionDesiredEnabled)', UI)
-        self.assertIn('MiniActionPresentation::presetConfirmed(s, s.miniActionTarget)', UI)
+        self.assertIn('presetView.phase == MiniActionPresentation::MainPresetPhase::Ready', UI)
 
     def test_trace_retained_until_ready_or_superseded_and_occlusion_checked(self):
         status = UI.split('void PanelLanLVGLUI::renderStatus(', 1)[1].split(
@@ -66,10 +66,18 @@ class MainActionTest(unittest.TestCase):
         match = UI.split('bool PanelLanLVGLUI::mainTraceMatches(', 1)[1].split(
             'void PanelLanLVGLUI::traceMain(', 1)[0]
         for condition in ('trace.id != s.miniActionId', 'trace.final != s.miniActionConfirmed',
-                          'trace.target != s.miniActionTarget', 'trace.inputAt != s.miniInputAtMs',
+                           'trace.target != s.miniActionTarget', 'trace.inputAt != s.miniInputAtMs',
                           'lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN)',
                           'activeScreen_ != Screen::Fx', 'lv_obj_has_flag(detailPage_, LV_OBJ_FLAG_HIDDEN)'):
             self.assertIn(condition, match)
+        self.assertIn('trace.presetPhase != static_cast<uint8_t>(phase)', match)
+        self.assertIn('phase == MiniActionPresentation::MainPresetPhase::Ready', match)
+        self.assertIn('trace.card != lv_obj_get_parent(presetNameLabel_)', match)
+        self.assertIn('lv_obj_get_parent(presetNameLabel_), presetCardDirty', status)
+        self.assertNotIn('traceMain(snapshot, button,', status)
+        self.assertIn('presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading', status)
+        self.assertIn('presetCard.name.c_str()', status)
+        self.assertIn('"LOADING DETAILS"', status)
         self.assertIn('if (mainTrace_.dirty && mainTraceMatches(s)) return;', UI)
         self.assertIn('mainFirstId_ = trace.id;', UI)
         self.assertIn('mainFinalId_ = trace.id;', UI)
