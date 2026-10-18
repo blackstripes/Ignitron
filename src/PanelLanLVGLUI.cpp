@@ -556,7 +556,6 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_text_line_space(presetNameLabel_, 0, 0);
     lv_obj_set_style_text_align(presetNameLabel_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0, 42);
-    presetNameTwoLine_ = true; // Matches the initial alignment, including recreation.
 
     presetDescriptionLabel_ = lv_label_create(hero);
     // One complete Montserrat 12 line (15 px); auto height could wrap into
@@ -1341,11 +1340,15 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot,
         return size.x;
     });
     presetCardDirty |= setText(presetNameLabel_, fittedName.text.c_str());
-    if (presetNameTwoLine_ != fittedName.twoLine) {
-        presetNameTwoLine_ = fittedName.twoLine;
-        lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0,
-                     PresetNamePresentation::nameTopOffset(presetNameTwoLine_,
-                         lv_font_get_line_height(lv_obj_get_style_text_font(presetNameLabel_, LV_PART_MAIN))));
+    // Check LVGL's position, not a cached line-mode bit. TOP_MID keeps X
+    // centered; set_y changes only its vertical offset. One-line Y is relative
+    // to the hero's outer origin (screen 34 + 56), not its bordered content.
+    // Preserve the original content-relative two-line anchor pixel-for-pixel.
+    const int32_t nameY = PresetNamePresentation::nameTopOffset(fittedName.twoLine,
+        lv_font_get_line_height(lv_obj_get_style_text_font(presetNameLabel_, LV_PART_MAIN))) -
+        (fittedName.twoLine ? 0 : lv_obj_get_style_space_top(hero, LV_PART_MAIN));
+    if (lv_obj_get_style_y(presetNameLabel_, LV_PART_MAIN) != nameY) {
+        lv_obj_set_y(presetNameLabel_, nameY);
         presetCardDirty = true;
     }
     presetCardDirty |= setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR,

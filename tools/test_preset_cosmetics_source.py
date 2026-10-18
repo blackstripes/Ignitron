@@ -48,15 +48,15 @@ class PresetCosmeticsTest(unittest.TestCase):
         self.assertIn("lv_obj_get_style_text_letter_space(presetNameLabel_, LV_PART_MAIN)", fitting)
         self.assertIn("LV_COORD_MAX, LV_TEXT_FLAG_NONE", fitting)
         self.assertIn("setText(presetNameLabel_, fittedName.text.c_str())", fitting)
-        self.assertIn("bool presetNameTwoLine_ = true;", HEADER)
-        self.assertIn("presetNameTwoLine_ = true; // Matches the initial alignment", UI)
-        alignment = fitting.split("if (presetNameTwoLine_ != fittedName.twoLine) {", 1)[1].split("}", 1)[0]
-        self.assertIn("presetNameTwoLine_ = fittedName.twoLine;", alignment)
-        self.assertIn("lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0,", alignment)
-        self.assertIn("PresetNamePresentation::nameTopOffset(presetNameTwoLine_,", alignment)
+        self.assertNotIn("presetNameTwoLine_", UI + HEADER)
+        alignment = fitting.split("const int32_t nameY =", 1)[1]
+        self.assertIn("PresetNamePresentation::nameTopOffset(fittedName.twoLine,", alignment)
         self.assertIn("lv_font_get_line_height(lv_obj_get_style_text_font(presetNameLabel_, LV_PART_MAIN))", alignment)
+        self.assertIn("fittedName.twoLine ? 0 : lv_obj_get_style_space_top(hero, LV_PART_MAIN)", alignment)
+        self.assertIn("if (lv_obj_get_style_y(presetNameLabel_, LV_PART_MAIN) != nameY)", alignment)
+        self.assertIn("lv_obj_set_y(presetNameLabel_, nameY)", alignment)
         self.assertIn("presetCardDirty = true;", alignment)
-        self.assertEqual(UI.count("lv_obj_align(presetNameLabel_,"), 2) # Creation + mode change only.
+        self.assertEqual(UI.count("lv_obj_align(presetNameLabel_,"), 1) # Creation only.
 
     def test_description_is_bounded_above_fx_row(self):
         description = UI.split("presetDescriptionLabel_ = lv_label_create(hero);", 1)[1].split("const int16_t fxX[]", 1)[0]

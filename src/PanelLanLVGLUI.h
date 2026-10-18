@@ -49,7 +49,6 @@ private:
     lv_obj_t *headerTitle_ = nullptr;
     lv_obj_t *connectionLabel_ = nullptr;
     lv_obj_t *presetNameLabel_ = nullptr;
-    bool presetNameTwoLine_ = true;
     lv_obj_t *presetDescriptionLabel_ = nullptr;
     lv_obj_t *actionStatusLabel_ = nullptr;
     lv_obj_t *fxTiles_[6]{};
