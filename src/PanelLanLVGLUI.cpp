@@ -1,4 +1,5 @@
 #include "PanelLanLVGLUI.h"
+#include "PresetNamePresentation.h"
 #include "FlightRecorder.h"
 #include "FlightDisplayHealth.h"
 #include "controller/ControllerActions.h"
@@ -147,13 +148,6 @@ void drawPresetCabinet(lv_event_t *event) {
         line(x, 42, x, 144, 0x292B27);
     for (int y = 43; y < 145; y += 4)
         line(13, y, 293, y, 0x202422);
-    lv_draw_rect_dsc_t shade;
-    lv_draw_rect_dsc_init(&shade);
-    shade.bg_color = lv_color_hex(0x03090D);
-    shade.bg_opa = LV_OPA_60;
-    shade.radius = 6;
-    lv_area_t overlay = {bounds.x1 + 4, bounds.y1 + 4, bounds.x1 + 302, bounds.y1 + 152};
-    lv_draw_rect(layer, &shade, &overlay);
 }
 
 // Small vector glyphs keep the concept's visual vocabulary crisp at 320x240,
@@ -549,16 +543,13 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_add_event_cb(hero, drawPresetCabinet, LV_EVENT_DRAW_MAIN, nullptr);
     lv_obj_add_event_cb(hero, onPresetCardClicked, LV_EVENT_CLICKED, nullptr);
 
-    identityLabel_ = lv_label_create(hero);
-    lv_obj_set_width(identityLabel_, 270);
-    lv_obj_set_style_text_font(identityLabel_, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_align(identityLabel_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(identityLabel_, lv_color_hex(0xD7DFE3), 0);
-    lv_obj_align(identityLabel_, LV_ALIGN_TOP_MID, 0, 21);
-
     presetNameLabel_ = lv_label_create(hero);
-    lv_obj_set_width(presetNameLabel_, 282);
-    lv_label_set_long_mode(presetNameLabel_, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(presetNameLabel_, 282, lv_font_get_line_height(&lv_font_montserrat_24));
+    // Pre-fit with LVGL pixel measurements. Unlike LONG_DOT this does not
+    // mutate the label's text, so changed-only updates remain stable.
+    // Deliberately static: no scrolling timer survives navigation or changes.
+    lv_label_set_long_mode(presetNameLabel_, LV_LABEL_LONG_CLIP);
+    lv_obj_remove_flag(presetNameLabel_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_text_color(presetNameLabel_, lv_color_white(), 0);
     lv_obj_set_style_text_font(presetNameLabel_, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_align(presetNameLabel_, LV_TEXT_ALIGN_CENTER, 0);
@@ -571,11 +562,6 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_text_align(presetDescriptionLabel_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(presetDescriptionLabel_, lv_color_hex(0xABB8C2), 0);
     lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_MID, 0, 77);
-
-    presetMetaLabel_ = lv_label_create(hero);
-    lv_label_set_text(presetMetaLabel_, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_color(presetMetaLabel_, lv_color_hex(0x92A2AD), 0);
-    lv_obj_align(presetMetaLabel_, LV_ALIGN_TOP_RIGHT, -10, 20);
 
     const int16_t fxX[] = {-127, -76, -25, 26, 77, 128};
     for (uint8_t fx = 0; fx < 6; ++fx) {
@@ -1336,38 +1322,26 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot,
     setColor(connectionLabel_, LV_STYLE_TEXT_COLOR, accent);
     setColor(lv_obj_get_parent(connectionLabel_), LV_STYLE_BORDER_COLOR, accent);
     setText(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
-    bool identityDirty = false;
-    if (presetCard.target != 0 && presetCard.phase != MiniActionPresentation::MainPresetPhase::Stale) {
-        identityDirty = setFormatted(identityLabel_, "HARDWARE PRESET %u", presetCard.target);
-    } else if (snapshot.confirmedHardwarePreset != 0) {
-        identityDirty = setFormatted(identityLabel_, "HARDWARE PRESET %u", snapshot.confirmedHardwarePreset);
-    } else if (linkEstablished) {
-        identityDirty = setText(identityLabel_, "READING YOUR PRESET");
-    } else {
-        identityDirty = setText(identityLabel_, "SPARK PEDAL CONTROLLER");
-    }
-
-    bool presetCardDirty = identityDirty;
+    bool presetCardDirty = false;
     lv_obj_t *hero = lv_obj_get_parent(presetNameLabel_);
     const bool showingPreview = preview.valid && preview.target == presetCard.target &&
         (presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending ||
          presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading);
     const char *name = showingPreview ? preview.name.c_str() : presetCard.name.c_str();
-    presetCardDirty |= setText(presetNameLabel_, name);
+    const auto fittedName = PresetNamePresentation::singleLine(name, 282, [&](const char *text) {
+        lv_point_t size;
+        lv_text_get_size(&size, text, lv_obj_get_style_text_font(presetNameLabel_, LV_PART_MAIN),
+                         lv_obj_get_style_text_letter_space(presetNameLabel_, LV_PART_MAIN),
+                         0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        return size.x;
+    });
+    presetCardDirty |= setText(presetNameLabel_, fittedName.c_str());
     presetCardDirty |= setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR,
                                 snapshot.sparkStateStale && !showingPreview ? lv_color_hex(0xA8B3BC)
                                                                              : lv_color_hex(0xF4F6F8));
     const std::string &displayDescription = showingPreview ? preview.description : snapshot.presetDescription;
     const bool hasUsefulDescription = !displayDescription.empty() && displayDescription != "Text";
-    const char *description = snapshot.presetActionFailed &&
-                              presetCard.phase != MiniActionPresentation::MainPresetPhase::Pending
-                                  ? "Change not confirmed. Tap to retry."
-                              : presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending ||
-                                presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading
-                                  ? hasUsefulDescription && showingPreview ? displayDescription.c_str() : "Tap to choose a preset"
-                              : !linkEstablished ? "Turn on your Spark device"
-                              : snapshot.sparkStateStale ? "Waiting for current Spark state"
-                              : hasUsefulDescription ? displayDescription.c_str() : "Tap to choose a preset";
+    const char *description = hasUsefulDescription ? displayDescription.c_str() : "";
     presetCardDirty |= setText(presetDescriptionLabel_, description);
 
     for (uint8_t preset = 1; preset <= 4; ++preset) {

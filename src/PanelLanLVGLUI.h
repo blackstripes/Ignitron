@@ -48,9 +48,7 @@ private:
     lv_display_t *display_ = nullptr;
     lv_obj_t *headerTitle_ = nullptr;
     lv_obj_t *connectionLabel_ = nullptr;
-    lv_obj_t *identityLabel_ = nullptr;
     lv_obj_t *presetNameLabel_ = nullptr;
-    lv_obj_t *presetMetaLabel_ = nullptr;
     lv_obj_t *presetDescriptionLabel_ = nullptr;
     lv_obj_t *actionStatusLabel_ = nullptr;
     lv_obj_t *fxTiles_[6]{};
