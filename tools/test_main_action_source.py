@@ -7,21 +7,15 @@ SRC = Path(__file__).resolve().parents[1] / 'src'
 
 
 class MainActionTest(unittest.TestCase):
-    def test_preset_cabinet_paints_selected_body_and_unshaded_border(self):
+    def test_preset_cabinet_remains_original_dark_artwork(self):
         cabinet = UI.split('void drawPresetCabinet(', 1)[1].split('void drawGlyph(', 1)[0]
         status = UI.split('void PanelLanLVGLUI::renderStatus(', 1)[1].split(
             'bool PanelLanLVGLUI::mainTraceMatches(', 1)[0]
-        self.assertIn('MiniActionPresentation::presetSelected(snapshot, presetCard.target)', status)
-        self.assertIn('selectedPreset ? 0x00E65D : 0x34434C', status)
-        self.assertIn('lv_obj_get_style_border_color(hero, LV_PART_MAIN)', cabinet)
-        self.assertIn('selected ? 0x17392F : 0x111619', cabinet)
-        self.assertIn('selected ? 0x1D4433 : 0x191D1D', cabinet)
-        self.assertIn('selected ? 0x09251A : 0x03090D', cabinet)
-        self.assertLess(cabinet.index('lv_draw_rect(layer, &shade, &overlay);'),
-                        cabinet.index('lv_draw_rect(layer, &outline, &edge);'))
-        self.assertIn('outline.bg_opa = LV_OPA_TRANSP;', cabinet)
-        self.assertIn('const bool pendingPreset = presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending;', status)
-        self.assertIn('pendingPreset ? 0xFFD06A', status)
+        self.assertIn('rect(3, 3, 300, 151, 0x111619, 0x354047, 7);', cabinet)
+        self.assertNotIn('selected', cabinet)
+        self.assertNotIn('SELECTING', status)
+        self.assertNotIn('LOADING DETAILS', status)
+        self.assertIn('showingPreview ? preview.enabled[fx]', status)
 
     def test_fx_visuals_and_guards(self):
         detail = UI.split('void PanelLanLVGLUI::renderDetailPage(', 1)[1].split(
@@ -40,11 +34,29 @@ class MainActionTest(unittest.TestCase):
         self.assertIn('pending ? "*" : "!"', detail)
         self.assertIn('const bool failed = !pending && slot.actionFailed;', detail)
         self.assertIn('const bool marked = pending || failed;', detail)
-        self.assertIn('!current ? "?"', home)
-        self.assertIn('const bool failed = slot.actionFailed && !(current && slot.pending);', home)
+        self.assertIn('!known ? "?"', home)
+        self.assertIn('const bool failed = !showingPreview && slot.actionFailed && !(current && slot.pending);', home)
         self.assertIn('show(fxErrorLabels_[fx], failed);', home)
         self.assertIn('snapshot.pendingHardwarePreset == preset ? 0xFFD06A', home)
         self.assertIn('snapshot.failedHardwarePreset == preset', home)
+        actions = (SRC / 'controller/ControllerActions.cpp').read_text()
+        state = (SRC / 'controller/ControllerState.h').read_text()
+        self.assertNotIn('PresetPreviewPresentation', actions + state + detail)
+        self.assertIn('panelLanDisplay.update(snapshot, preview);', (SRC / 'Ignitron.ino').read_text())
+
+    def test_preview_borrows_validated_slot_and_connection_switch_status(self):
+        screens = (SRC / 'Ignitron.ino').read_text().split('void updatePanelLanScreens() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('const Preset *cached = presetControl.validatedHWPreset(card.target);', screens)
+        self.assertIn('select(snapshot, evidence, *cached)', screens)
+        self.assertNotIn('const Preset cached =', screens)
+        self.assertIn('evidence.generationBefore != evidence.generationAfter', screens)
+        builder = (SRC / 'SparkPresetBuilder.cpp').read_text()
+        self.assertIn('!preset.isEmpty && preset.checksum == currentChecksum', builder)
+        control = (SRC / 'SparkPresetControl.h').read_text()
+        self.assertIn('validatedHWPresetChecksum(slot, checksum)', control)
+        status = UI.split('void PanelLanLVGLUI::renderStatus(', 1)[1]
+        self.assertIn('mainConnection_.observe(snapshot);', status)
+        self.assertIn('mainShowsConnected(snapshot, presetCard.phase, mainConnection_)', status)
 
     def test_ready_and_target_area_before_logging(self):
         flush = UI.split('void PanelLanLVGLUI::flushDisplay(', 1)[1].split(
@@ -66,7 +78,7 @@ class MainActionTest(unittest.TestCase):
         self.assertIn('#ifdef PANELAN_PRESET_TRACE\n    // Called after the mini display', header)
         self.assertIn('void drainMainTrace();', header)
         screens = (SRC / 'Ignitron.ino').read_text().split('void updatePanelLanScreens() {', 1)[1].split('\n}', 1)[0]
-        self.assertLess(screens.index('panelLanDisplay.update(snapshot);'),
+        self.assertLess(screens.index('panelLanDisplay.update(snapshot, preview);'),
                         screens.index('panelLanMiniDisplay.update(snapshot,'))
         self.assertLess(screens.index('panelLanMiniDisplay.update(snapshot,'),
                         screens.index('panelLanDisplay.drainMainTrace();'))
@@ -94,7 +106,7 @@ class MainActionTest(unittest.TestCase):
         self.assertNotIn('traceMain(snapshot, button,', status)
         self.assertIn('presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading', status)
         self.assertIn('presetCard.name.c_str()', status)
-        self.assertIn('"LOADING DETAILS"', status)
+        self.assertIn('showingPreview ? preview.name.c_str()', status)
         self.assertIn('if (mainTrace_.dirty && mainTraceMatches(s)) return;', UI)
         self.assertIn('mainFirstId_ = trace.id;', UI)
         self.assertIn('mainFinalId_ = trace.id;', UI)

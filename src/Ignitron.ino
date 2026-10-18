@@ -120,11 +120,49 @@ void updatePanelLanScreens() {
     if (firstUpdate) StartupDiagnostics::mark(StartupDiagnostics::MainUiUpdate, false);
 #endif
     const ControllerSnapshot &snapshot = controllerState.snapshot();
+    // Pin checksum validation to this link's amp identity. setAmpParameters
+    // clears readiness; an identity change without that reset revokes preview.
+    static std::string cacheAmpName, cacheAmpSerial;
+    static bool cacheIdentityRevoked = false;
+    PresetPreviewPresentation::Evidence evidence;
+    evidence.checksumsReady = presetControl.hardwareChecksumsReady();
+    if (!evidence.checksumsReady || !snapshot.identityKnown || snapshot.ampSerial.empty() ||
+        snapshot.connectionPhase == ControllerConnectionPhase::Reconnecting ||
+        snapshot.connectionPhase == ControllerConnectionPhase::Scanning) {
+        cacheAmpName.clear();
+        cacheAmpSerial.clear();
+        cacheIdentityRevoked = false;
+    } else if (cacheAmpSerial.empty() && !cacheIdentityRevoked) {
+        cacheAmpName = snapshot.ampName;
+        cacheAmpSerial = snapshot.ampSerial;
+    } else if (cacheAmpName != snapshot.ampName || cacheAmpSerial != snapshot.ampSerial) {
+        cacheIdentityRevoked = true;
+    }
+    evidence.cacheAmpName = cacheAmpName;
+    evidence.cacheAmpSerial = cacheAmpSerial;
+    PresetPreviewPresentation::Preview preview;
+    const auto card = MiniActionPresentation::mainPresetCard(snapshot);
+    if (!cacheIdentityRevoked && evidence.checksumsReady && snapshot.identityKnown &&
+        (card.phase == MiniActionPresentation::MainPresetPhase::Pending ||
+         card.phase == MiniActionPresentation::MainPresetPhase::Loading)) {
+        evidence.generationBefore = presetControl.hardwareCacheGeneration();
+        byte checksum = 0;
+        const Preset *cached = presetControl.validatedHWPreset(card.target);
+        if (cached && presetControl.validatedHWPresetChecksum(card.target, checksum)) {
+            evidence.slotPresent = true;
+            evidence.checksum = checksum;
+            // select copies only the display fields, not the cached JSON/pedals.
+            evidence.generationAfter = evidence.generationBefore;
+            preview = PresetPreviewPresentation::select(snapshot, evidence, *cached);
+            evidence.generationAfter = presetControl.hardwareCacheGeneration();
+            if (evidence.generationBefore != evidence.generationAfter) preview = {};
+        }
+    }
 #ifdef PANELAN_MINI_COEXISTENCE_TRACE
     PanelLanMiniDisplay::traceHardware("before main update");
 #endif
     // LVGL flushes synchronously inside update(); then service the selected mini backend.
-    panelLanDisplay.update(snapshot);
+    panelLanDisplay.update(snapshot, preview);
 #ifdef PANELAN_MINI_SPI_MODE
     if (firstUpdate) {
         firstUpdate = false;
@@ -393,7 +431,7 @@ void loop() {
     if (!panelLanMiniDisplay.diagnosticRunController()) {
         serialCLI->update();
         if (panelLanMiniDisplay.diagnosticServiceMain()) {
-            panelLanDisplay.update(controllerState.snapshot());
+            panelLanDisplay.update(controllerState.snapshot(), {});
             PanelLanMiniDisplay::traceHardware("main-only service");
         }
         delay(10);

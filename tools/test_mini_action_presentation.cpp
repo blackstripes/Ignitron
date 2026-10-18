@@ -1,8 +1,13 @@
 #include "controller/MiniActionPresentation.h"
 #include "controller/PresetTargetQueue.h"
+#include "controller/PhysicalPresetLayout.h"
 #include <cassert>
 
 int main() {
+    const auto order = PhysicalPresetLayout::serviceOrder(0, 2, 4);
+    assert(order[0] == 4 && order[1] == 0); // global slots 2, 4
+    const auto bank = PhysicalPresetLayout::serviceOrder(1, 6, 4);
+    assert(bank[0] == 4 && bank[1] == 0); // prior slot on another bank is off-screen
     ControllerSnapshot s;
     s.connectionPhase = ControllerConnectionPhase::Ready;
     s.sparkStateStale = false;
@@ -123,8 +128,34 @@ int main() {
     using MiniActionPresentation::MainPresetPhase;
     using MiniActionPresentation::mainPresetCard;
     using MiniActionPresentation::presetSelected;
+    MiniActionPresentation::MainConnectionPresentation link;
     ControllerSnapshot card;
+    card.connectionPhase = ControllerConnectionPhase::Syncing;
+    link.observe(card);
+    assert(!MiniActionPresentation::mainShowsConnected(card, mainPresetCard(card).phase, link));
+    card.identityKnown = true;
+    card.ampName = "Spark 2";
+    card.ampSerial = "A";
+    card.pendingHardwarePreset = 2;
+    link.observe(card); // accepted during startup's first full-preset sync
+    assert(mainPresetCard(card).phase == MainPresetPhase::Pending);
+    assert(!MiniActionPresentation::mainShowsConnected(card, mainPresetCard(card).phase, link));
+    card.pendingHardwarePreset = 0;
+    card.confirmedHardwarePreset = 2;
+    card.locallyVerifiedHardwarePreset = 2;
+    link.observe(card);
+    assert(mainPresetCard(card).phase == MainPresetPhase::Loading);
+    assert(!MiniActionPresentation::mainShowsConnected(card, mainPresetCard(card).phase, link));
+    card.locallyVerifiedHardwarePreset = 0;
+    assert(!MiniActionPresentation::mainShowsConnected(card, mainPresetCard(card).phase, link));
+    card.connectionPhase = ControllerConnectionPhase::Reconnecting;
+    card.pendingHardwarePreset = 2;
+    link.observe(card);
+    assert(!MiniActionPresentation::mainShowsConnected(card, mainPresetCard(card).phase, link));
+    card.pendingHardwarePreset = 0;
     card.connectionPhase = ControllerConnectionPhase::Ready;
+    link.observe(card);
+    assert(link.readySeen);
     card.sparkStateStale = false;
     card.confirmedHardwarePreset = 2;
     card.presetName = "Old Spark tone";
@@ -138,19 +169,24 @@ int main() {
         assert(card.confirmedHardwarePreset == (target == 1 ? 2 : target - 1));
         assert(view.name == card.hardwarePresetNames[target - 1] && view.name != card.presetName);
         card.connectionPhase = ControllerConnectionPhase::Syncing;
+        link.observe(card);
+        assert(MiniActionPresentation::mainShowsConnected(card, view.phase, link)); // post-Ready Pending
         card.sparkStateStale = true;
         card.confirmedHardwarePreset = target;
         card.pendingHardwarePreset = 0;
         card.locallyVerifiedHardwarePreset = target;
         view = mainPresetCard(card);
         assert(view.phase == MainPresetPhase::Loading && view.name == "Cached " + std::to_string(target));
+        assert(MiniActionPresentation::mainShowsConnected(card, view.phase, link));
         assert(presetSelected(card, target) && !presetSelected(card, 0));
         card.connectionPhase = ControllerConnectionPhase::Ready;
+        link.observe(card);
         card.sparkStateStale = false;
         card.locallyVerifiedHardwarePreset = 0;
         card.presetName = "Spark " + std::to_string(target);
         view = mainPresetCard(card);
         assert(view.phase == MainPresetPhase::Ready && view.name == card.presetName);
+        assert(MiniActionPresentation::mainShowsConnected(card, view.phase, link));
         assert(presetSelected(card, target));
     }
     card.pendingHardwarePreset = 7; // latest deferred selection wins
@@ -177,6 +213,8 @@ int main() {
     assert(presetSelected(card, 7) && !presetSelected(card, 2));
     card.pendingHardwarePreset = 0;
     card.connectionPhase = ControllerConnectionPhase::Reconnecting;
+    link.observe(card);
+    assert(!link.readySeen);
     card.sparkStateStale = true;
     card.locallyVerifiedHardwarePreset = 0;
     assert(mainPresetCard(card).phase == MainPresetPhase::Stale);
@@ -186,11 +224,27 @@ int main() {
     assert(!presetSelected(card, 3));
     card.pendingHardwarePreset = 0;
     card.connectionPhase = ControllerConnectionPhase::Syncing;
+    link.observe(card);
+    card.pendingHardwarePreset = 3;
+    assert(!MiniActionPresentation::mainShowsConnected(card, mainPresetCard(card).phase, link));
+    card.pendingHardwarePreset = 0;
     assert(mainPresetCard(card).phase == MainPresetPhase::Stale); // no link-scoped number proof
     card.locallyVerifiedHardwarePreset = 2;
     assert(mainPresetCard(card).phase == MainPresetPhase::Loading);
     assert(mainPresetCard(card).name == "PRESET 2");
     assert(presetSelected(card, 2) && !presetSelected(card, 3));
+    assert(MiniActionPresentation::presetOtherGrey(card));
+    card.connectionPhase = ControllerConnectionPhase::Reconnecting;
+    assert(!MiniActionPresentation::presetOtherGrey(card));
+
+    card.connectionPhase = ControllerConnectionPhase::Ready;
+    link.observe(card);
+    card.connectionPhase = ControllerConnectionPhase::Syncing;
+    card.pendingHardwarePreset = 2;
+    card.ampSerial = "B"; // different amp on a still-present link
+    link.observe(card);
+    assert(!link.readySeen);
+    assert(!MiniActionPresentation::mainShowsConnected(card, mainPresetCard(card).phase, link));
 
     assert(!MiniActionPresentation::needsRedraw(true, true, "same", "same"));
     assert(MiniActionPresentation::needsRedraw(true, true, "old", "new"));

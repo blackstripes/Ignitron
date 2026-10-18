@@ -113,10 +113,6 @@ void drawPresetCabinet(lv_event_t *event) {
     lv_area_t bounds;
     lv_obj_t *hero = lv_event_get_target_obj(event);
     lv_obj_get_coords(hero, &bounds);
-    // The cabinet is opaque and covers the button's styled background. Use
-    // its selected border style to carry the same selection into this layer.
-    const bool selected = lv_color_eq(lv_obj_get_style_border_color(hero, LV_PART_MAIN),
-                                      lv_color_hex(0x00E65D));
     auto rect = [&](int x, int y, int w, int h, uint32_t fill, uint32_t border, int radius) {
         lv_draw_rect_dsc_t dsc;
         lv_draw_rect_dsc_init(&dsc);
@@ -137,8 +133,7 @@ void drawPresetCabinet(lv_event_t *event) {
         dsc.width = 1;
         lv_draw_line(layer, &dsc);
     };
-    rect(3, 3, 300, 151, selected ? 0x17392F : 0x111619,
-         selected ? 0x00E65D : 0x354047, 7);
+    rect(3, 3, 300, 151, 0x111619, 0x354047, 7);
     rect(8, 8, 290, 27, 0x11191C, 0x283237, 4);
     line(16, 10, 272, 10, 0x655035);
     rect(27, 15, 53, 12, 0x342024, 0x452A2B, 2);
@@ -146,31 +141,19 @@ void drawPresetCabinet(lv_event_t *event) {
         rect(x, 17, 7, 7, 0x404447, 0x171C1F, 3);
         line(x + 3, 17, x + 3, 19, 0x887D61);
     }
-    rect(9, 38, 288, 110, selected ? 0x1D4433 : 0x191D1D,
-         selected ? 0x39825B : 0x2E3537, 4);
+    rect(9, 38, 288, 110, 0x191D1D, 0x2E3537, 4);
     // Woven grille, deliberately low contrast behind the foreground type.
     for (int x = 13; x < 294; x += 5)
-        line(x, 42, x, 144, selected ? 0x31523C : 0x292B27);
+        line(x, 42, x, 144, 0x292B27);
     for (int y = 43; y < 145; y += 4)
-        line(13, y, 293, y, selected ? 0x254433 : 0x202422);
+        line(13, y, 293, y, 0x202422);
     lv_draw_rect_dsc_t shade;
     lv_draw_rect_dsc_init(&shade);
-    shade.bg_color = lv_color_hex(selected ? 0x09251A : 0x03090D);
+    shade.bg_color = lv_color_hex(0x03090D);
     shade.bg_opa = LV_OPA_60;
     shade.radius = 6;
     lv_area_t overlay = {bounds.x1 + 4, bounds.y1 + 4, bounds.x1 + 302, bounds.y1 + 152};
     lv_draw_rect(layer, &shade, &overlay);
-    if (selected) {
-        // Above the dimming overlay, so the selected outline cannot disappear.
-        lv_draw_rect_dsc_t outline;
-        lv_draw_rect_dsc_init(&outline);
-        outline.bg_opa = LV_OPA_TRANSP;
-        outline.border_color = lv_color_hex(0x00E65D);
-        outline.border_width = 2;
-        outline.radius = 7;
-        lv_area_t edge = {bounds.x1 + 3, bounds.y1 + 3, bounds.x1 + 302, bounds.y1 + 153};
-        lv_draw_rect(layer, &outline, &edge);
-    }
 }
 
 // Small vector glyphs keep the concept's visual vocabulary crisp at 320x240,
@@ -525,7 +508,7 @@ void PanelLanLVGLUI::begin() {
     lv_indev_set_read_cb(touch, readTouch);
     lv_indev_set_display(touch, display_);
     createUi();
-    renderStatus(ControllerSnapshot{});
+    renderStatus(ControllerSnapshot{}, {});
 }
 
 void PanelLanLVGLUI::createUi() {
@@ -1329,7 +1312,9 @@ bool PanelLanLVGLUI::writeScreenshot(Stream &output) {
     return true;
 }
 
-void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
+void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot,
+                                const PresetPreviewPresentation::Preview &preview) {
+    mainConnection_.observe(snapshot);
 #ifdef PANELAN_PRESET_TRACE
     // Unrelated revisions may arrive before LVGL refreshes the dirty card.
     // A superseding action or changed confirmation stage revokes the old arm.
@@ -1338,28 +1323,24 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     latestSnapshot_ = snapshot;
     reconcileExternalTuner(snapshot);
     const bool linkEstablished = snapshot.connectionPhase == ControllerConnectionPhase::Identifying ||
-                                 snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||
-                                 snapshot.connectionPhase == ControllerConnectionPhase::Ready;
+                                  snapshot.connectionPhase == ControllerConnectionPhase::Syncing ||
+                                  snapshot.connectionPhase == ControllerConnectionPhase::Ready;
+    const auto presetCard = MiniActionPresentation::mainPresetCard(snapshot);
     const lv_color_t accent = linkEstablished ? lv_palette_main(LV_PALETTE_GREEN)
                                                : lv_palette_main(LV_PALETTE_ORANGE);
     const char *connectionText = snapshot.connectionPhase == ControllerConnectionPhase::Reconnecting
-                                     ? "RECONNECTING"
-                                     : snapshot.connectionPhase == ControllerConnectionPhase::Ready ? LV_SYMBOL_BLUETOOTH " CONNECTED"
-                                     : linkEstablished ? LV_SYMBOL_BLUETOOTH " SYNCING" : "SEARCHING";
+                                      ? "RECONNECTING"
+                                       : MiniActionPresentation::mainShowsConnected(snapshot, presetCard.phase, mainConnection_) ? LV_SYMBOL_BLUETOOTH " CONNECTED"
+                                      : linkEstablished ? LV_SYMBOL_BLUETOOTH " SYNCING" : "SEARCHING";
     setText(connectionLabel_, connectionText);
     setColor(connectionLabel_, LV_STYLE_TEXT_COLOR, accent);
     setColor(lv_obj_get_parent(connectionLabel_), LV_STYLE_BORDER_COLOR, accent);
     setText(headerTitle_, snapshot.identityKnown ? snapshot.ampName.c_str() : "IGNITRON");
     bool identityDirty = false;
-    const auto presetCard = MiniActionPresentation::mainPresetCard(snapshot);
-    if (presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending) {
-        identityDirty = setFormatted(identityLabel_, "SELECTING PRESET %u", snapshot.pendingHardwarePreset);
-    } else if (presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading) {
-        identityDirty = setFormatted(identityLabel_, "PRESET %u / LOADING", presetCard.target);
+    if (presetCard.target != 0 && presetCard.phase != MiniActionPresentation::MainPresetPhase::Stale) {
+        identityDirty = setFormatted(identityLabel_, "HARDWARE PRESET %u", presetCard.target);
     } else if (snapshot.confirmedHardwarePreset != 0) {
-        identityDirty = setFormatted(identityLabel_, snapshot.sparkStateStale ? "PRESET %u / SYNCING"
-                                                                       : "HARDWARE PRESET %u",
-                               snapshot.confirmedHardwarePreset);
+        identityDirty = setFormatted(identityLabel_, "HARDWARE PRESET %u", snapshot.confirmedHardwarePreset);
     } else if (linkEstablished) {
         identityDirty = setText(identityLabel_, "READING YOUR PRESET");
     } else {
@@ -1368,34 +1349,25 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
 
     bool presetCardDirty = identityDirty;
     lv_obj_t *hero = lv_obj_get_parent(presetNameLabel_);
-    const bool selectedPreset = MiniActionPresentation::presetSelected(snapshot, presetCard.target);
-    // The major selected body stays identical across intent, number proof and
-    // full Ready. Pending is only a small amber annotation, not a dim state.
-    presetCardDirty |= setColor(hero, LV_STYLE_BG_COLOR,
-                                lv_color_hex(selectedPreset ? 0x17392F : 0x11181D));
-    presetCardDirty |= setColor(hero, LV_STYLE_BORDER_COLOR,
-                                lv_color_hex(selectedPreset ? 0x00E65D : 0x34434C));
-    const bool pendingPreset = presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending;
-    const bool failedPreset = snapshot.presetActionFailed && !pendingPreset;
-    presetCardDirty |= setText(presetMetaLabel_, pendingPreset ? LV_SYMBOL_BULLET :
-                                                 failedPreset ? "!" : LV_SYMBOL_RIGHT);
-    presetCardDirty |= setColor(presetMetaLabel_, LV_STYLE_TEXT_COLOR,
-                               lv_color_hex(pendingPreset ? 0xFFD06A : failedPreset ? 0xFF6C76 : 0x92A2AD));
-    presetCardDirty |= setText(presetNameLabel_, presetCard.name.c_str());
+    const bool showingPreview = preview.valid && preview.target == presetCard.target &&
+        (presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending ||
+         presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading);
+    const char *name = showingPreview ? preview.name.c_str() : presetCard.name.c_str();
+    presetCardDirty |= setText(presetNameLabel_, name);
     presetCardDirty |= setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR,
-                                snapshot.sparkStateStale && !selectedPreset ? lv_color_hex(0xA8B3BC)
+                                snapshot.sparkStateStale && !showingPreview ? lv_color_hex(0xA8B3BC)
                                                                              : lv_color_hex(0xF4F6F8));
-    const bool hasUsefulDescription = !snapshot.presetDescription.empty() && snapshot.presetDescription != "Text";
+    const std::string &displayDescription = showingPreview ? preview.description : snapshot.presetDescription;
+    const bool hasUsefulDescription = !displayDescription.empty() && displayDescription != "Text";
     const char *description = snapshot.presetActionFailed &&
                               presetCard.phase != MiniActionPresentation::MainPresetPhase::Pending
                                   ? "Change not confirmed. Tap to retry."
-                              : presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending
-                                  ? "Selecting preset..."
-                              : presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading
-                                  ? "LOADING DETAILS"
+                              : presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending ||
+                                presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading
+                                  ? hasUsefulDescription && showingPreview ? displayDescription.c_str() : "Tap to choose a preset"
                               : !linkEstablished ? "Turn on your Spark device"
                               : snapshot.sparkStateStale ? "Waiting for current Spark state"
-                              : hasUsefulDescription ? snapshot.presetDescription.c_str() : "Tap to choose a preset";
+                              : hasUsefulDescription ? displayDescription.c_str() : "Tap to choose a preset";
     presetCardDirty |= setText(presetDescriptionLabel_, description);
 
     for (uint8_t preset = 1; preset <= 4; ++preset) {
@@ -1434,17 +1406,18 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     static const char *kFxNames[] = {"Gate", "Comp", "Drive", "Mod", "Delay", "Reverb"};
     for (uint8_t fx = 0; fx < 6; ++fx) {
         const ControllerFxSlot &slot = snapshot.fxSlots[fx];
-        const bool current = slot.known && !snapshot.sparkStateStale &&
-                             presetCard.phase != MiniActionPresentation::MainPresetPhase::Pending;
-        const bool enabled = current && MiniActionPresentation::fxEnabled(slot);
+        const bool current = presetCard.phase == MiniActionPresentation::MainPresetPhase::Ready &&
+                             slot.known && !snapshot.sparkStateStale;
+        const bool known = showingPreview || current;
+        const bool enabled = showingPreview ? preview.enabled[fx] : current && MiniActionPresentation::fxEnabled(slot);
         lv_obj_t *tile = fxTiles_[fx];
         lv_obj_t *label = lv_obj_get_child(tile, 0);
         bool dirty = setText(label, kFxNames[fx]);
         // Unknown/stale is visibly distinct from a confirmed bypassed effect.
-        dirty |= setText(fxStateLabels_[fx], !current ? "?" : slot.pending ? "*" : "");
+        dirty |= setText(fxStateLabels_[fx], !known ? "?" : current && slot.pending ? "*" : "");
         dirty |= setColor(fxStateLabels_[fx], LV_STYLE_TEXT_COLOR,
                            lv_color_hex(0xD9B877));
-        const bool failed = slot.actionFailed && !(current && slot.pending);
+        const bool failed = !showingPreview && slot.actionFailed && !(current && slot.pending);
         const bool errorHidden = lv_obj_has_flag(fxErrorLabels_[fx], LV_OBJ_FLAG_HIDDEN);
         show(fxErrorLabels_[fx], failed);
         dirty |= errorHidden == failed;
@@ -1461,9 +1434,7 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
 #endif
     }
 
-    if (snapshot.pendingHardwarePreset != 0) {
-        setText(actionStatusLabel_, "Switching preset...");
-    } else if (snapshot.presetActionFailed) {
+    if (snapshot.presetActionFailed) {
         setText(actionStatusLabel_, "Preset switch was not confirmed");
     } else {
         setText(actionStatusLabel_, "Hardware presets ready");
@@ -1547,17 +1518,24 @@ void PanelLanLVGLUI::drainMainTrace() {
 }
 #endif
 
-void PanelLanLVGLUI::update(const ControllerSnapshot &snapshot) {
+void PanelLanLVGLUI::update(const ControllerSnapshot &snapshot,
+                           const PresetPreviewPresentation::Preview &preview) {
     FlightDisplayHealth::health.serviceBegin = millis();
     ++FlightDisplayHealth::health.serviceBegins;
     FlightDisplayHealth::progress.serviceStart(FlightDisplayHealth::health.serviceBegin);
     const uint32_t now = millis();
     lv_tick_inc(now - lastLvglTickAt_);
     lastLvglTickAt_ = now;
-    if (renderedRevision_ != snapshot.revision) {
+    const bool previewChanged = renderedPreview_.valid != preview.valid ||
+        (preview.valid && (renderedPreview_.target != preview.target ||
+                           renderedPreview_.name != preview.name ||
+                           renderedPreview_.description != preview.description ||
+                           renderedPreview_.enabled != preview.enabled));
+    if (renderedRevision_ != snapshot.revision || previewChanged) {
         ++FlightDisplayHealth::health.revisions;
         renderedRevision_ = snapshot.revision;
-        renderStatus(snapshot);
+        renderedPreview_ = preview;
+        renderStatus(snapshot, preview);
     }
     lv_timer_handler();
     FlightDisplayHealth::progress.serviceDone();

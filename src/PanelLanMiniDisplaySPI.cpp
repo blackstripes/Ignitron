@@ -392,16 +392,20 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
     if (!miniUiComplete_) StartupDiagnostics::mark(StartupDiagnostics::MiniUiUpdate, false);
     // On a crowded update, service the actionable card before unrelated cards.
     uint8_t priority = miniCount_;
+    std::array<uint8_t, 6> presetOrder{};
     if (view == PanelLanLVGLUI::View::Fx) {
         for (uint8_t j = 0; j < miniCount_; ++j)
             if (snapshot.fxSlots[j].pending) priority = j;
     } else if (view == PanelLanLVGLUI::View::Preset) {
-        for (uint8_t j = 0; j < miniCount_; ++j)
-            if (PhysicalPresetLayout::positions[j].role == PhysicalPresetLayout::Role::Slot &&
-                snapshot.pendingHardwarePreset == browsedBank * 4 + PhysicalPresetLayout::positions[j].slot) priority = j;
+        const auto card = MiniActionPresentation::mainPresetCard(snapshot);
+        const bool switching = card.phase == MiniActionPresentation::MainPresetPhase::Pending ||
+                               card.phase == MiniActionPresentation::MainPresetPhase::Loading;
+        presetOrder = PhysicalPresetLayout::serviceOrder(browsedBank, switching ? card.target : 0,
+                                                         switching ? snapshot.confirmedHardwarePreset : 0);
     }
     for (uint8_t order = 0; order < miniCount_; ++order) {
-        const uint8_t i = order == 0 && priority < miniCount_ ? priority :
+        const uint8_t i = view == PanelLanLVGLUI::View::Preset ? presetOrder[order] :
+            order == 0 && priority < miniCount_ ? priority :
             priority < miniCount_ && order <= priority ? order - 1 : order;
         const uint8_t display = i + 1;
         Card card;
@@ -426,6 +430,8 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
                 card.accent = amber; card.filled = true; card.mark = Mark::Wave;
                 card.pending = MiniActionPresentation::mainPresetCard(snapshot).phase ==
                                MiniActionPresentation::MainPresetPhase::Pending;
+            } else if (MiniActionPresentation::presetOtherGrey(snapshot)) {
+                card.accent = muted; card.mark = Mark::Dash;
             } else if (snapshot.sparkStateStale || !snapshot.confirmedHardwarePreset) {
                 card.accent = amber;
             } else { card.accent = muted; card.mark = Mark::Dash; }

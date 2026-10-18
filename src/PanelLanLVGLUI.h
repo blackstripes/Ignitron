@@ -7,6 +7,8 @@
 #include <lvgl.h>
 
 #include "controller/ControllerState.h"
+#include "controller/MiniActionPresentation.h"
+#include "controller/PresetPreviewPresentation.h"
 
 class ControllerActions;
 
@@ -20,7 +22,7 @@ public:
     // is not a footswitch/performance-mode selection.
     enum class View : uint8_t { Preset, Fx, Looper, Tuner, Device };
     void begin();
-    void update(const ControllerSnapshot &snapshot);
+    void update(const ControllerSnapshot &snapshot, const PresetPreviewPresentation::Preview &preview);
 #ifdef PANELAN_PRESET_TRACE
     // Called after the mini display has been serviced for this loop.
     void drainMainTrace();
@@ -98,6 +100,8 @@ private:
     bool tunerOverrideActive_ = false;
     uint32_t suppressTunerTakeoverUntilMs_ = 0;
     ControllerSnapshot latestSnapshot_{};
+    MiniActionPresentation::MainConnectionPresentation mainConnection_{};
+    PresetPreviewPresentation::Preview renderedPreview_{};
     ControllerActions *actions_ = nullptr;
     uint32_t renderedRevision_ = UINT32_MAX;
     uint32_t lastLvglTickAt_ = 0;
@@ -132,7 +136,7 @@ private:
     static void onNavClicked(lv_event_t *event);
     static void onLooperClicked(lv_event_t *event);
     void createUi();
-    void renderStatus(const ControllerSnapshot &snapshot);
+    void renderStatus(const ControllerSnapshot &snapshot, const PresetPreviewPresentation::Preview &preview);
     void setActiveScreen(Screen screen);
     void renderDetailPage(const ControllerSnapshot &snapshot);
     void renderNavigation();

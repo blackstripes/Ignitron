@@ -54,12 +54,48 @@ inline MainPresetCard mainPresetCard(const ControllerSnapshot &s) {
     }
     return {phase, target, name};
 }
+// Main-LVGL presentation history only. A pending preset during startup cannot
+// turn the initial full-preset sync into CONNECTED; only a link that has already
+// reached Ready may hide the syncing label for subsequent preset switches.
+struct MainConnectionPresentation {
+    bool readySeen = false;
+    std::string ampName;
+    std::string ampSerial;
+
+    void observe(const ControllerSnapshot &s) {
+        if (!s.identityKnown || s.connectionPhase == ControllerConnectionPhase::Scanning ||
+            s.connectionPhase == ControllerConnectionPhase::Reconnecting ||
+            s.connectionPhase == ControllerConnectionPhase::Identifying) {
+            readySeen = false;
+            ampName.clear();
+            ampSerial.clear();
+            return;
+        }
+        if (ampName != s.ampName || ampSerial != s.ampSerial) {
+            readySeen = false;
+            ampName = s.ampName;
+            ampSerial = s.ampSerial;
+        }
+        if (s.connectionPhase == ControllerConnectionPhase::Ready) readySeen = true;
+    }
+};
+inline bool mainShowsConnected(const ControllerSnapshot &s, MainPresetPhase phase,
+                               const MainConnectionPresentation &link) {
+    return s.connectionPhase == ControllerConnectionPhase::Ready ||
+           (s.connectionPhase == ControllerConnectionPhase::Syncing && s.identityKnown && link.readySeen &&
+            link.ampName == s.ampName && link.ampSerial == s.ampSerial &&
+            (phase == MainPresetPhase::Pending || phase == MainPresetPhase::Loading));
+}
 // A selected body is an intent during Pending, number proof during Loading,
 // and Spark authority during Ready. Only the Pending phase carries an amber cue.
 inline bool presetSelected(const ControllerSnapshot &s, uint8_t target) {
     if (!target) return false;
     const auto card = mainPresetCard(s);
     return card.phase != MainPresetPhase::Stale && card.target == target;
+}
+inline bool presetOtherGrey(const ControllerSnapshot &s) {
+    const auto phase = mainPresetCard(s).phase;
+    return phase == MainPresetPhase::Pending || phase == MainPresetPhase::Loading;
 }
 inline bool fxConfirmed(const ControllerSnapshot &s, uint8_t slot) {
     const auto &fx = s.fxSlots[slot];

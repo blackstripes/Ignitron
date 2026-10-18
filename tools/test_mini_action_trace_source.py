@@ -89,10 +89,9 @@ class MiniActionTraceTest(unittest.TestCase):
         main = (ROOT / 'PanelLanLVGLUI.cpp').read_text()
         status = main.split('void PanelLanLVGLUI::renderStatus(', 1)[1].split(
             'bool PanelLanLVGLUI::mainTraceMatches(', 1)[0]
-        self.assertIn('MiniActionPresentation::presetSelected(snapshot, presetCard.target)', status)
-        self.assertIn('selectedPreset ? 0x17392F : 0x11181D', status)
-        self.assertIn('selectedPreset ? 0x00E65D : 0x34434C', status)
-        self.assertIn('pendingPreset ? LV_SYMBOL_BULLET', status)
+        self.assertNotIn('selectedPreset ? 0x17392F', status)
+        self.assertNotIn('pendingPreset ? LV_SYMBOL_BULLET', status)
+        self.assertIn('preview.target == presetCard.target', status)
 
 
 if __name__ == '__main__':

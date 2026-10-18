@@ -68,6 +68,8 @@ struct Pedal {
 
     string name = "";
     boolean isOn = false;
+    // False when cached JSON omitted IsOn or supplied a non-boolean value.
+    bool isOnKnown = false;
     vector<Parameter> parameters;
 };
 

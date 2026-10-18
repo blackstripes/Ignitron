@@ -38,6 +38,21 @@ public:
     bool hardwareChecksumsReady() const { return hardwareChecksumsReady_; }
     uint32_t hardwareCacheGeneration() const { return hardwareCacheGeneration_; }
     bool isHWPresetMissing(int num) { return presetBuilder.isHWPresetMissing(num); }
+    // Current-link checksum for a one-based hardware slot; never a cache proof
+    // by itself (callers must also verify identity, generation and full data).
+    bool validatedHWPresetChecksum(int slot, byte &checksum) const {
+        if (!hardwareChecksumsReady_ || slot < 1 ||
+            static_cast<size_t>(slot) > validatedHWChecksums_.size()) return false;
+        checksum = validatedHWChecksums_[slot - 1];
+        return true;
+    }
+    // Borrowed read-only slot for the current validated checksum set. Use only
+    // synchronously; do not retain across cache mutation or link reset.
+    const Preset *validatedHWPreset(int slot) const {
+        byte checksum = 0;
+        return validatedHWPresetChecksum(slot, checksum)
+                   ? presetBuilder.validatedHWPreset(slot, checksum) : nullptr;
+    }
     const int numberOfBanks() const { return presetBuilder.getNumberOfBanks(); }
     const Preset &appReceivedPreset() const { return appReceivedPreset_; }
 

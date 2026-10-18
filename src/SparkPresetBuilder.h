@@ -70,6 +70,8 @@ public:
     const int numberOfHWPresets() const { return numberOfHWPresets_; }
 
     bool validateChecksums(vector<byte> checksums);
+    // Borrowed for synchronous display use only; invalidated by cache mutation.
+    const Preset *validatedHWPreset(int slot, byte currentChecksum) const;
     Preset getPreset(int bank, int preset);
     pair<int, int> getBankPresetNumFromUUID(string uuid);
     const int getNumberOfBanks() const;

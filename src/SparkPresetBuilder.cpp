@@ -88,6 +88,7 @@ Preset SparkPresetBuilder::getPresetFromJsonDocument(JsonDocument jsonPreset, st
     for (JsonObject currentJsonPedal : pedalArray) {
         Pedal currentPedal;
         currentPedal.name = currentJsonPedal["Name"].as<string>();
+        currentPedal.isOnKnown = currentJsonPedal["IsOn"].is<bool>();
         currentPedal.isOn = currentJsonPedal["IsOn"].as<bool>();
 
         JsonArray pedalParamArray = currentJsonPedal["Parameters"];
@@ -546,6 +547,13 @@ void SparkPresetBuilder::resetHWPresets() {
     for (int i = 0; i < numberOfHWPresets_; i++) {
         hwPresets.push_back(examplePreset);
     }
+}
+
+const Preset *SparkPresetBuilder::validatedHWPreset(int slot, byte currentChecksum) const {
+    if (slot < 1 || static_cast<size_t>(slot) > hwPresets.size() ||
+        slot > numberOfHWPresets_) return nullptr;
+    const Preset &preset = hwPresets[slot - 1];
+    return !preset.isEmpty && preset.checksum == currentChecksum ? &preset : nullptr;
 }
 
 bool SparkPresetBuilder::validateChecksums(vector<byte> checksums) {

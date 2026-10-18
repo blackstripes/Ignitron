@@ -11,8 +11,10 @@ uses the same amber filled bar and waveform as number-confirmed Loading and
 Ready, plus a small amber corner dot only while pending. Number proof removes
 the dot without dimming the selection; failure restores the confirmed slot
 with a brief red badge on the failed slot. Browsing another bank does not
-change the global 1–8 target. Unchanged card keys are not sent to SPI; the
-pending card is serviced first.
+change the global 1–8 target. Other slots are grey during a valid pending or
+number-verified Loading transition; disconnected/unknown slots remain amber
+outside that transition. Unchanged card keys are not sent to SPI; the target
+and previously confirmed slot are serviced before other minis on the browsed bank.
 An action failure leaves the fresh, known Spark ON/OFF or confirmed preset
 selection visible with a small red corner badge on the affected card;
 stale/unknown observations show no asserted ON/OFF, but retain the badge.
@@ -30,19 +32,25 @@ marker disappears on confirmation, leaving the requested ON/OFF body unchanged;
 a failure uses the fresh observed direction with a red marker. Stale/unknown
 cards say `?` or `SYNC` instead of asserting a direction, retaining a red
 failure marker during resync when the action failed. The picker moves to
-the pending preset. The large main preset card immediately uses the same
-prominent green selected body/border for the latest pending target as for
-Loading and Ready, with a small amber corner cue and `SELECTING` only while
-pending. It shows the target's validated hardware-slot cache name (or
-`PRESET N` without one);
-it does not borrow the previous Spark name, description or FX chain. After
-correlated number verification, the card retains that slot name/fallback and
-shows `LOADING DETAILS` while the full preset remains stale. Only a fresh Ready
-snapshot restores Spark's active name and description. Neither transition dims
-the selected body. The custom cabinet painter reads the hero's selected border
-style, tints its opaque cabinet/grille, and draws a bright outline above the
-shading overlay; the unselected cabinet remains unchanged. Failure returns to
-the last trustworthy Spark/stale presentation with brief red/error feedback.
+the pending preset. The large main card keeps its original dark cabinet artwork,
+fonts and layout with no selection tint, corner dot or ordinary switch status.
+During pending or locally verified Loading it shows a complete cached target
+name, description and six FX states only when current-link checksums, slot
+checksum, cache generation, amp name and serial all match and all six mapped
+pedals have boolean on/off values. Otherwise it shows the target slot
+name/fallback and unknown FX, never the old chain. Ready uses the actual Spark
+snapshot; an identical preview requires no changed label/tile redraw. Preview
+data is display-only and cannot authorize actions or affect the FX screen.
+The cache preview borrows the validated slot synchronously and copies only
+display fields; no full preset/JSON copy is made per frame. During a preset
+Pending or locally number-verified Loading transition after that amp's link
+has reached Ready, the main connection label stays CONNECTED rather than
+showing ordinary switch progress as BLUETOOTH SYNCING. Initial link sync,
+including an accepted pending preset before the first Ready, still shows
+SYNCING. This presentation-only Ready history is cleared on link loss,
+reconnecting or amp identity change; it does not affect controller readiness.
+Failure returns to the last trustworthy Spark/stale presentation with brief
+red/error feedback.
 Validated slot names are cleared on disconnect
 or amp identity change; no name is inferred from an old active preset. Unchanged
 labels/styles do not request another dirty-area redraw of the FX icons.

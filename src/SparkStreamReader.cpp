@@ -300,6 +300,7 @@ void SparkStreamReader::readPreset() {
         boolean eOnOff = readOnOff();
         // DEBUG_PRINTF("  Pedal state: %s\n", eOnOff);
         currentPedal.isOn = eOnOff;
+        currentPedal.isOnKnown = true;
         sb.addPython("{");
         sb.addStr("Name", eStr);
         sb.addSeparator();
