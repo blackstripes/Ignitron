@@ -556,14 +556,17 @@ void PanelLanLVGLUI::createUi() {
     lv_obj_set_style_text_line_space(presetNameLabel_, 0, 0);
     lv_obj_set_style_text_align(presetNameLabel_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0, 42);
+    presetNameTwoLine_ = true; // Matches the initial alignment, including recreation.
 
     presetDescriptionLabel_ = lv_label_create(hero);
-    lv_obj_set_width(presetDescriptionLabel_, 274);
+    // One complete Montserrat 12 line (15 px); auto height could wrap into
+    // the FX row at hero-relative y109. LONG_DOT truncates within this box.
+    lv_obj_set_size(presetDescriptionLabel_, 274, 15);
     lv_label_set_long_mode(presetDescriptionLabel_, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(presetDescriptionLabel_, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_align(presetDescriptionLabel_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(presetDescriptionLabel_, lv_color_hex(0xABB8C2), 0);
-    lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_MID, 0, 77);
+    lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_MID, 0, 84);
 
     const int16_t fxX[] = {-127, -76, -25, 26, 77, 128};
     for (uint8_t fx = 0; fx < 6; ++fx) {
@@ -1338,6 +1341,13 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot,
         return size.x;
     });
     presetCardDirty |= setText(presetNameLabel_, fittedName.text.c_str());
+    if (presetNameTwoLine_ != fittedName.twoLine) {
+        presetNameTwoLine_ = fittedName.twoLine;
+        lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0,
+                     PresetNamePresentation::nameTopOffset(presetNameTwoLine_,
+                         lv_font_get_line_height(lv_obj_get_style_text_font(presetNameLabel_, LV_PART_MAIN))));
+        presetCardDirty = true;
+    }
     presetCardDirty |= setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR,
                                 snapshot.sparkStateStale && !showingPreview ? lv_color_hex(0xA8B3BC)
                                                                              : lv_color_hex(0xF4F6F8));

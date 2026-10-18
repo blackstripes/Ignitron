@@ -1,5 +1,6 @@
 """Focused guards for the static, pixel-fitted main PRESET card."""
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +37,7 @@ class PresetCosmeticsTest(unittest.TestCase):
         self.assertIn("lv_obj_set_size(presetNameLabel_, 282, 2 * lv_font_get_line_height(&lv_font_montserrat_24))", UI)
         self.assertIn("lv_obj_set_style_text_line_space(presetNameLabel_, 0, 0)", UI)
         self.assertIn("lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0, 42)", UI)
-        self.assertIn("lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_MID, 0, 77)", UI)
+        self.assertIn("lv_obj_align(presetDescriptionLabel_, LV_ALIGN_TOP_MID, 0, 84)", UI)
         self.assertIn("lv_obj_align(tile, LV_ALIGN_TOP_MID, fxX[fx], 143)", UI)
         self.assertIn("lv_label_set_long_mode(presetNameLabel_, LV_LABEL_LONG_CLIP)", UI)
         self.assertIn("lv_obj_set_style_text_align(presetNameLabel_, LV_TEXT_ALIGN_CENTER", UI)
@@ -47,6 +48,35 @@ class PresetCosmeticsTest(unittest.TestCase):
         self.assertIn("lv_obj_get_style_text_letter_space(presetNameLabel_, LV_PART_MAIN)", fitting)
         self.assertIn("LV_COORD_MAX, LV_TEXT_FLAG_NONE", fitting)
         self.assertIn("setText(presetNameLabel_, fittedName.text.c_str())", fitting)
+        self.assertIn("bool presetNameTwoLine_ = true;", HEADER)
+        self.assertIn("presetNameTwoLine_ = true; // Matches the initial alignment", UI)
+        alignment = fitting.split("if (presetNameTwoLine_ != fittedName.twoLine) {", 1)[1].split("}", 1)[0]
+        self.assertIn("presetNameTwoLine_ = fittedName.twoLine;", alignment)
+        self.assertIn("lv_obj_align(presetNameLabel_, LV_ALIGN_TOP_MID, 0,", alignment)
+        self.assertIn("PresetNamePresentation::nameTopOffset(presetNameTwoLine_,", alignment)
+        self.assertIn("lv_font_get_line_height(lv_obj_get_style_text_font(presetNameLabel_, LV_PART_MAIN))", alignment)
+        self.assertIn("presetCardDirty = true;", alignment)
+        self.assertEqual(UI.count("lv_obj_align(presetNameLabel_,"), 2) # Creation + mode change only.
+
+    def test_description_is_bounded_above_fx_row(self):
+        description = UI.split("presetDescriptionLabel_ = lv_label_create(hero);", 1)[1].split("const int16_t fxX[]", 1)[0]
+        width, height = map(int, re.search(
+            r"lv_obj_set_size\(presetDescriptionLabel_, (\d+), (\d+)\)", description).groups())
+        top = int(re.search(
+            r"lv_obj_align\(presetDescriptionLabel_, LV_ALIGN_TOP_MID, 0, (\d+)\)", description)[1])
+        hero_top = int(re.search(r"lv_obj_align\(hero, LV_ALIGN_TOP_MID, 0, (\d+)\)", UI)[1])
+        fx_top = int(re.search(r"lv_obj_align\(tile, LV_ALIGN_TOP_MID, fxX\[fx\], (\d+)\)", UI)[1])
+        self.assertEqual((width, height, top), (274, 15, 84))
+        self.assertEqual(fx_top - hero_top, 109)
+        # Montserrat 12 has a 15px line height: retain a complete ordinary
+        # description line, with clearance even including the hero's 1px border.
+        self.assertGreaterEqual(height, 15)
+        self.assertLess(hero_top + 1 + top + height, fx_top)
+        self.assertIn("LV_LABEL_LONG_DOT", description)
+        self.assertIn("&lv_font_montserrat_12", description)
+        self.assertIn("LV_TEXT_ALIGN_CENTER", description)
+        self.assertIn("lv_color_hex(0xABB8C2)", description)
+        self.assertNotIn("LV_SIZE_CONTENT", description)
 
     def test_static_lifecycle_and_changed_only_updates(self):
         # No asynchronous reveal to restart on Pending -> Ready, or survive

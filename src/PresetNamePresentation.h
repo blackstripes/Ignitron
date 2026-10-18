@@ -12,8 +12,33 @@ struct Layout {
     bool twoLine;
 };
 
+// Keep two lines anchored at y42; center one line in the original two-line
+// region, rounding the half-line offset up without changing the object size.
+constexpr int32_t nameTopOffset(bool twoLine, int32_t lineHeight) {
+    return 42 + (twoLine ? 0 : (lineHeight + 1) / 2);
+}
+
 inline bool whitespace(char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v';
+}
+
+// Match only complete, canonical UTF-8 encodings of Unicode White_Space.
+// Other bytes are copied unchanged; partial/malformed sequences never consume
+// adjacent bytes as a separator. No locale-dependent byte classification.
+inline size_t whitespaceBytes(const std::string &text, size_t pos) {
+    const auto a = static_cast<unsigned char>(text[pos]);
+    if (whitespace(text[pos])) return 1;
+    if (text.size() - pos < 2) return 0;
+    const auto b = static_cast<unsigned char>(text[pos + 1]);
+    if (a == 0xC2 && (b == 0x85 || b == 0xA0)) return 2;
+    if (text.size() - pos < 3) return 0;
+    const auto c = static_cast<unsigned char>(text[pos + 2]);
+    if ((a == 0xE1 && b == 0x9A && c == 0x80) || // U+1680
+        (a == 0xE2 && b == 0x80 &&
+         ((c >= 0x80 && c <= 0x8A) || c == 0xA8 || c == 0xA9 || c == 0xAF)) ||
+        (a == 0xE2 && b == 0x81 && c == 0x9F) || // U+205F
+        (a == 0xE3 && b == 0x80 && c == 0x80)) return 3; // U+3000
+    return 0;
 }
 
 inline size_t previousCodepoint(const std::string &text, size_t end) {
@@ -45,10 +70,12 @@ Layout fit(const char *name, int32_t width, Measure measure) {
         measure(text.c_str()) <= width) return {text, false};
     std::string normalized;
     normalized.reserve(text.size());
-    for (char c : text) {
-        if (whitespace(c)) {
+    for (size_t pos = 0; pos < text.size();) {
+        const size_t separatorBytes = whitespaceBytes(text, pos);
+        if (separatorBytes) {
             if (!normalized.empty() && normalized.back() != ' ') normalized += ' ';
-        } else normalized += c;
+            pos += separatorBytes;
+        } else normalized += text[pos++];
     }
     if (!normalized.empty() && normalized.back() == ' ') normalized.pop_back();
     text.swap(normalized);

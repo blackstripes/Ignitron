@@ -15,6 +15,21 @@ static int32_t measure(const char *text) {
 
 int main() {
     using PresetNamePresentation::fit;
+    using PresetNamePresentation::nameTopOffset;
+    assert(nameTopOffset(true, 27) == 42);
+    assert(nameTopOffset(true, 27) + 27 == 69); // Second line unchanged.
+    assert(nameTopOffset(false, 27) == 56); // Half-line rounds up.
+    assert(nameTopOffset(false, 26) == 55);
+    assert(nameTopOffset(true, 26) == 42);
+    for (const char *name : {"New", "American Classic Blues 2"}) {
+        const auto pending = fit(name, 66, measure);
+        const auto loading = fit(name, 66, measure);
+        const auto ready = fit(name, 66, measure);
+        const int32_t expected = pending.twoLine ? 42 : 56;
+        assert(nameTopOffset(pending.twoLine, 27) == expected);
+        assert(nameTopOffset(loading.twoLine, 27) == expected);
+        assert(nameTopOffset(ready.twoLine, 27) == expected);
+    }
     assert(fit("", 20, measure).text.empty());
     assert(fit("iiii", 20, measure).text == "iiii");
     assert(fit("  A  B ", 40, measure).text == "  A  B ");
@@ -39,9 +54,32 @@ int main() {
     assert(!fit("New", 66, measure).twoLine); // Description restored.
     assert(fit("American Classic Blues 2", 66, measure).text == pending.text);
 
+    for (const char *space : {u8"\u0085", u8"\u00A0", u8"\u1680",
+                             u8"\u2000", u8"\u2001", u8"\u2002", u8"\u2003",
+                             u8"\u2004", u8"\u2005", u8"\u2006", u8"\u2007",
+                             u8"\u2008", u8"\u2009", u8"\u200A", u8"\u2028",
+                             u8"\u2029", u8"\u202F", u8"\u205F", u8"\u3000"}) {
+        const std::string name = std::string(u8"é音🎸") + space + u8"é音🎸";
+        const auto fitting = fit(name.c_str(), 21, measure);
+        assert(fitting.text == name && !fitting.twoLine); // Exact-fit bytes unchanged.
+        const auto split = fit(name.c_str(), 9, measure);
+        assert(split.text == u8"é音🎸\né音🎸" && split.twoLine);
+        const std::string repeated = std::string(space) + u8"é音🎸" + space + " " +
+                                     space + u8"é音🎸" + space;
+        assert(fit(repeated.c_str(), 9, measure).text == split.text);
+        const std::string longName = name + space + u8"é音🎸é音🎸";
+        assert(fit(longName.c_str(), 12, measure).text == u8"é音🎸\né音...");
+    }
+    // Nearby non-whitespace codepoints and incomplete encodings aren't matched.
+    for (const std::string &text : {std::string(u8"\u200B"), std::string(u8"\u2060"),
+                                   std::string("\xC2"), std::string("\xE2\x80"),
+                                   std::string("\xE2\x80X")})
+        assert(PresetNamePresentation::whitespaceBytes(text, 0) == 0);
+
     // Every emitted line fits, including fallback and multibyte boundaries.
     for (const char *name : {"Alpha Beta Gamma Delta Extra Long Suffix 2",
-                             "WWWWWWWW", u8"éé音🎸éé音🎸éé音🎸"}) {
+                             "WWWWWWWW", u8"éé音🎸éé音🎸éé音🎸",
+                             u8"é音🎸\u00A0é音🎸\u2007é音🎸\u202Fé音🎸\u3000é音🎸"}) {
         for (int width = 6; width <= 80; ++width) {
             const auto result = fit(name, width, measure);
             const auto newline = result.text.find('\n');
