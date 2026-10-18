@@ -17,19 +17,35 @@ class PhysicalSwitchSourceTest(unittest.TestCase):
         self.assertLess(app.index('pollPhysicalSwitches();'), app.index('if (!sparkConnected)'))
         self.assertIn('now - lastPollAt < 5', app)
         self.assertIn('physicalRouting.observe(controllerState.snapshot(), count)', app)
+        self.assertIn('physicalRouting.observeView(panelLanDisplay.activeView())', app)
         routing = (ROOT / 'controller/PhysicalSwitchRouting.h').read_text()
         layout = (ROOT / 'controller/PhysicalPresetLayout.h').read_text()
         self.assertIn('PhysicalPresetLayout::positions[i]', mini)
         self.assertIn('PhysicalPresetLayout::positions[key]', routing)
         self.assertIn('bank_.target(position.slot - 1, count)', routing)
         self.assertIn('browsedBank * 4 + position.slot', mini)
-        self.assertIn('"P%u %s", position.slot', mini)
+        self.assertNotIn('"P%u %s"', mini)
+        self.assertIn('snprintf(card.name, sizeof(card.name), "%s",', mini)
+        self.assertIn('target <= presetCount ? HardwarePresetNames::label(snapshot.hardwarePresetNames, target) : "UNKNOWN"', mini)
         for entry in ('{Role::Slot, 4}', '{Role::BankPrevious, 0}', '{Role::BankNext, 0}',
                       '{Role::Slot, 1}', '{Role::Slot, 2}', '{Role::Slot, 3}'):
             self.assertIn(entry, layout)
-        self.assertIn('snapshot.pendingHardwarePreset == target', mini)
-        self.assertIn('MiniActionPresentation::presetConfirmed(snapshot, target)', mini)
+        self.assertIn('MiniActionPresentation::presetSelected(snapshot, target)', mini)
+        self.assertIn('MiniActionPresentation::MainPresetPhase::Pending', mini)
+        self.assertIn('MiniActionPresentation::presetConfirmed(snapshot, snapshot.miniActionTarget)', mini)
         self.assertIn('previous ? browsedBank > 0 : (browsedBank + 1) * 4 < presetCount', mini)
+
+    def test_reset_settling_boundary(self):
+        mcp = (ROOT / 'PanelLanMiniMCP23017.h').read_text()
+        low = mcp.split('const uint32_t lowAt = millis();', 1)[1].split('const uint32_t highAt = millis();', 1)[0]
+        high = mcp.split('const uint32_t highAt = millis();', 1)[1].split('StartupDiagnostics::McpIntent, 5', 1)[0]
+        self.assertIn('delay(20);', low)
+        self.assertIn('millis() - lowAt', low)
+        self.assertIn('delay(1000);', high)
+        self.assertNotIn('delay(120);', high)
+        self.assertLess(high.index('ResetBoundary, 2'), high.index('delay(1000);'))
+        self.assertLess(high.index('delay(1000);'), high.index('ResetBoundary, 3'))
+        self.assertIn('millis() - highAt', high)
 
     def test_shared_tap_path(self):
         app = (ROOT / 'controller/PhysicalSwitchRouting.h').read_text()

@@ -28,8 +28,8 @@ struct Actions {
 int main() {
     using PhysicalPresetLayout::Role;
     const auto &p = PhysicalPresetLayout::positions;
-    assert(p[0].role == Role::Slot && p[0].slot == 4);
-    assert(p[1].role == Role::BankPrevious && p[2].role == Role::BankNext);
+    assert(p[1].role == Role::Slot && p[1].slot == 4);
+    assert(p[0].role == Role::BankPrevious && p[2].role == Role::BankNext);
     assert(p[3].role == Role::Slot && p[3].slot == 1);
     assert(p[4].role == Role::Slot && p[4].slot == 2);
     assert(p[5].role == Role::Slot && p[5].slot == 3);
@@ -40,20 +40,20 @@ int main() {
     auto press = [&](int key, int count = 8, PhysicalSwitches::Kind kind = PhysicalSwitches::Kind::Short) {
         routing.event(key, kind, count, s, ui, a);
     };
-    press(1); assert(routing.browsedBank() == 0);
-    for (int key : {0, 3, 4, 5}) press(key);
+    press(0); assert(routing.browsedBank() == 0);
+    for (int key : {1, 3, 4, 5}) press(key);
     assert((a.presets == std::vector<int>{4, 1, 2, 3}));
     press(2); assert(routing.browsedBank() == 1);
-    for (int key : {0, 3, 4, 5}) press(key);
+    for (int key : {1, 3, 4, 5}) press(key);
     assert((a.presets == std::vector<int>{4, 1, 2, 3, 8, 5, 6, 7}));
     press(2); assert(routing.browsedBank() == 1);
-    press(1); assert(routing.browsedBank() == 0);
+    press(0); assert(routing.browsedBank() == 0);
     press(2, 5); assert(routing.browsedBank() == 1);
-    for (int key : {0, 4, 5}) press(key, 5);
+    for (int key : {1, 4, 5}) press(key, 5);
     assert(a.presets.size() == 8); // partial bank disables P4/P2/P3
     press(3, 5); assert(a.presets.back() == 5 && a.presets.size() == 9);
     press(2, 5); assert(routing.browsedBank() == 1);
-    press(1, 5); assert(routing.browsedBank() == 0);
+    press(0, 5); assert(routing.browsedBank() == 0);
     press(2, 4); assert(routing.browsedBank() == 0);
     press(6); assert(ui.view == View::Fx);
     for (int key = 0; key < 6; ++key) press(key);

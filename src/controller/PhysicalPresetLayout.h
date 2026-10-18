@@ -9,7 +9,7 @@ namespace PhysicalPresetLayout {
 enum class Role : uint8_t { Slot, BankPrevious, BankNext };
 struct Position { Role role; uint8_t slot; };
 constexpr Position positions[6] = {
-    {Role::Slot, 4}, {Role::BankPrevious, 0}, {Role::BankNext, 0},
+    {Role::BankPrevious, 0}, {Role::Slot, 4}, {Role::BankNext, 0},
     {Role::Slot, 1}, {Role::Slot, 2}, {Role::Slot, 3}
 };
 inline std::array<uint8_t, 6> serviceOrder(uint8_t bank, uint8_t target, uint8_t confirmed) {

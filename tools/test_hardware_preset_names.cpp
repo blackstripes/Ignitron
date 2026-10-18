@@ -18,6 +18,11 @@ int main() {
     assert(!strcmp(label(names, 1), "CLEAN"));
     assert(!strcmp(label(names, 2), "CRUNCH"));
     assert(!strcmp(label(names, 8), "EIGHT"));
+    // Mini titles are cache labels only: no slot prefix or active-preset name.
+    cache[3] = "American Classic Blues 2";
+    merge(names, true, false, true, cache);
+    assert(!strcmp(label(names, 4), "American Classic Blues 2"));
+    assert(!strcmp(label(names, 5), "UNKNOWN"));
     // Active selection is intentionally not an input. Missing/empty cache
     // entries, including while selecting CRUNCH, cannot erase CLEAN.
     cache.fill("");
@@ -29,9 +34,13 @@ int main() {
     assert(names[0] == "CLEAN" && names[1] == "NEW CRUNCH");
     merge(names, true, true, false, cache);
     assert(names[0].empty() && names[1].empty());
+    for (unsigned slot = 1; slot <= names.size(); ++slot)
+        assert(!strcmp(label(names, slot), "UNKNOWN")); // no previous amp's title
     merge(names, true, false, true, cache);
     merge(names, false, false, true, cache);
     for (const auto &name : names) assert(name.empty());
+    for (unsigned slot = 1; slot <= names.size(); ++slot)
+        assert(!strcmp(label(names, slot), "UNKNOWN")); // no disconnected title
     assert(!strcmp(label(names, 0), "UNKNOWN"));
     assert(!strcmp(label(names, 9), "UNKNOWN"));
 

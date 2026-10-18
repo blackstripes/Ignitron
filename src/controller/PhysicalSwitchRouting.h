@@ -9,6 +9,11 @@ class PhysicalSwitchRouting {
 public:
     uint8_t browsedBank() const { return bank_.bank(); }
     void clamp(uint8_t count) { bank_.clamp(count); }
+    // Passive observation also remembers performance views selected by touch;
+    // it never redirects navigation or replaces the tuner's own return state.
+    template<class View> void observeView(View view) {
+        if (view == View::Preset || view == View::Fx) looperReturnFx_ = view == View::Fx;
+    }
     template<class Snapshot> void observe(const Snapshot &s, uint8_t count) {
         bank_.observe(s.confirmedHardwarePreset,
                       s.connectionPhase == decltype(s.connectionPhase)::Ready && !s.sparkStateStale, count);
@@ -23,13 +28,19 @@ public:
             if (key < 8) ui.physicalTunerPress(s.tunerActive);
             return;
         }
+        observeView(view);
         if (key == 6) {
-            if (kind != PhysicalSwitches::Kind::Short) return;
+            if (kind == PhysicalSwitches::Kind::Long) {
+                if ((view == decltype(view)::Preset || view == decltype(view)::Fx) &&
+                    s.looperCapability == decltype(s.looperCapability)::Verified) {
+                    ui.physicalNavigate(decltype(view)::Looper);
+                }
+                return;
+            }
             if (view == decltype(view)::Preset) ui.physicalNavigate(decltype(view)::Fx);
-            else if (view == decltype(view)::Fx)
-                ui.physicalNavigate(s.looperCapability == decltype(s.looperCapability)::Verified
-                                        ? decltype(view)::Looper : decltype(view)::Preset);
-            else if (view == decltype(view)::Looper) ui.physicalNavigate(decltype(view)::Preset);
+            else if (view == decltype(view)::Looper)
+                ui.physicalNavigate(looperReturnFx_ ? decltype(view)::Fx : decltype(view)::Preset);
+            else ui.physicalNavigate(decltype(view)::Preset);
             return;
         }
         if (key == 7) {
@@ -60,4 +71,5 @@ public:
     }
 private:
     PhysicalPresetBank bank_;
+    bool looperReturnFx_ = false;
 };

@@ -175,7 +175,9 @@ public:
         probeAfterRecoveredHigh();
         const uint32_t highAt = millis();
         StartupDiagnostics::record(StartupDiagnostics::ResetBoundary, 2);
-        delay(120);
+        // Controlled experiment: increase the previous 120 ms wait to 1000 ms.
+        // This is a hypothesis, not a proven fix.
+        delay(1000);
         StartupDiagnostics::record(StartupDiagnostics::ResetBoundary, 3, 0, 0, millis() - highAt);
         StartupDiagnostics::record(StartupDiagnostics::McpIntent, 5, 0x80, high_);
         StartupDiagnostics::record(StartupDiagnostics::MiniMessage, StartupDiagnostics::McpReady);

@@ -5,7 +5,7 @@
 
 int main() {
     const auto order = PhysicalPresetLayout::serviceOrder(0, 2, 4);
-    assert(order[0] == 4 && order[1] == 0); // global slots 2, 4
+    assert(order[0] == 4 && order[1] == 1); // global slots 2, 4
     const auto bank = PhysicalPresetLayout::serviceOrder(1, 6, 4);
     assert(bank[0] == 4 && bank[1] == 0); // prior slot on another bank is off-screen
     ControllerSnapshot s;

@@ -423,8 +423,8 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
                 break;
             }
             const uint8_t target = static_cast<uint8_t>(browsedBank * 4 + position.slot);
-            snprintf(card.name, sizeof(card.name), "P%u %s", position.slot,
-                     target <= presetCount ? HardwarePresetNames::label(snapshot.hardwarePresetNames, target) : "UNAVAILABLE");
+            snprintf(card.name, sizeof(card.name), "%s",
+                     target <= presetCount ? HardwarePresetNames::label(snapshot.hardwarePresetNames, target) : "UNKNOWN");
             if (target > presetCount) { card.accent = muted; strcpy(card.status, "UNAVAILABLE"); }
             else if (MiniActionPresentation::presetSelected(snapshot, target)) {
                 card.accent = amber; card.filled = true; card.mark = Mark::Wave;

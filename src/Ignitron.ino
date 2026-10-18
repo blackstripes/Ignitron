@@ -85,6 +85,8 @@ ControllerActions controllerActions(controllerState);
 PhysicalSwitches physicalSwitches;
 PhysicalSwitchRouting physicalRouting;
 void pollPhysicalSwitches() {
+    if (!controllerState.snapshot().tunerActive)
+        physicalRouting.observeView(panelLanDisplay.activeView());
     static uint32_t lastPollAt = 0;
     static bool polled = false;
     const uint32_t now = millis();
