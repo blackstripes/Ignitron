@@ -54,6 +54,13 @@ inline MainPresetCard mainPresetCard(const ControllerSnapshot &s) {
     }
     return {phase, target, name};
 }
+// A selected body is an intent during Pending, number proof during Loading,
+// and Spark authority during Ready. Only the Pending phase carries an amber cue.
+inline bool presetSelected(const ControllerSnapshot &s, uint8_t target) {
+    if (!target) return false;
+    const auto card = mainPresetCard(s);
+    return card.phase != MainPresetPhase::Stale && card.target == target;
+}
 inline bool fxConfirmed(const ControllerSnapshot &s, uint8_t slot) {
     const auto &fx = s.fxSlots[slot];
     return !s.sparkStateStale && fx.known && !fx.pending && !fx.actionFailed;

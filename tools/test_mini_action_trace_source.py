@@ -78,6 +78,22 @@ class MiniActionTraceTest(unittest.TestCase):
                         draw.index('finalDrawId_ = snapshot.miniActionId;'))
         self.assertIn('finalDrawId_ = snapshot.miniActionId;', draw)
 
+    def test_preset_selected_body_precedes_pending_cue(self):
+        mini = (ROOT / 'PanelLanMiniDisplaySPI.cpp').read_text()
+        preset = mini.split('case PanelLanLVGLUI::View::Preset: {', 1)[1].split('case PanelLanLVGLUI::View::Fx:', 1)[0]
+        self.assertIn('MiniActionPresentation::presetSelected(snapshot, target)', preset)
+        self.assertIn('card.filled = true; card.mark = Mark::Wave;', preset)
+        self.assertIn('card.pending = MiniActionPresentation::mainPresetCard(snapshot).phase', preset)
+        self.assertIn('card.filled && card.mark == Mark::Wave', mini)
+        self.assertIn('card.pending || MiniActionPresentation::mainPresetCard(snapshot).phase', mini)
+        main = (ROOT / 'PanelLanLVGLUI.cpp').read_text()
+        status = main.split('void PanelLanLVGLUI::renderStatus(', 1)[1].split(
+            'bool PanelLanLVGLUI::mainTraceMatches(', 1)[0]
+        self.assertIn('MiniActionPresentation::presetSelected(snapshot, presetCard.target)', status)
+        self.assertIn('selectedPreset ? 0x17392F : 0x11181D', status)
+        self.assertIn('selectedPreset ? 0x00E65D : 0x34434C', status)
+        self.assertIn('pendingPreset ? LV_SYMBOL_BULLET', status)
+
 
 if __name__ == '__main__':
     unittest.main()

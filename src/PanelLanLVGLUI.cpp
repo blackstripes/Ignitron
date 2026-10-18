@@ -111,7 +111,12 @@ void drawLooperSurface(lv_event_t *event) {
 void drawPresetCabinet(lv_event_t *event) {
     lv_layer_t *layer = lv_event_get_layer(event);
     lv_area_t bounds;
-    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    lv_obj_t *hero = lv_event_get_target_obj(event);
+    lv_obj_get_coords(hero, &bounds);
+    // The cabinet is opaque and covers the button's styled background. Use
+    // its selected border style to carry the same selection into this layer.
+    const bool selected = lv_color_eq(lv_obj_get_style_border_color(hero, LV_PART_MAIN),
+                                      lv_color_hex(0x00E65D));
     auto rect = [&](int x, int y, int w, int h, uint32_t fill, uint32_t border, int radius) {
         lv_draw_rect_dsc_t dsc;
         lv_draw_rect_dsc_init(&dsc);
@@ -132,7 +137,8 @@ void drawPresetCabinet(lv_event_t *event) {
         dsc.width = 1;
         lv_draw_line(layer, &dsc);
     };
-    rect(3, 3, 300, 151, 0x111619, 0x354047, 7);
+    rect(3, 3, 300, 151, selected ? 0x17392F : 0x111619,
+         selected ? 0x00E65D : 0x354047, 7);
     rect(8, 8, 290, 27, 0x11191C, 0x283237, 4);
     line(16, 10, 272, 10, 0x655035);
     rect(27, 15, 53, 12, 0x342024, 0x452A2B, 2);
@@ -140,19 +146,31 @@ void drawPresetCabinet(lv_event_t *event) {
         rect(x, 17, 7, 7, 0x404447, 0x171C1F, 3);
         line(x + 3, 17, x + 3, 19, 0x887D61);
     }
-    rect(9, 38, 288, 110, 0x191D1D, 0x2E3537, 4);
+    rect(9, 38, 288, 110, selected ? 0x1D4433 : 0x191D1D,
+         selected ? 0x39825B : 0x2E3537, 4);
     // Woven grille, deliberately low contrast behind the foreground type.
     for (int x = 13; x < 294; x += 5)
-        line(x, 42, x, 144, 0x292B27);
+        line(x, 42, x, 144, selected ? 0x31523C : 0x292B27);
     for (int y = 43; y < 145; y += 4)
-        line(13, y, 293, y, 0x202422);
+        line(13, y, 293, y, selected ? 0x254433 : 0x202422);
     lv_draw_rect_dsc_t shade;
     lv_draw_rect_dsc_init(&shade);
-    shade.bg_color = lv_color_hex(0x03090D);
+    shade.bg_color = lv_color_hex(selected ? 0x09251A : 0x03090D);
     shade.bg_opa = LV_OPA_60;
     shade.radius = 6;
     lv_area_t overlay = {bounds.x1 + 4, bounds.y1 + 4, bounds.x1 + 302, bounds.y1 + 152};
     lv_draw_rect(layer, &shade, &overlay);
+    if (selected) {
+        // Above the dimming overlay, so the selected outline cannot disappear.
+        lv_draw_rect_dsc_t outline;
+        lv_draw_rect_dsc_init(&outline);
+        outline.bg_opa = LV_OPA_TRANSP;
+        outline.border_color = lv_color_hex(0x00E65D);
+        outline.border_width = 2;
+        outline.radius = 7;
+        lv_area_t edge = {bounds.x1 + 3, bounds.y1 + 3, bounds.x1 + 302, bounds.y1 + 153};
+        lv_draw_rect(layer, &outline, &edge);
+    }
 }
 
 // Small vector glyphs keep the concept's visual vocabulary crisp at 320x240,
@@ -1349,9 +1367,24 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
     }
 
     bool presetCardDirty = identityDirty;
+    lv_obj_t *hero = lv_obj_get_parent(presetNameLabel_);
+    const bool selectedPreset = MiniActionPresentation::presetSelected(snapshot, presetCard.target);
+    // The major selected body stays identical across intent, number proof and
+    // full Ready. Pending is only a small amber annotation, not a dim state.
+    presetCardDirty |= setColor(hero, LV_STYLE_BG_COLOR,
+                                lv_color_hex(selectedPreset ? 0x17392F : 0x11181D));
+    presetCardDirty |= setColor(hero, LV_STYLE_BORDER_COLOR,
+                                lv_color_hex(selectedPreset ? 0x00E65D : 0x34434C));
+    const bool pendingPreset = presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending;
+    const bool failedPreset = snapshot.presetActionFailed && !pendingPreset;
+    presetCardDirty |= setText(presetMetaLabel_, pendingPreset ? LV_SYMBOL_BULLET :
+                                                 failedPreset ? "!" : LV_SYMBOL_RIGHT);
+    presetCardDirty |= setColor(presetMetaLabel_, LV_STYLE_TEXT_COLOR,
+                               lv_color_hex(pendingPreset ? 0xFFD06A : failedPreset ? 0xFF6C76 : 0x92A2AD));
     presetCardDirty |= setText(presetNameLabel_, presetCard.name.c_str());
-    setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR, snapshot.sparkStateStale ? lv_color_hex(0xA8B3BC)
-                                                                         : lv_color_hex(0xF4F6F8));
+    presetCardDirty |= setColor(presetNameLabel_, LV_STYLE_TEXT_COLOR,
+                                snapshot.sparkStateStale && !selectedPreset ? lv_color_hex(0xA8B3BC)
+                                                                             : lv_color_hex(0xF4F6F8));
     const bool hasUsefulDescription = !snapshot.presetDescription.empty() && snapshot.presetDescription != "Text";
     const char *description = snapshot.presetActionFailed &&
                               presetCard.phase != MiniActionPresentation::MainPresetPhase::Pending
@@ -1391,7 +1424,7 @@ void PanelLanLVGLUI::renderStatus(const ControllerSnapshot &snapshot) {
 #ifdef PANELAN_PRESET_TRACE
     if (!snapshot.miniActionFx && activeScreen_ == Screen::Preset &&
         lv_obj_has_flag(presetPicker_, LV_OBJ_FLAG_HIDDEN))
-        traceMain(snapshot, lv_obj_get_parent(presetNameLabel_), presetCardDirty);
+        traceMain(snapshot, hero, presetCardDirty);
 #endif
 
     static const lv_color_t kFxColors[] = {
@@ -1465,9 +1498,9 @@ bool PanelLanLVGLUI::mainTraceMatches(const ControllerSnapshot &s) const {
     if (trace.presetPhase != static_cast<uint8_t>(phase)) return false;
     return trace.final ? phase == MiniActionPresentation::MainPresetPhase::Ready &&
                              !s.pendingHardwarePreset && s.confirmedHardwarePreset == trace.target
-                       : (phase == MiniActionPresentation::MainPresetPhase::Pending ||
-                          phase == MiniActionPresentation::MainPresetPhase::Loading) &&
-                             presetView.target == trace.target;
+                        : (phase == MiniActionPresentation::MainPresetPhase::Pending ||
+                           phase == MiniActionPresentation::MainPresetPhase::Loading) &&
+                              MiniActionPresentation::presetSelected(s, trace.target);
 }
 
 void PanelLanLVGLUI::traceMain(const ControllerSnapshot &s, lv_obj_t *card, bool dirty) {
@@ -1476,7 +1509,7 @@ void PanelLanLVGLUI::traceMain(const ControllerSnapshot &s, lv_obj_t *card, bool
     const bool first =
         (s.miniActionFx ? s.miniActionTarget < 6 && !s.sparkStateStale &&
               !s.miniActionConfirmed && s.fxSlots[s.miniActionTarget].known && s.fxSlots[s.miniActionTarget].pending
-            : presetView.target == s.miniActionTarget &&
+             : MiniActionPresentation::presetSelected(s, s.miniActionTarget) &&
               (presetView.phase == MiniActionPresentation::MainPresetPhase::Pending ||
                presetView.phase == MiniActionPresentation::MainPresetPhase::Loading));
     const bool final = s.miniActionConfirmed &&

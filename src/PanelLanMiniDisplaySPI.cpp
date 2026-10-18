@@ -422,9 +422,10 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
             snprintf(card.name, sizeof(card.name), "P%u %s", position.slot,
                      target <= presetCount ? HardwarePresetNames::label(snapshot.hardwarePresetNames, target) : "UNAVAILABLE");
             if (target > presetCount) { card.accent = muted; strcpy(card.status, "UNAVAILABLE"); }
-            else if (snapshot.pendingHardwarePreset == target) { card.accent = amber; card.mark = Mark::Dots; }
-            else if (MiniActionPresentation::presetConfirmed(snapshot, target)) {
+            else if (MiniActionPresentation::presetSelected(snapshot, target)) {
                 card.accent = amber; card.filled = true; card.mark = Mark::Wave;
+                card.pending = MiniActionPresentation::mainPresetCard(snapshot).phase ==
+                               MiniActionPresentation::MainPresetPhase::Pending;
             } else if (snapshot.sparkStateStale || !snapshot.confirmedHardwarePreset) {
                 card.accent = amber;
             } else { card.accent = muted; card.mark = Mark::Dash; }
@@ -521,10 +522,14 @@ void PanelLanMiniDisplay::update(const ControllerSnapshot &snapshot, PanelLanLVG
               PhysicalPresetLayout::positions[i].role == PhysicalPresetLayout::Role::Slot &&
               browsedBank * 4 + PhysicalPresetLayout::positions[i].slot == snapshot.miniActionTarget));
         if (actionCard) {
-            if (!snapshot.miniActionConfirmed &&
-                ((snapshot.miniActionFx && snapshot.fxSlots[i].pending && !snapshot.sparkStateStale &&
-                  snapshot.fxSlots[i].known) ||
-                 (!snapshot.miniActionFx && snapshot.pendingHardwarePreset == snapshot.miniActionTarget)) &&
+            if (((snapshot.miniActionFx && !snapshot.miniActionConfirmed &&
+                   snapshot.fxSlots[i].pending && !snapshot.sparkStateStale &&
+                   snapshot.fxSlots[i].known) ||
+                  (!snapshot.miniActionFx &&
+                   MiniActionPresentation::presetSelected(snapshot, snapshot.miniActionTarget) &&
+                   card.filled && card.mark == Mark::Wave &&
+                   (card.pending || MiniActionPresentation::mainPresetCard(snapshot).phase ==
+                                        MiniActionPresentation::MainPresetPhase::Loading))) &&
                 firstDrawId_ != snapshot.miniActionId) {
                 firstDrawId_ = snapshot.miniActionId;
                 Serial.printf("PRESET_TRACE t=%lu event=mini_first id=%lu kind=%s target=%u input_elapsed=%lu\n",

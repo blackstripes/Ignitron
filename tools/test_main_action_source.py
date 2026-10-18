@@ -7,6 +7,22 @@ SRC = Path(__file__).resolve().parents[1] / 'src'
 
 
 class MainActionTest(unittest.TestCase):
+    def test_preset_cabinet_paints_selected_body_and_unshaded_border(self):
+        cabinet = UI.split('void drawPresetCabinet(', 1)[1].split('void drawGlyph(', 1)[0]
+        status = UI.split('void PanelLanLVGLUI::renderStatus(', 1)[1].split(
+            'bool PanelLanLVGLUI::mainTraceMatches(', 1)[0]
+        self.assertIn('MiniActionPresentation::presetSelected(snapshot, presetCard.target)', status)
+        self.assertIn('selectedPreset ? 0x00E65D : 0x34434C', status)
+        self.assertIn('lv_obj_get_style_border_color(hero, LV_PART_MAIN)', cabinet)
+        self.assertIn('selected ? 0x17392F : 0x111619', cabinet)
+        self.assertIn('selected ? 0x1D4433 : 0x191D1D', cabinet)
+        self.assertIn('selected ? 0x09251A : 0x03090D', cabinet)
+        self.assertLess(cabinet.index('lv_draw_rect(layer, &shade, &overlay);'),
+                        cabinet.index('lv_draw_rect(layer, &outline, &edge);'))
+        self.assertIn('outline.bg_opa = LV_OPA_TRANSP;', cabinet)
+        self.assertIn('const bool pendingPreset = presetCard.phase == MiniActionPresentation::MainPresetPhase::Pending;', status)
+        self.assertIn('pendingPreset ? 0xFFD06A', status)
+
     def test_fx_visuals_and_guards(self):
         detail = UI.split('void PanelLanLVGLUI::renderDetailPage(', 1)[1].split(
             'void PanelLanLVGLUI::reconcileExternalTuner(', 1)[0]
@@ -73,7 +89,8 @@ class MainActionTest(unittest.TestCase):
         self.assertIn('trace.presetPhase != static_cast<uint8_t>(phase)', match)
         self.assertIn('phase == MiniActionPresentation::MainPresetPhase::Ready', match)
         self.assertIn('trace.card != lv_obj_get_parent(presetNameLabel_)', match)
-        self.assertIn('lv_obj_get_parent(presetNameLabel_), presetCardDirty', status)
+        self.assertIn('lv_obj_t *hero = lv_obj_get_parent(presetNameLabel_);', status)
+        self.assertIn('traceMain(snapshot, hero, presetCardDirty)', status)
         self.assertNotIn('traceMain(snapshot, button,', status)
         self.assertIn('presetCard.phase == MiniActionPresentation::MainPresetPhase::Loading', status)
         self.assertIn('presetCard.name.c_str()', status)

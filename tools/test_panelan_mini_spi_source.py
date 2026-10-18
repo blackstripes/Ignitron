@@ -29,7 +29,7 @@ class MiniSpiSourceTest(unittest.TestCase):
     def test_preset_and_fx_use_corresponding_snapshot_slots(self):
         source = (ROOT / 'src/PanelLanMiniDisplaySPI.cpp').read_text()
         self.assertIn('HardwarePresetNames::label(snapshot.hardwarePresetNames, target)', source)
-        self.assertIn('MiniActionPresentation::presetConfirmed(snapshot, target)', source)
+        self.assertIn('MiniActionPresentation::presetSelected(snapshot, target)', source)
         self.assertIn('PhysicalPresetLayout::positions[i]', source)
         self.assertIn('browsedBank * 4 + position.slot', source)
         self.assertIn('target <= presetCount', source)

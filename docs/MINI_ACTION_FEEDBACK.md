@@ -5,9 +5,14 @@ loop, after the LVGL update. A pending FX card displays the requested ON/OFF
 direction (without changing Spark's confirmed `enabled` value) and a small
 amber corner dot. Confirmation removes the dot without changing the ON/OFF
 appearance. Failure, timeout, link loss and stale state continue to use Spark
-observations; preset failures mark only the affected slot. Pending preset
-selection still takes precedence over the old confirmed number. Unchanged
-card keys are not sent to SPI; the pending card is serviced first.
+observations; preset failures mark only the affected slot. The accepted pending
+preset takes precedence over the old confirmed number: its mini card immediately
+uses the same amber filled bar and waveform as number-confirmed Loading and
+Ready, plus a small amber corner dot only while pending. Number proof removes
+the dot without dimming the selection; failure restores the confirmed slot
+with a brief red badge on the failed slot. Browsing another bank does not
+change the global 1–8 target. Unchanged card keys are not sent to SPI; the
+pending card is serviced first.
 An action failure leaves the fresh, known Spark ON/OFF or confirmed preset
 selection visible with a small red corner badge on the affected card;
 stale/unknown observations show no asserted ON/OFF, but retain the badge.
@@ -25,14 +30,20 @@ marker disappears on confirmation, leaving the requested ON/OFF body unchanged;
 a failure uses the fresh observed direction with a red marker. Stale/unknown
 cards say `?` or `SYNC` instead of asserting a direction, retaining a red
 failure marker during resync when the action failed. The picker moves to
-the pending preset. The large main preset card shows the latest pending target's
-validated hardware-slot cache name (or `PRESET N` without one), with `SELECTING`;
+the pending preset. The large main preset card immediately uses the same
+prominent green selected body/border for the latest pending target as for
+Loading and Ready, with a small amber corner cue and `SELECTING` only while
+pending. It shows the target's validated hardware-slot cache name (or
+`PRESET N` without one);
 it does not borrow the previous Spark name, description or FX chain. After
 correlated number verification, the card retains that slot name/fallback and
 shows `LOADING DETAILS` while the full preset remains stale. Only a fresh Ready
-snapshot restores Spark's active name and description and removes the transient
-marker. Failure returns to the last trustworthy Spark/stale presentation with
-the existing brief error text. Validated slot names are cleared on disconnect
+snapshot restores Spark's active name and description. Neither transition dims
+the selected body. The custom cabinet painter reads the hero's selected border
+style, tints its opaque cabinet/grille, and draws a bright outline above the
+shading overlay; the unselected cabinet remains unchanged. Failure returns to
+the last trustworthy Spark/stale presentation with brief red/error feedback.
+Validated slot names are cleared on disconnect
 or amp identity change; no name is inferred from an old active preset. Unchanged
 labels/styles do not request another dirty-area redraw of the FX icons.
 
@@ -50,8 +61,9 @@ panelan-lvgl-controller-preset-trace`), serial `PRESET_TRACE` milestones include
 `t=` (millis). `physical` marks the debounced switch event in the polling loop
 (`key`, `kind`); accepted actions have a monotonic `id`, `kind=fx|preset`,
 `slot` (zero-based FX) or `target` (one-based hardware preset), and `input_at`.
-`pending` marks snapshot publication. `mini_first` marks a completed selected
-mini card draw with pending intent; `authoritative` marks only the existing
+`pending` marks snapshot publication. `mini_first` marks a completed filled,
+wave-marked selected mini card draw with pending intent or number-verified Loading
+(if no pending draw completed); `authoritative` marks only the existing
 Spark FX_ONOFF/correlated-full or verified hardware-number confirmation, never
 an ACK. `mini_final` marks a completed draw of an actually confirmed preset
 number or fresh known FX card, never a stale/unknown card. The latter three
